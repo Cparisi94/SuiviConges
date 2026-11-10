@@ -12,6 +12,7 @@ Principe (identique à l'application delib) :
 from flask import Blueprint, jsonify, request, session
 
 import apm
+import audit_logs
 from db import get_db, public_user, row_to_dict
 from http_utils import error
 
@@ -52,6 +53,7 @@ def end_impersonation(audit_user):
         audit_user(db, target["id"], target["login"], row_to_dict(admin), "usurpation", "fin",
                    "", "", "Fin de « se connecter en tant que »")
         db.commit()
+        audit_logs.log_login("fin_en_tant_que", target["login"], target["id"], True, "par %s" % admin["login"])
     db.close()
     session["uid"] = int(real_id)
     session.pop("real_uid", None)
@@ -120,6 +122,7 @@ def init_act_as(app, current_user, audit_user):
                    "Début de « se connecter en tant que »")
         db.commit()
         db.close()
+        audit_logs.log_login("en_tant_que", target["login"], target["id"], True, "par %s" % admin["login"])
         session["real_uid"] = admin["id"]
         session["uid"] = target["id"]
         return jsonify({"ok": True, "user": public_user(target)})

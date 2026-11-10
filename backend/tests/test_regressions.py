@@ -4,6 +4,7 @@
 Lancement :
     python -m unittest discover -s tests -v
 """
+import contextlib
 import json
 import unittest
 import uuid
@@ -16,7 +17,9 @@ import config
 config.PG_SCHEMA = "conges_test_" + uuid.uuid4().hex[:8]
 
 import apm  # noqa: E402
+import audit_logs  # noqa: E402
 import db  # noqa: E402
+import mail_templates  # noqa: E402
 import mailer  # noqa: E402
 import pg_db  # noqa: E402
 import ratelimit  # noqa: E402
@@ -202,7 +205,7 @@ class PrototypeRegressionTests(unittest.TestCase):
             sent.update(url=url, body=json, headers=headers)
             return mock.Mock(status_code=200, json=lambda: {"status": "success"})
 
-        with mock.patch.object(config, "MAIL_ENABLED", True), \
+        with self._enabled(True), \
                 mock.patch.object(config, "APM_API_URL", "https://apm.test"), \
                 mock.patch.object(config, "APM_API_KEY", "cle-de-test"), \
                 mock.patch.object(apm.requests, "post", fake_post):
@@ -217,9 +220,9 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(sent["body"]["footerColor"], config.MAIL_FOOTER_COLOR)
 
     def test_mail_disabled_or_apm_down_never_raises(self):
-        with mock.patch.object(config, "MAIL_ENABLED", False):
+        with self._enabled(False):
             self.assertFalse(mailer.send_mail("a@b.fr", "s", "c")[0])
-        with mock.patch.object(config, "MAIL_ENABLED", True), \
+        with self._enabled(True), \
                 mock.patch.object(config, "APM_API_URL", "https://apm.test"), \
                 mock.patch.object(config, "APM_API_KEY", "k"), \
                 mock.patch.object(apm.requests, "post", side_effect=apm.requests.ConnectionError("x")):
@@ -244,6 +247,7 @@ class PrototypeRegressionTests(unittest.TestCase):
         body = resp.get_json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["database"]["state"], "ok")
+        self.assertIn(body["sedit_rh"], ("configured", "not_configured"))
         self.assertNotIn("password", json.dumps(body).lower())
 
     def test_api_requires_a_valid_key(self):
@@ -438,6 +442,216 @@ class PrototypeRegressionTests(unittest.TestCase):
                              "AND target_login='ACT_T2'").fetchone()
         conn.close()
         self.assertEqual(ended["actor_login"], "admin")
+
+
+    # --- Journal des connexions, e-mails (gabarits, journal), matricule -------------------- #
+    @staticmethod
+    @contextlib.contextmanager
+    def _enabled(value):
+        """Active ou désactive l'envoi des e-mails (réglage de l'administrateur) le temps d'un bloc."""
+        before = mail_templates.is_enabled()
+        mail_templates.save({"enabled": value})
+        try:
+            yield
+        finally:
+            mail_templates.save({"enabled": before})
+
+    def _mail_on(self):
+        return [self._enabled(True),
+                mock.patch.object(config, "APM_API_URL", "https://apm.test"),
+                mock.patch.object(config, "APM_API_KEY", "cle-test")]
+
+    def _fake_post(self, sent):
+        def fake(url, json=None, headers=None, timeout=None, verify=None):
+            sent.append(json)
+            return mock.Mock(status_code=200, json=lambda: {"status": "success"})
+        return mock.patch.object(apm.requests, "post", fake)
+
+    def test_login_journal_records_success_failure_and_is_admin_only(self):
+        self._make_user("JRN1")
+        with mock.patch.object(config, "AUTH_MODE", "local"):
+            self.assertEqual(self._login("JRN1", "secret123").status_code, 200)
+            self.assertEqual(self._login("JRN1", "faux").status_code, 401)
+            self.assertEqual(self._login("INCONNU-JRN", "x").status_code, 401)
+        body = self._call("GET", "/api/admin/login-logs?q=JRN1", uid=1).get_json()
+        events = [(i["event"], i["success"], i["reason"], i["method"]) for i in body["items"]]
+        self.assertIn(("connexion", 1, "", "local"), events)
+        self.assertIn(("echec", 0, "mot_de_passe", "local"), events)
+        self.assertTrue(all(i["ip"] for i in body["items"]))
+        unknown = self._call("GET", "/api/admin/login-logs?q=INCONNU-JRN", uid=1).get_json()
+        self.assertEqual(unknown["items"][0]["reason"], "inconnu")
+        only_ok = self._call("GET", "/api/admin/login-logs?q=JRN1&success=1", uid=1).get_json()
+        self.assertTrue(all(i["success"] == 1 for i in only_ok["items"]))
+        self.assertEqual(self._call("GET", "/api/admin/login-logs", uid=2).status_code, 403)
+        self.assertEqual(self._call("GET", "/api/admin/login-logs?from=pas-une-date", uid=1).status_code, 400)
+
+    def test_ad_login_and_act_as_are_journaled_with_method(self):
+        self._make_user("JRN2", ad_login="jrn.deux")
+        with mock.patch.object(config, "AUTH_MODE", "ad"), mock.patch.object(apm, "ad_authenticate", lambda u, p: p == "mdp"):
+            self.assertEqual(self._login("JRN2", "mdp").status_code, 200)
+        body = self._call("GET", "/api/admin/login-logs?q=JRN2", uid=1).get_json()
+        self.assertEqual(body["items"][0]["method"], "ad")
+
+    def test_mail_journal_and_templates(self):
+        sent = []
+        patches = self._mail_on()
+        with patches[0], patches[1], patches[2], self._fake_post(sent):
+            ok, err = mailer.send_template("test_envoi", "agent@example.fr", {"administrateur": "Admin", "date": "01/01/2027"})
+        self.assertTrue(ok, err)
+        self.assertEqual(sent[0]["to"], "agent@example.fr")
+        self.assertIn("Admin", sent[0]["content"])
+        log = self._call("GET", "/api/admin/mail-logs?q=agent@example.fr", uid=1).get_json()
+        self.assertEqual((log["items"][0]["status"], log["items"][0]["template"]), ("envoye", "test_envoi"))
+        detail = self._call("GET", "/api/admin/mail-logs/%s" % log["items"][0]["id"], uid=1).get_json()
+        self.assertIn("Admin", detail["body"])
+        # envoi désactivé : journalisé « non_envoye », jamais d'exception
+        with self._enabled(False):
+            ok, _ = mailer.send_template("test_envoi", "off@example.fr", {"administrateur": "A", "date": "d"})
+        self.assertFalse(ok)
+        off = self._call("GET", "/api/admin/mail-logs?q=off@example.fr", uid=1).get_json()
+        self.assertEqual(off["items"][0]["status"], "non_envoye")
+        self.assertEqual(self._call("GET", "/api/admin/mail-logs", uid=2).status_code, 403)
+
+    def test_mail_settings_customize_layout_and_templates(self):
+        listing = self._call("GET", "/api/admin/mail-settings", uid=1).get_json()
+        keys = [t["key"] for t in listing["templates"]]
+        self.assertIn("nouvelle_demande", keys)
+        self.assertIn("relance_demandes", keys)
+        self.assertIn("agent", [v for t in listing["templates"] if t["key"] == "nouvelle_demande" for v in t["variables"]])
+        bad = self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"templates": {"test_envoi": {
+            "subject": "Bonjour {inconnue}", "body": "x"}}})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"layout": {"footer_color": "rouge"}}).status_code, 400)
+        self.assertEqual(self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"layout": {"header_title": "x"}}).status_code, 400)
+        self.assertEqual(self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"layout": {"from_email": "pas-un-mail"}}).status_code, 400)
+        ok = self._call("PUT", "/api/admin/mail-settings", uid=1, payload={
+            "layout": {"from_name": "DRH Ivry", "from_email": "drh@example.fr",
+                       "footer1": "Ligne 1", "footer_color": "#445566", "signature": "L'équipe RH"},
+            "templates": {"test_envoi": {"subject": "Essai {administrateur}", "body": "Salut {administrateur} <b>", "enabled": True}}})
+        self.assertEqual(ok.status_code, 200, ok.get_json())
+        sent = []
+        patches = self._mail_on()
+        with patches[0], patches[1], patches[2], self._fake_post(sent):
+            mailer.send_template("test_envoi", "x@example.fr", {"administrateur": "Marc", "date": "d"})
+        body = sent[0]
+        self.assertEqual(body["subject"], "Essai Marc")
+        self.assertEqual((body["from_name"], body["from_email"]), ("DRH Ivry", "drh@example.fr"))
+        self.assertEqual((body["footer1"], body["footerColor"]), ("Ligne 1", "#445566"))
+        self.assertNotIn("background:", body["content"])     # pas d'en-tête maison : celui de l'APM s'applique
+        self.assertIn("&lt;b&gt;", body["content"])          # le texte reste échappé
+        self.assertIn("L&#x27;équipe RH", body["content"])   # signature commune
+        # prévisualisation sans enregistrement + retour aux valeurs d'origine
+        prev = self._call("POST", "/api/admin/mail-settings/preview", uid=1, payload={
+            "key": "nouvelle_demande", "subject": "Sujet {agent}", "body": "Fiche : {lien_fiche}\nAgent {agent}"}).get_json()
+        self.assertIn("DUPONT Marie", prev["subject"] + prev["text"])
+        self.assertEqual(sorted(prev), ["html", "subject", "text"])   # ni en-tête ni pied de page dans l'aperçu
+        self.assertNotIn("Ivry", prev["html"])
+        reset = self._call("POST", "/api/admin/mail-settings/reset", uid=1, payload={"key": "test_envoi"}).get_json()
+        tpl = [t for t in reset["templates"] if t["key"] == "test_envoi"][0]
+        self.assertEqual(tpl["subject"], tpl["default_subject"])
+        mail_templates.save({"layout": dict(mail_templates.DEFAULT_LAYOUT)})   # nettoie pour les autres tests
+
+    def test_empty_variable_lines_are_dropped(self):
+        text = mail_templates.substitute("Fiche : {lien_fiche}\nAgent : {agent}", {"lien_fiche": "", "agent": "X"})
+        self.assertEqual(text, "Agent : X")
+
+    def test_mail_test_endpoint_and_retention_purge(self):
+        sent = []
+        patches = self._mail_on()
+        with self._enabled(False), patches[1], patches[2], self._fake_post(sent):   # envoi DÉSACTIVÉ : le test part quand même
+            resp = self._call("POST", "/api/admin/mail-settings/test", uid=1, payload={"to": "essai@example.fr"}).get_json()
+            other = self._call("POST", "/api/admin/mail-settings/test", uid=1,
+                               payload={"to": "essai2@example.fr", "key": "nouvelle_demande"}).get_json()
+        self.assertTrue(resp["ok"], resp)
+        self.assertTrue(other["ok"], other)
+        self.assertEqual(sent[0]["to"], "essai@example.fr")
+        self.assertTrue(sent[1]["subject"].startswith("[TEST] "))
+        self.assertEqual(self._call("POST", "/api/admin/mail-settings/test", uid=1, payload={"to": "pas-un-mail"}).status_code, 400)
+        self.assertEqual(self._call("PUT", "/api/admin/log-retention", uid=1, payload={"connexions_jours": 5, "emails_jours": 90}).status_code, 400)
+        self.assertEqual(self._call("PUT", "/api/admin/log-retention", uid=1, payload={"connexions_jours": 400, "emails_jours": 90}).status_code, 200)
+        conn = db.get_db()
+        conn.execute("INSERT INTO login_logs (at, event, login) VALUES ('2000-01-01 00:00:00','connexion','vieux')")
+        conn.execute("INSERT INTO mail_logs (at, to_addr, status) VALUES ('2000-01-01 00:00:00','vieux@x.fr','envoye')")
+        conn.commit()
+        conn.close()
+        removed = audit_logs.purge()
+        self.assertGreaterEqual(removed[0], 1)
+        self.assertGreaterEqual(removed[1], 1)
+        audit_logs.save_retention(365, 365)
+
+    def test_matricule_on_users_fiches_and_api(self):
+        resp = self._call("POST", "/api/users", uid=1, payload={
+            "login": "MAT1", "password": "secret123", "role": "agent", "parent_id": 3, "matricule": "A-1234"})
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(resp.get_json()["matricule"], "A-1234")
+        dup = self._call("POST", "/api/users", uid=1, payload={
+            "login": "MAT2", "password": "secret123", "role": "agent", "parent_id": 3, "matricule": "A-1234"})
+        self.assertEqual(dup.status_code, 400)
+        self.assertEqual(self._call("POST", "/api/users", uid=1, payload={
+            "login": "MAT3", "password": "secret123", "role": "agent", "parent_id": 3, "matricule": "a b!"}).status_code, 400)
+        uid = resp.get_json()["id"]
+        upd = self._call("PUT", "/api/users/%s" % uid, uid=1, payload={"matricule": "B5678"})
+        self.assertEqual(upd.get_json()["matricule"], "B5678")
+        listing = self._call("GET", "/api/users", uid=1).get_json()
+        self.assertIn("B5678", [u["matricule"] for u in listing])
+        # fiche : le matricule est enregistré sur la fiche et sur le compte de l'agent
+        fiche = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "MATRIC", "prenom": "TEST", "email": "m@example.fr", "year": 2026, "owner_id": 3,
+            "validator_id": 3, "matricule": "C9999"})
+        self.assertEqual(fiche.status_code, 200, fiche.get_json())
+        self.assertEqual(fiche.get_json()["matricule"], "C9999")
+        clash = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "AUTRE", "prenom": "TEST", "email": "a@example.fr", "year": 2026, "owner_id": 3,
+            "validator_id": 3, "matricule": "C9999"})
+        self.assertEqual(clash.status_code, 400)
+        agent_login = fiche.get_json()["agent_login"]
+        conn = db.get_db()
+        self.assertEqual(conn.execute("SELECT matricule FROM users WHERE login=?", (agent_login,)).fetchone()["matricule"], "C9999")
+        conn.close()
+        key = self._new_key("Matricules", scopes=("agents:read",))["key"]
+        found = self._get_v1("/api/v1/agents?year=2026&q=C9999", key).get_json()
+        self.assertEqual([i["matricule"] for i in found["items"]], ["C9999"])
+
+    def test_password_ui_flags_and_user_creation_without_password_in_ad_mode(self):
+        self._make_user("ADFLAG")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='ADFLAG'").fetchone()["id"]
+        conn.close()
+        with mock.patch.object(config, "AUTH_MODE", "ad"):
+            me = self._call("GET", "/api/me", uid=uid).get_json()["user"]
+            self.assertTrue(me["password_by_ad"])
+            self.assertEqual(me["auth_mode"], "ad")
+            self.assertFalse(self._call("GET", "/api/me", uid=1).get_json()["user"]["password_by_ad"])
+            ok = self._call("POST", "/api/users", uid=1, payload={"login": "SANSMDP", "role": "agent", "parent_id": 3})
+            self.assertEqual(ok.status_code, 200, ok.get_json())
+            admin = self._call("POST", "/api/users", uid=1, payload={"login": "ADMSANS", "role": "administrateur"})
+            self.assertEqual(admin.status_code, 400)   # un administrateur garde un mot de passe de secours
+        with mock.patch.object(config, "AUTH_MODE", "local"):
+            self.assertEqual(self._call("POST", "/api/users", uid=1, payload={"login": "SANSMDP2", "role": "agent", "parent_id": 3}).status_code, 400)
+
+
+    def test_mail_sending_switch_is_an_admin_setting(self):
+        before = self._call("GET", "/api/admin/mail-settings", uid=1).get_json()
+        self.assertFalse(before["enabled"])                       # désactivé par défaut
+        on = self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"enabled": True}).get_json()
+        self.assertTrue(on["enabled"])
+        self.assertTrue(mailer.load_config() is not None or not apm.configured())
+        self.assertTrue(mail_templates.is_enabled())
+        off = self._call("PUT", "/api/admin/mail-settings", uid=1, payload={"enabled": False}).get_json()
+        self.assertFalse(off["enabled"])
+        self.assertIsNone(mailer.load_config())
+        self.assertEqual(self._call("PUT", "/api/admin/mail-settings", uid=2, payload={"enabled": True}).status_code, 403)
+
+    def test_automatic_mail_stays_blocked_when_disabled_but_is_journaled(self):
+        sent = []
+        patches = self._mail_on()
+        with self._enabled(False), patches[1], patches[2], self._fake_post(sent):
+            ok, err = mailer.send_template("test_envoi", "bloque@example.fr", {"administrateur": "A", "date": "d"})
+        self.assertFalse(ok)
+        self.assertEqual(sent, [])
+        log = self._call("GET", "/api/admin/mail-logs?q=bloque@example.fr", uid=1).get_json()
+        self.assertEqual(log["items"][0]["status"], "non_envoye")
+        self.assertIn("désactivé", log["items"][0]["error"])
 
 
 if __name__ == "__main__":

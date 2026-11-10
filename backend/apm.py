@@ -62,9 +62,13 @@ def ad_authenticate(username, password):
     raise ApmError("APM ad/authenticate : HTTP %s (permission ad_auth ?)" % resp.status_code)
 
 
-def send_mail(to, subject, html, footer=None):
+def send_mail(to, subject, html, footer=None, from_name="", from_email=""):
     """Envoie un mail via l'APM. `html` = corps seul (l'APM l'insère dans le gabarit institutionnel)."""
     body = {"to": to, "subject": subject, "content": html}
+    if from_name:
+        body["from_name"] = from_name
+    if from_email:
+        body["from_email"] = from_email
     footer = footer or {}
     for key, name in (("line1", "footer1"), ("line2", "footer2"), ("line3", "footer3"),
                       ("color", "footerColor")):

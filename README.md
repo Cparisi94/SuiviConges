@@ -148,6 +148,9 @@ backend/                    API Flask (Python), image Docker `backend/Dockerfile
   api_v1.py                 API publique /api/v1 (lecture seule) + /api/status
   api_keys.py               Clés API (périmètres, IP, expiration, journal) + administration
   act_as.py                 « Se connecter en tant que » (administrateurs)
+  admin_settings.py         Routes du Paramétrage : journaux (connexions, e-mails), réglages et gabarits des e-mails
+  audit_logs.py             Écriture, consultation et purge des journaux ; mail_templates.py : gabarits et mise en page des e-mails
+  version.py                Version et journal des versions (source unique)
   openapi_spec.py           Description OpenAPI + Swagger UI (/api-docs)
   tests/                    Tests automatiques
 frontend/                   Interface (HTML/CSS/JS sans dépendance) + nginx, image `frontend/Dockerfile`

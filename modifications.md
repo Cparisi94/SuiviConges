@@ -137,7 +137,7 @@ la clé, restriction par adresse IP). C'est aussi un prérequis pour une exposit
 1. Obtenir auprès de l'administrateur APM une clé propre à cette application, avec les
    permissions `ad_auth` et `mail_send`, et la renseigner dans `.env` (`APM_API_KEY`).
 2. Renseigner l'« Identifiant AD » des comptes dont l'identifiant diffère de celui de la Ville.
-3. Passer `CONGES_AUTH_MODE=ad` (connexion AD) et/ou `CONGES_MAIL_ENABLED=1` (mails).
+3. Passer `CONGES_AUTH_MODE=ad` (connexion AD) et/ou l'envoi des e-mails dans Paramétrage > E-mails.
 
 **Vérifications**
 11 tests automatiques passent, avec un APM simulé : connexion locale, connexion AD (identifiant
@@ -323,3 +323,65 @@ Un numéro de version discret s'affiche ; rien d'autre ne change.
 
 **Vérifications**
 33 tests automatiques passent (dont 6 nouveaux sur le versionnage et son affichage).
+
+## Version 0.2.0 — Paramétrage général, journaux, gabarits d'e-mails et matricule
+
+**Ce qui a changé**
+- **Le Paramétrage est maintenant un menu général** avec des sous-sections, comme dans l'application delib : *Calcul et calendrier* (les
+  paramètres d'avant), *Utilisateurs*, *Clés API*, *Journal des connexions*, *Mise en page et expéditeur*, *Messages automatiques* et
+  *Journal des e-mails*. « Utilisateurs » et « Clés API » ne sont plus des entrées séparées du menu principal pour les administrateurs ;
+  les valideurs gardent leur entrée « Utilisateurs » (limitée à leur périmètre).
+- **Journal des connexions** : pour chaque connexion, échec, déconnexion ou « se connecter en tant que » : qui, quand, depuis quelle adresse IP,
+  avec quel navigateur et quelle méthode (mot de passe local, Active Directory, compte de secours). Recherche, filtres et pagination.
+- **Journal des e-mails** : tous les e-mails envoyés ou tentés (destinataire, objet, résultat, texte exact envoyé), avec les raisons d'un
+  non-envoi (envoi désactivé, message désactivé, pas d'adresse, erreur de l'API centrale).
+- **E-mails paramétrables** : le texte de chaque e-mail automatique (nouvelle demande à valider, relance des demandes en attente, message de
+  test) se modifie dans l'application, avec des variables (nom de l'agent, dates, liens…), un aperçu, un envoi de test et un retour au texte
+  d'origine. Une **mise en page commune** s'applique à tous les e-mails : nom et adresse de l'expéditeur, en-tête, signature, pied de page.
+- **Matricule** : nouveau champ sur les comptes et les fiches agents (unique : on ne peut pas attribuer deux fois le même matricule). Il est visible
+  dans l'API et servira de clé pour rapprocher les agents de Sedit RH.
+- **Connexion par l'Active Directory** : le bouton « Mot de passe » n'est plus affiché aux agents (leur mot de passe est celui de leur compte
+  Ville), la colonne « Mot de passe » de la liste des utilisateurs ne concerne plus que les administrateurs, et la création d'un compte ou
+  d'une fiche n'exige ni n'affiche de mot de passe.
+- **Sedit RH** : l'adresse et la clé de l'API Sedit RH sont dans le fichier de configuration (`.env`) ; l'application ne l'appelle pas encore
+  (voir « À décider »). L'API Sedit RH locale a été lancée et une clé en lecture seule (agents et organisation) a été créée pour SuiviConges.
+
+**Pourquoi**
+Regrouper l'administration au même endroit, donner à la DRH la maîtrise du contenu des e-mails sans passer par les développeurs, pouvoir répondre
+à « qui s'est connecté et d'où ? » et « quels e-mails sont partis ? » (traçabilité, sécurité, RGPD), éviter de gérer des mots de passe que l'Active
+Directory gère déjà, et préparer le rapprochement avec le système RH.
+
+**Impact pour les utilisateurs**
+Les agents : le bouton « Mot de passe » disparaît s'ils se connectent par l'Active Directory. Les administrateurs : les écrans Utilisateurs et Clés API
+sont désormais sous Paramétrage. Les journaux sont conservés **365 jours** par défaut (réglable de 30 à 3 650 jours) puis purgés automatiquement.
+
+**Vérifications**
+41 tests automatiques passent (journaux, gabarits, aperçu, envoi de test simulé, matricule, mot de passe en mode AD, version). Les écrans ont été essayés
+dans un navigateur sur une instance de test jetable (menu, journal des connexions avec une connexion réussie et une échouée, messages automatiques avec
+aperçu, liste des utilisateurs). **Non vérifié** : envoi réel d'un e-mail par l'API centrale (envoi désactivé pour l'instant), saisie du
+matricule dans la fiche à l'écran, usage de la clé Sedit RH depuis l'application.
+
+**À décider**
+- Que doit faire l'application avec Sedit RH : pré-remplir la fiche d'un agent à partir de son matricule, synchroniser les agents et l'organisation,
+  contrôler les arrivées et départs ? (Q13 du manifeste.)
+- Quels autres e-mails automatiques souhaite-t-on (validation ou refus à l'agent, annulation, alerte d'expiration des heures de récupération) ?
+- La clé Sedit RH actuelle est une clé de développement sur l'API locale ; la clé et l'adresse de production restent à obtenir.
+
+## Version 0.2.1 — E-mails : activation dans l'application, tests toujours possibles, écran en liste
+
+**Ce qui a changé**
+- **L'envoi automatique des e-mails s'active dans l'application** (Paramétrage > E-mails, case à cocher), plus dans le fichier de configuration. Il est désactivé par défaut.
+- **Les messages de test partent même si l'envoi est désactivé** (il suffit que l'API centrale de la Ville soit configurée) : on peut donc vérifier les messages avant d'activer l'envoi.
+- **Messages automatiques** : la liste des messages est à gauche ; un clic affiche leur contenu à droite pour le voir ou le modifier. La **liste des variables** (avec leur signification) est affichée à côté du texte, et chaque variable s'insère d'un clic.
+- **L'aperçu ne montre que le message.** L'en-tête et le pied de page sont ajoutés par l'API centrale de la Ville : ils ne sont donc pas prévisualisés.
+- **L'en-tête propre à l'application est retiré** : l'API centrale n'accepte que l'**expéditeur** et le **pied de page** comme paramètres, son en-tête est un gabarit institutionnel fixe (voir Q15 du manifeste). L'écran devient « Expéditeur et pied de page ».
+
+**Pourquoi**
+Ce que la DRH règle doit se faire dans l'application, et la mise en forme doit rester celle de la Ville (un seul en-tête, pas deux).
+
+**Impact pour les utilisateurs**
+Aucun pour les agents. Les administrateurs retrouvent l'envoi des e-mails désactivé tant qu'ils ne cochent pas la case ; ce qui était saisi comme titre ou couleur d'en-tête n'existe plus.
+
+**Vérifications**
+43 tests automatiques passent (activation par l'administrateur, test envoyé alors que l'envoi est désactivé, aperçu sans en-tête ni pied de page, en-tête refusé). Les écrans (liste des messages, changement de message, case d'activation) ont été essayés dans un navigateur sur une instance de test jetable.
+**Non vérifié** : envoi réel d'un e-mail par l'API centrale.

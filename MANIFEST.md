@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.1.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10.**
+> **Statut : v0.2.1 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -34,7 +34,12 @@ Sources analysées pour ce document :
 | **D8** | Les administrateurs disposent de **« Se connecter en tant que »** (recherche prédictive dans l'AD), audité, comme dans l'application delib. | 14.4 |
 | **D9** | Les données actuellement dans la base sont des **données de démonstration** (pas d'enjeu de reprise). | 26 |
 | **D10** | **Versionnage** `0.x.y` (x = fonctionnalité, y = correctif, `1.0.0` = production), avec journal des versions et documentation à chaque livraison. | 29 |
-| **D11** | **Aucun import/export Excel** n'est prévu par l'application en production (l'import de paramètres depuis le classeur reste un outil d'amorçage). | 14.2 |
+| **D11** | **Aucun import/export Excel** n'est prévu par l'application en production (l'import de paramètres depuis le classeur reste un outil d'amorçage). | 14.3 |
+| **D12** | Le **Paramétrage est un menu général à sous-sections** (calcul, utilisateurs, clés API, journaux, e-mails), comme dans l'application delib. | 14.1 |
+| **D13** | Un **matricule** est porté par les comptes et les fiches (unique) ; il servira de clé de rapprochement avec **Sedit RH**. | 7.1, 14.2 |
+| **D14** | Les **e-mails automatiques ont des gabarits modifiables** (objet, texte, variables) et une **mise en page commune** (expéditeur, signature, pied de page), dans l'application ; l'**activation de l'envoi** est un réglage de l'administrateur (pas du `.env`) ; l'en-tête est le gabarit institutionnel de l'APM. | 14.7 |
+| **D15** | Deux **journaux d'administration** (connexions, e-mails) avec **durée de conservation réglable** ; les agents gérés par l'AD n'ont plus de gestion de mot de passe dans l'application. | 14.6, 15 |
+| **D16** | La connexion à **Sedit RH** (adresse et clé) est configurée dans `.env`, en local pour l'instant (API `api-apps/sedit-rh`, port 3440). | 18 |
 
 ---
 
@@ -107,7 +112,7 @@ colonnes, 3 276 valeurs) a été validée contre les valeurs en cache du classeu
 | Fichiers de plus de ~300 lignes à découper | **Écart** : `app.py` (≈ 3 500 lignes), `app.js` (≈ 4 300 lignes), `rules.py` (≈ 830 lignes) |
 | Organisation `backend/` et `frontend/` | **Conforme** depuis la v0.1.0 |
 | ESLint / TypeScript strict | **Non applicable** tant que le frontend est en JavaScript simple |
-| Tests sur la logique critique | **Partiel** : 33 tests (voir 23) |
+| Tests sur la logique critique | **Partiel** : 43 tests (voir 23) |
 
 ---
 
@@ -118,6 +123,7 @@ colonnes, 3 276 valeurs) a été validée contre les valeurs en cache du classeu
 | Terme | Sens dans l'application |
 |---|---|
 | **Fiche** | Dossier annuel d'un agent : paramètres + calendrier + demandes + soldes. Une fiche = un agent × une année. |
+| **Matricule** | Numéro d'agent (clé de rapprochement avec Sedit RH), porté par le compte et la fiche. |
 | **Année de la fiche** | Chaque fiche appartient à une année ; les écrans n'affichent que l'année sélectionnée. |
 | **Propriétaire** | Compte valideur qui « possède » la fiche (détermine le périmètre de visibilité et de modification). |
 | **Valideur (de la fiche)** | Compte qui valide les demandes de l'agent ; par défaut son responsable N+1 actif, sinon le propriétaire. |
@@ -225,7 +231,7 @@ Les niveaux sont codés dans l'application (`ROLE_LEVELS`) ; les rendre configur
 ## 7. Fiche agent
 
 ### 7.1 Contenu
-- **FIC-01** — Identité : nom et prénom (en majuscules), e-mail (obligatoire, valide).
+- **FIC-01** — Identité : nom et prénom (en majuscules), e-mail (obligatoire, valide), **matricule** (facultatif, unique — voir ADM-05).
 - **FIC-02** — Rattachement : **propriétaire** (un valideur actif), **valideur** de la fiche, année, indicateur « responsable d'unité ».
 - **FIC-03** — Paramètres de calcul : **pénibilité**, **durée hebdomadaire** (35 h … 38 h), **quotité** (100 % … 50 %), **jours travaillés par semaine**
   (5 … 1), **date d'arrivée**, **date de départ**, **reliquat** (jours), **solde CET**.
@@ -368,26 +374,52 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 
 ---
 
-## 14. Administration
+## 14. Administration : le menu Paramétrage
 
-### 14.1 Utilisateurs
-- **ADM-01** — Création, modification, désactivation, suppression de comptes (voir 5) ; l'administrateur peut modifier l'identifiant, le rôle, le rattachement ; un valideur gère les paramètres et le mot de passe des comptes de son périmètre.
+### 14.1 Menu général
+- **ADM-00** — **Paramétrage** (administrateur) est un **menu à sous-sections** (barre latérale, regroupées par thème) :
+  **Congés** — Calcul et calendrier ; **Accès** — Utilisateurs, Clés API, Journal des connexions ;
+  **E-mails** — Expéditeur et pied de page, Messages automatiques, Journal des e-mails.
+- Les anciennes adresses `#/users` et `#/apikeys` redirigent vers le Paramétrage pour un administrateur. Les **valideurs non administrateurs** gardent l'entrée « Utilisateurs » du menu principal (limitée à leur périmètre).
+
+### 14.2 Utilisateurs
+- **ADM-01** — Création, modification, désactivation, suppression de comptes (voir 5) ; l'administrateur peut modifier l'identifiant, le rôle, le rattachement ; un valideur gère les paramètres des comptes de son périmètre.
 - **ADM-02** — Champ **« Identifiant AD »** : identifiant Ville utilisé pour la connexion AD lorsqu'il diffère de l'identifiant de l'application.
-- **ADM-03** — **Journal d'audit des comptes** : création, changement d'identifiant, de rôle, de responsable, d'activation, de mot de passe (jamais la valeur), suppression, usurpation (début / fin), avec l'acteur réel.
+- **ADM-05** — Champ **« Matricule »** (lettres, chiffres, `.` `_` `-`, 20 caractères au maximum) : **unique** parmi les comptes ; refusé s'il est déjà attribué (message nommant le compte). Il est aussi porté par la **fiche** (saisi à la création, modifiable) et recopié sur le compte de l'agent.
+- **ADM-03** — **Journal d'audit des comptes** : création, changement d'identifiant, de rôle, de responsable, d'activation, de **matricule**, de mot de passe (jamais la valeur), suppression, usurpation (début / fin), avec l'acteur réel.
 - **ADM-04** — Garde-fous : on ne peut pas retirer ses propres droits administrateur ni désactiver son propre compte ; recherche, filtres (rôle, actif) et pagination dans la liste.
+- **ADM-06** — En **mode AD**, la colonne « Mot de passe » n'est proposée que pour les administrateurs (compte de secours) et la création d'un compte **n'exige pas de mot de passe** (sauf pour un administrateur).
 
-### 14.2 Paramétrage (administrateur)
+### 14.3 Calcul et calendrier (paramétrage métier)
 - **PAR-01** — Codes d'absence (libellé, couleur, présence dans la grille), pénibilités, durées hebdomadaires, quotités, jours hebdomadaires, table « durée → RTT », **matrice de droits**, jours fériés, vacances scolaires, **année par défaut**.
 - **PAR-02** — Le paramétrage est stocké en base (table `settings`) ; un **réimport depuis le classeur Excel** (copié dans `source/`) existe comme outil d'amorçage (D11).
 
-### 14.3 Clés API
+### 14.4 Clés API
 - **ADM-10** — Écran **Clés API** (administrateur) : création (nom, périmètres, IP autorisées, expiration), désactivation, suppression, **journal des appels** (voir 17).
 
-### 14.4 « Se connecter en tant que »
+### 14.5 « Se connecter en tant que »
 - **ACT-01** — Réservé aux **administrateurs**. Bouton « En tant que… » : **recherche prédictive** (≥ 2 lettres) dans l'**AD** via l'APM, complétée par les comptes de l'application (utilisables si l'AD est indisponible).
 - **ACT-02** — L'administrateur **agit avec exactement les droits de l'agent**, sans connaître son mot de passe ; un **bandeau** rappelle l'usurpation avec « Revenir à mon compte ».
 - **ACT-03** — **Interdits** : un autre administrateur, un compte désactivé, soi-même, un agent sans compte dans l'application (grisé avec le motif), l'enchaînement de deux usurpations, le changement de mot de passe du compte usurpé.
-- **ACT-04** — **Traçabilité** : début et fin journalisés ; les modifications de comptes et les décisions sur les demandes faites pendant l'usurpation sont attribuées à l'**administrateur réel** avec la mention « en tant que ».
+- **ACT-04** — **Traçabilité** : début et fin journalisés (journal d'audit des comptes **et** journal des connexions) ; les modifications de comptes et les décisions sur les demandes faites pendant l'usurpation sont attribuées à l'**administrateur réel** avec la mention « en tant que ».
+
+### 14.6 Journal des connexions
+- **LOG-01** — Chaque **connexion réussie**, **échec** (identifiant inconnu, mot de passe incorrect, compte désactivé, service AD indisponible, trop de tentatives), **déconnexion** et **début / fin de « en tant que »** est inscrit : date et heure, événement, identifiant saisi, résultat et motif, **méthode** (local, Active Directory, secours), **adresse IP** et navigateur.
+- **LOG-02** — Écran **Journal des connexions** (administrateur) : recherche (identifiant ou adresse IP), filtres (événement, succès / échec, période), pagination par 50, lignes d'échec mises en évidence.
+- **LOG-03** — **Conservation** : durée réglable (30 à 3 650 jours, 365 par défaut) ; les entrées plus anciennes sont **supprimées automatiquement** (au démarrage et toutes les 6 heures). L'écriture du journal ne fait **jamais** échouer une connexion.
+- **LOG-04** — L'adresse IP enregistrée est celle vue par l'application : elle dépend de `CONGES_PROXY_HOPS` derrière un reverse-proxy (voir 22).
+
+### 14.7 E-mails : activation, expéditeur et pied de page, messages automatiques, journal
+- **MAI-00** — **Activation de l'envoi** : une case à cocher (« Envoi automatique des e-mails ») dans Paramétrage > E-mails ; **désactivé par défaut** ; ce n'est plus une option du `.env`. Désactivé, les e-mails automatiques ne partent pas (ils sont inscrits au journal, statut « non envoyé »).
+- **MAI-08** — Les **messages de test partent toujours**, même si l'envoi automatique ou le message est désactivé, dès que l'API centrale (APM) est configurée.
+- **MAI-01** — **Expéditeur et pied de page** (écran « Expéditeur et pied de page »), communs à tous les e-mails : **nom** et **adresse de l'expéditeur** (vides = valeurs par défaut de l'APM), **signature** (ajoutée au texte), **pied de page** (trois lignes et couleur). Envoi d'un message de test. **Pas de prévisualisation** de l'en-tête ni du pied de page : ils sont ajoutés par l'API centrale.
+- **MAI-09** — L'**en-tête** des e-mails est le **gabarit institutionnel de l'APM** : l'API centrale n'accepte que l'expéditeur et le pied de page en paramètres ; il n'est donc pas paramétrable depuis l'application (voir Q15).
+- **MAI-02** — **Messages automatiques** : écran en deux parties — **liste des messages à gauche**, **contenu à droite** (objet, texte, activation) ; adresse `#/settings/messages/<message>`. Messages actuels : **Nouvelle demande à valider** (au valideur), **Relance des demandes en attente** (au valideur, une fois par jour) et **Message de test**. Le registre est extensible (un nouveau message = une entrée dans `mail_templates.py`).
+- **MAI-03** — **Variables** : `{agent}`, `{code}`, `{dates}`, `{lien_fiche}`… ; la **liste des variables du message avec leur signification** est affichée à côté du texte et chaque variable s'insère d'un clic. Une **variable inconnue est refusée** à l'enregistrement ; une **ligne dont toutes les variables sont vides est supprimée**.
+- **MAI-04** — Le texte est du **texte brut** : tout est échappé à l'envoi (pas d'HTML saisi), les adresses `http(s)` deviennent des liens. **Aperçu du message seul** (données d'exemple), **envoi de test** à une adresse, **retour au texte d'origine** par message.
+- **MAI-05** — Les e-mails partent par l'APM : le pied de page et l'expéditeur sont transmis **en paramètres** (`footer1..3`, `footerColor`, `from_name`, `from_email`), la signature fait partie du contenu. Les réglages sont stockés dans la table `settings` (clé `mail`, y compris `enabled`) ; à défaut, le pied de page vient de `CONGES_MAIL_FOOTER*`.
+- **MAI-06** — **Journal des e-mails** (administrateur) : pour chaque envoi ou tentative, date, destinataire, objet, **message** concerné, **statut** (envoyé, échec avec l'erreur, non envoyé — envoi désactivé, message désactivé, APM non configurée, pas d'adresse), texte envoyé (bouton « Voir »), demande concernée. Recherche, filtres (statut, message, période), pagination, **conservation réglable** comme le journal des connexions.
+- **MAI-07** — L'écran signale l'état de l'envoi (activé, désactivé, APM non configurée).
 
 ---
 
@@ -396,10 +428,11 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **AUT-01** — **Mode local** (`CONGES_AUTH_MODE=local`) : mots de passe de l'application (hachage scrypt, 8 caractères minimum, changement par l'utilisateur).
 - **AUT-02** — **Mode AD** (`ad`) : le mot de passe est vérifié par l'AD via l'APM (`POST /api/v1/ad/authenticate`) avec l'« Identifiant AD » ou l'identifiant ; le compte doit **exister dans l'application** (rôle, rattachement).
 - **AUT-03** — **Compte de secours** : en mode AD, les **administrateurs** acceptent aussi leur mot de passe local ; les autres reçoivent « service d'authentification indisponible » (503) si l'APM est en panne.
-- **AUT-04** — Le changement de mot de passe dans l'application est **refusé** aux comptes gérés par l'AD.
+- **AUT-04** — Le changement de mot de passe dans l'application est **refusé** aux comptes gérés par l'AD, et le **bouton « Mot de passe » n'est pas affiché** à ces agents (en mode AD, seuls les administrateurs conservent un mot de passe local de secours).
 - **AUT-05** — **Session** : cookie signé (`HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS), valable 10 h ; l'identité n'est jamais lue dans un en-tête fourni par le client.
 - **AUT-06** — **Limitation des essais** : 8 échecs en 15 minutes par adresse (+ 10 par minute côté nginx) ; message d'erreur identique pour un compte inconnu et un mot de passe faux.
 - **AUT-07** — **Premier démarrage** : un compte `admin` est créé avec `CONGES_INITIAL_ADMIN_PASSWORD` ou un mot de passe aléatoire affiché une fois.
+- **AUT-08** — Chaque tentative de connexion est **journalisée** (voir 14.6) avec la méthode utilisée ; à la création d'une fiche en mode AD, l'écran indique que l'agent se connecte avec son compte Ville (sans afficher de mot de passe).
 
 ---
 
@@ -407,7 +440,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 
 - **NOT-01** — Chaque **nouvelle demande** envoie un **mail au valideur** : agent, code, demi-journées, nombre de jours, commentaire, liens vers la fiche et vers les demandes à valider (`CONGES_BASE_URL`).
 - **NOT-02** — **Relance quotidienne** : un mail par valideur listant ses demandes en attente depuis **plus de 3 jours**, au plus une fois par jour.
-- **NOT-03** — Les mails passent par l'APM (corps HTML échappé, pied de page en trois lignes + couleur paramétrables) ; **un échec d'envoi n'empêche jamais** l'enregistrement d'une demande ; l'envoi est désactivé tant que `CONGES_MAIL_ENABLED` n'est pas à 1.
+- **NOT-03** — Les mails passent par l'APM (corps HTML échappé) ; le **contenu** de chaque message, l'**expéditeur**, la **signature** et le **pied de page** se règlent dans Paramétrage > E-mails (14.7) ; **un échec d'envoi n'empêche jamais** l'enregistrement d'une demande ; l'envoi est désactivé tant que l'administrateur ne l'active pas. Chaque envoi est inscrit au journal des e-mails.
 - **NOT-04** — Non couvert : mail à l'agent lors de la validation / du refus, alerte RCH à 30 jours par mail (backlog).
 
 ---
@@ -419,7 +452,8 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **API-03** — **Périmètres** : `agents:read`, `balances:read`, `absences:read`, `requests:read` (ou `*`) ; **IP/réseaux autorisés** et **expiration** facultatifs ; désactivation immédiate.
 - **API-04** — **Limitation** de débit (120 requêtes par minute et par clé) ; **journal** de chaque appel (méthode, chemin, statut, IP), sans contenu.
 - **API-05** — **Documentation interactive** `/api-docs` (Swagger UI) et spécification `/api/v1/openapi.json`, vérifiée par un test (toute route `/api/v1` doit y figurer).
-- **API-06** — **Supervision** : `GET /api/status` (public en interne) renvoie la **version**, l'état de l'application, de la base (latence), de l'APM (configurée ou non) et le mode d'authentification.
+- **API-06** — **Supervision** : `GET /api/status` (public en interne) renvoie la **version**, l'état de l'application, de la base (latence), de l'APM et de Sedit RH (configurés ou non) et le mode d'authentification.
+- **API-09** — La liste des fiches de l'API (`/api/v1/agents`) expose le **matricule** et la recherche `q` porte aussi sur le matricule.
 - **VER-01** — **Version** : `GET /api/version` (publique, utilisée par l'écran de connexion) et `GET /api/changelog` (journal des versions) ; le numéro de version est affiché dans la barre du haut et sur l'écran de connexion ; un clic ouvre l'écran **Journal des versions** (nouveautés de chaque version) ; la version figure aussi dans la spécification Swagger.
 - **API-07** — **CORS** fermé par défaut ; seules les origines de `CONGES_CORS_ORIGINS` sont autorisées.
 - **API-08** — Les **routes internes** utilisées par l'écran (`/api/agents`, `/api/requests`, …) restent **non versionnées** et protégées par la session (voir 20).
@@ -433,6 +467,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 | **APM — Active Directory** | `POST /api/v1/ad/authenticate` (connexion), `GET /api/v1/ad/search` (recherche prédictive) | `ad_auth`, `ad_search` |
 | **APM — Mail** | `POST /api/v1/mail/send` | `mail_send` |
 | **PostgreSQL de la Ville** | stockage, schéma `conges` | rôle de base (voir 21) |
+| **API Sedit RH** (`api-apps/sedit-rh`, port 3440) | **connexion préparée** : `SEDITRH_API_URL` et `SEDITRH_API_KEY` (clé `srh_live_…`, droits `agents:read` et `organisation:read`, lecture seule) dans `.env`, état dans `/api/status` ; en développement l'API tourne en local ; le **matricule** sert de clé (`/api/v1/agents/{matricule}`) — aucun appel métier n'est encore branché (Q13) | clé Sedit RH |
 | **Hub DSI** | non utilisé aujourd'hui ; piste : lire l'organisation (directions / services) et les agents plutôt que de les ressaisir `[H]` | clé `dsk_` |
 
 - **INT-01** — Tous les appels à l'APM passent par un **module unique** (`apm.py`) ; une panne réseau ou une réponse 5xx est une erreur « service indisponible », jamais un « mot de passe faux ».
@@ -444,15 +479,17 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 
 | Table | Contenu |
 |---|---|
-| `users` | comptes : identifiant, `ad_login`, nom, e-mail, mot de passe haché, `admin`, rôle, responsable (`parent_id`), actif |
+| `users` | comptes : identifiant, `ad_login`, `matricule`, nom, e-mail, mot de passe haché, `admin`, rôle, responsable (`parent_id`), actif |
 | `user_audit` | journal d'audit des comptes |
-| `agents` | fiches : propriétaire, titulaire, valideur, nom, prénom, e-mail, année, `params` (JSON), `periods` (JSON), responsable d'unité |
+| `agents` | fiches : propriétaire, titulaire, valideur, nom, prénom, e-mail, `matricule`, année, `params` (JSON), `periods` (JSON), responsable d'unité |
 | `cells` | demi-journées posées : (fiche, clé de demi-journée) → code |
-| `settings` | paramétrage (JSON par clé : `general`, `codes`, `penibilites`, `matrix`, `jours_feries`, `vacances_scolaires`…) |
+| `settings` | paramétrage (JSON par clé : `general`, `codes`, `penibilites`, `matrix`, `jours_feries`, `vacances_scolaires`, `mail` — gabarits et mise en page des e-mails —, `journaux` — durées de conservation…) |
 | `leave_requests` | demandes (type, code, demi-journées, jours, heures, dates, statut, valideur et responsable figés, commentaires, pièce jointe, champs d'annulation) |
 | `leave_request_events` | historique des événements d'une demande |
 | `hourly_absences` | absences en heures posées (fiche, date, code, horaires, heures, demande liée) |
 | `api_keys` | clés API (empreinte, périmètres, IP, expiration, actif, dernier usage) |
+| `login_logs` | journal des connexions (date, événement, identifiant, résultat, méthode, IP, navigateur) |
+| `mail_logs` | journal des e-mails (date, destinataire, objet, message, statut, erreur, texte, demande) |
 | `api_key_logs` | journal des appels API |
 | `schema_migrations` | migrations appliquées (version, somme de contrôle) |
 
@@ -473,7 +510,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 | Fiches | `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/{id}`, `POST /api/agents/{id}/clone`, `POST /api/agents/duplicate`, `PUT/DELETE /api/hourly/{id}` |
 | Demandes | `GET/POST /api/requests`, `…/approve`, `…/refuse`, `…/cancel`, `…/cancel-request`, `…/cancel-approve`, `…/cancel-refuse`, `…/attachment`, `GET /api/requests/counts`, `GET /api/reminders` |
 | Calcul et synthèses | `POST /api/compute`, `GET /api/dashboard`, `GET /api/hr-dashboard`, `GET /api/planning` |
-| Administration | `/api/v1/admin/api-keys` (+ `/logs`), `/api/admin/act-as` (+ `/search`) |
+| Administration | `/api/v1/admin/api-keys` (+ `/logs`), `/api/admin/act-as` (+ `/search`), `/api/admin/login-logs`, `/api/admin/mail-logs` (+ `/{id}`), `/api/admin/log-retention`, `/api/admin/mail-settings` (+ `/preview`, `/test`, `/reset`) |
 | Publiques | `/api/status`, `/api/version`, `/api/changelog`, `/api/v1/*` (clé), `/api-docs`, `/health` |
 
 ---
@@ -499,7 +536,8 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 
 ### 21.3 RGPD `[H]`
 - Données personnelles traitées : identité, e-mail, absences (les codes maladie / maternité relèvent de **données de santé**), pièces jointes.
-- À établir avec la DRH / le DPO : **registre des traitements**, **durées de conservation** (fiches, demandes, journaux d'audit, journal des appels API — sans purge aujourd'hui), minimisation des données exposées par l'API (`absences:read` révèle les codes).
+- Les **journaux de connexions** (identifiant, adresse IP, navigateur) et d'**e-mails** (destinataire, texte) sont des données personnelles : leur durée de conservation est **réglable** (365 jours par défaut) avec **purge automatique**.
+- À établir avec la DRH / le DPO : **registre des traitements**, **durées de conservation** (fiches, demandes, journal d'audit des comptes, journal des appels API — sans purge aujourd'hui), minimisation des données exposées par l'API (`absences:read` révèle les codes).
 - **Audit** : journal des comptes et historique des demandes conservés ; pas de purge automatique.
 
 ---
@@ -527,13 +565,14 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 
 ```
 backend/    app.py (routes internes), rules.py (calcul), pg_db.py / db.py (accès PostgreSQL), config.py, apm.py, mailer.py, reminders.py,
-            api_v1.py, api_keys.py, act_as.py, openapi_spec.py, ratelimit.py, http_utils.py, wsgi.py, migrations/, tests/, Dockerfile
+            api_v1.py, api_keys.py, act_as.py, admin_settings.py (journaux, e-mails), audit_logs.py, mail_templates.py,
+            openapi_spec.py, ratelimit.py, http_utils.py, version.py, wsgi.py, migrations/, tests/, Dockerfile
 frontend/   public/ (index.html, app.js, style.css), nginx.conf.template, nginx.dmz.conf.template, proxy_params_conges, Dockerfile
 racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md, MANIFEST.md, CHANGELOG.md, modifications.md, CLAUDE.md
             (backend/version.py = source unique de la version)
 ```
 
-- **QUA-01** — **33 tests automatiques** : régressions métier, authentification locale / AD simulée, mails (APM simulée), clés API, documentation, « se connecter en tant que » (sur un schéma PostgreSQL temporaire, créé puis supprimé) et **cohérence du versionnage** (`test_version.py`, sans base).
+- **QUA-01** — **43 tests automatiques** : régressions métier, authentification locale / AD simulée, mails (APM simulée), clés API, documentation, « se connecter en tant que » (sur un schéma PostgreSQL temporaire, créé puis supprimé) et **cohérence du versionnage** (`test_version.py`, sans base), journaux, gabarits d'e-mails, matricule.
 - **QUA-02** — Dette connue : fichiers volumineux (`app.py`, `app.js`, `rules.py`), pas de lint, pas de typage ; le découpage par modules `modules/<feature>/` du guide reste à faire.
 - **QUA-03** — Les 114 consultations de référence (tableaux de bord, planning, fiches, demandes…) ont été **comparées avant / après** la migration vers PostgreSQL : résultats identiques.
 
@@ -584,6 +623,9 @@ racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md,
 | **Q10** | Quel rôle PostgreSQL dédié, quelle clé APM propre, quel certificat (`VILLE_CA_FILE`) pour la production ? | DSI |
 | **Q11** | Quelles applications consommeront l'API `/api/v1` et avec quels périmètres ? | DRH / DSI |
 | **Q12** | Les niveaux hiérarchiques doivent-ils devenir configurables ? | DRH |
+| **Q13** | Que faire de Sedit RH : pré-remplir la fiche (nom, prénom, direction, service) à partir du matricule, synchroniser les agents et l'organisation, contrôler les arrivées / départs ? Quelle clé et quelle adresse en production ? | DRH / DSI |
+| **Q15** | L'en-tête des e-mails (gabarit institutionnel de l'APM) doit-il pouvoir être personnalisé par application ? Cela suppose que l'APM accepte un paramètre d'en-tête (aujourd'hui : expéditeur et pied de page seulement). | DSI |
+| **Q14** | Quels autres e-mails automatiques souhaite-t-on (validation / refus à l'agent, annulation, alerte RCH) — voir Q4 — pour les ajouter au registre des gabarits ? | DRH |
 
 ---
 
@@ -617,4 +659,6 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.2.1** | 2026-11-10 | E-mails : activation réglable dans l'application, tests toujours possibles, écran Messages en liste. |
+| **0.2.0** | 2026-11-10 | Paramétrage général, journaux, gabarits d'e-mails et matricule : menu Paramétrage à sous-sections (utilisateurs et clés API déplacés), journal des connexions, journal des e-mails, gabarits des e-mails automatiques et mise en page commune (expéditeur, en-tête, signature, pied de page), matricule, mot de passe masqué pour les comptes AD, connexion Sedit RH préparée. |
 | **0.1.0** | 2026-11-10 | Première version versionnée : application du prototype DRH mise en conformité avec le guide de la Ville (sessions signées, PostgreSQL, AD et mail par l'APM, API `/api/v1`, clés API, `/api/status`, Swagger, « se connecter en tant que », Docker, frontend DMZ, organisation `backend/` / `frontend/`), manifeste et journal des versions. |

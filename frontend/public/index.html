@@ -37,7 +37,6 @@
       <a href="#/planning" data-nav="planning">Planning</a>
       <a href="#/settings" data-nav="settings" id="nav-settings">Paramétrage</a>
       <a href="#/users" data-nav="users" id="nav-users">Utilisateurs</a>
-      <a href="#/apikeys" data-nav="apikeys" id="nav-apikeys">Clés API</a>
     </nav>
     <div class="topbar-right">
       <select id="year-select" class="year-select" title="Année de travail"></select>
@@ -294,6 +293,8 @@
         <input type="text" id="nf-prenom" autocomplete="off"></label>
       <label>E-mail <span class="req">*</span>
         <input type="email" id="nf-email"></label>
+      <label>Matricule
+        <input type="text" id="nf-matricule" autocomplete="off" maxlength="20"></label>
       <label>Propriétaire de la fiche <span class="req">*</span>
         <select id="nf-owner"></select></label>
       <label>Compte valideur <span class="req">*</span>
@@ -305,8 +306,8 @@
     </div>
     <div id="new-fiche-success" class="hidden">
       <p>La fiche et le compte agent ont été créés.</p>
-      <p>Identifiant : <b id="nf-login"></b><br>Mot de passe : <b id="nf-password"></b></p>
-      <p class="muted">Communiquez ces informations à l'agent. Le valideur peut réinitialiser le mot de passe dans Utilisateurs.</p>
+      <p>Identifiant : <b id="nf-login"></b><span id="nf-password-line"><br>Mot de passe : <b id="nf-password"></b></span></p>
+      <p class="muted" id="nf-hint">Communiquez ces informations à l'agent. Le valideur peut réinitialiser le mot de passe dans Utilisateurs.</p>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" id="nf-open">Ouvrir la fiche</button>
       </div>

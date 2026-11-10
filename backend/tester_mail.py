@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Test manuel de l'envoi de mail via l'APM (CONGES_MAIL_ENABLED, APM_API_URL, APM_API_KEY).
+"""Test manuel de l'envoi de mail via l'APM (APM_API_URL, APM_API_KEY ; activation dans Paramétrage > E-mails).
 
 Usage :
     python tester_mail.py destinataire@example.fr
@@ -16,7 +16,7 @@ def main():
     cfg = load_config()
     if not cfg:
         print("Envoi désactivé ou APM non configurée.")
-        print("Vérifiez CONGES_MAIL_ENABLED, APM_API_URL et APM_API_KEY dans .env.")
+        print("Activez l'envoi dans Paramétrage > E-mails et vérifiez APM_API_URL et APM_API_KEY dans .env.")
         return 1
     ok, error = send_mail(
         sys.argv[1],

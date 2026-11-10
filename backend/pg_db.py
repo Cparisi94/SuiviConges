@@ -26,7 +26,7 @@ _INSERT = re.compile(r"^\s*INSERT\s+INTO\s+([a-z_]+)", re.IGNORECASE)
 # Tables dont la clé primaire « id » est générée : on la renvoie comme `lastrowid`.
 _ID_TABLES = {
     "users", "user_audit", "agents", "leave_requests",
-    "leave_request_events", "hourly_absences", "api_keys", "api_key_logs",
+    "leave_request_events", "hourly_absences", "api_keys", "api_key_logs", "login_logs", "mail_logs",
 }
 
 _pool = None

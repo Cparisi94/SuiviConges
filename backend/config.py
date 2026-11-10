@@ -87,13 +87,17 @@ APM_API_URL = os.environ.get("APM_API_URL", "")
 APM_API_KEY = os.environ.get("APM_API_KEY", "")
 HUBDSI_API_URL = os.environ.get("HUBDSI_API_URL", "")
 HUBDSI_API_KEY = os.environ.get("HUBDSI_API_KEY", "")
+# API Sedit RH (agents, organisation ; lecture seule) : clé distribuée par l'application api-apps/sedit-rh
+SEDITRH_API_URL = os.environ.get("SEDITRH_API_URL", "")
+SEDITRH_API_KEY = os.environ.get("SEDITRH_API_KEY", "")
 
 # --- TLS vers les services internes (certificats auto-signés de la Ville) -- #
 VILLE_CA_FILE = os.environ.get("VILLE_CA_FILE", "")
 VILLE_ALLOW_SELF_SIGNED_CERTS = _flag("VILLE_ALLOW_SELF_SIGNED_CERTS")
 
 # --- Mails (envoyés via l'APM ; pied de page transmis en paramètres) ------- #
-MAIL_ENABLED = _flag("CONGES_MAIL_ENABLED")
+# L'activation de l'envoi se règle dans l'application (Paramétrage > E-mails). Les lignes de pied de page
+# ci-dessous ne sont que les valeurs initiales avant tout réglage.
 MAIL_FOOTER1 = os.environ.get("CONGES_MAIL_FOOTER1", "Ville d'Ivry-sur-Seine")
 MAIL_FOOTER2 = os.environ.get("CONGES_MAIL_FOOTER2", "Direction des Ressources Humaines")
 MAIL_FOOTER3 = os.environ.get("CONGES_MAIL_FOOTER3", "")

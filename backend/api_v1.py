@@ -69,6 +69,7 @@ def status():
         "version": version.VERSION,
         "database": {"state": db_state, "latency_ms": round((time.monotonic() - started) * 1000)},
         "apm": "configured" if apm.configured() else "not_configured",
+        "sedit_rh": "configured" if config.SEDITRH_API_URL and config.SEDITRH_API_KEY else "not_configured",
         "auth_mode": config.AUTH_MODE,
     }
     return jsonify(body), 200 if db_state == "ok" else 503
@@ -91,7 +92,7 @@ def app_changelog():
 #  Fiches agents
 # --------------------------------------------------------------------------- #
 _AGENT_SQL = (
-    "SELECT a.id, a.nom, a.prenom, a.email, a.year, a.is_manager, a.modifie_le AS updated_at, "
+    "SELECT a.id, a.nom, a.prenom, a.email, a.matricule, a.year, a.is_manager, a.modifie_le AS updated_at, "
     "u.login AS owner_login, v.login AS validator_login "
     "FROM agents a JOIN users u ON u.id=a.user_id LEFT JOIN users v ON v.id=a.validator_id "
 )
@@ -108,8 +109,8 @@ def agents():
     where, params = "WHERE a.year=?", [year]
     q = (request.args.get("q") or "").strip()
     if q:
-        where += " AND (a.nom ILIKE ? OR a.prenom ILIKE ?)"
-        params += ["%" + q + "%"] * 2
+        where += " AND (a.nom ILIKE ? OR a.prenom ILIKE ? OR a.matricule ILIKE ?)"
+        params += ["%" + q + "%"] * 3
     db = get_db()
     total = db.execute("SELECT COUNT(*) AS c FROM agents a " + where, params).fetchone()["c"]
     rows = db.execute(

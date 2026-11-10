@@ -362,8 +362,8 @@ function showApp() {
   if (hrNav) hrNav.classList.toggle("hidden", isAgent);
   if (isAgent) state.planningFilter = "all";
   $("#nav-settings").classList.toggle("hidden", !isAdmin);
-  $("#nav-users").classList.toggle("hidden", !canManageUsers());
-  $("#nav-apikeys").classList.toggle("hidden", !isAdmin || !!state.user.impersonation);
+  $("#nav-users").classList.toggle("hidden", !canManageUsers() || isAdmin);
+  $("#btn-password").classList.toggle("hidden", !!state.user.password_by_ad);
   setupActAs();
   route();
   refreshRequestBadge();
@@ -592,9 +592,12 @@ async function route() {
   if (hash.startsWith("#/requests")) return viewRequests();
   if (hash.startsWith("#/hr")) return viewHrDashboard();
   if (hash.startsWith("#/planning")) return viewPlanning();
-  if (hash.startsWith("#/settings")) return viewSettings();
-  if (hash.startsWith("#/users")) return viewUsers();
-  if (hash.startsWith("#/apikeys")) return viewApiKeys();
+  if (hash.startsWith("#/settings")) return viewAdmin(hash);
+  if (hash.startsWith("#/users")) {
+    if (state.user.admin) { location.hash = "#/settings/users"; return; }
+    return viewUsers();
+  }
+  if (hash.startsWith("#/apikeys")) { location.hash = "#/settings/apikeys"; return; }
   if (hash.startsWith("#/versions")) return viewVersions();
   return viewDashboard();
 }
@@ -2130,6 +2133,8 @@ function renderFiche() {
         <div class="params-grid">
           <label>E-mail de l'agent
             <input type="email" id="p-email" value="${esc(f.email || "")}"${dis}></label>
+          <label>Matricule
+            <input type="text" id="p-matricule" maxlength="20" value="${esc(f.matricule || "")}"${dis}></label>
           <label>Compte valideur
             <select id="p-validator"${dis}>${validatorOptions}</select></label>
         </div>
@@ -2229,6 +2234,10 @@ function renderFiche() {
   });
   $("#p-email").addEventListener("input", (e) => {
     f.email = e.target.value.trim();
+    scheduleSave();
+  });
+  $("#p-matricule").addEventListener("input", (e) => {
+    f.matricule = e.target.value.trim();
     scheduleSave();
   });
   const ownerBtn = $("#btn-change-owner");
@@ -3099,6 +3108,7 @@ async function openNewFicheModal() {
   $("#nf-nom").value = "";
   $("#nf-prenom").value = "";
   $("#nf-email").value = "";
+  $("#nf-matricule").value = "";
   $("#new-fiche-year").textContent = "Année de la fiche : " + state.year;
   let scopeUsers = [];
   try {
@@ -3183,12 +3193,17 @@ $("#nf-submit").addEventListener("click", async () => {
     const res = await api("/api/agents", {
       method: "POST",
       body: JSON.stringify({
-        nom, prenom, email, owner_id: ownerId, validator_id: validatorId, year: state.year,
+        nom, prenom, email, matricule: $("#nf-matricule").value.trim(), owner_id: ownerId, validator_id: validatorId, year: state.year,
       }),
     });
     newFicheId = res.id;
     $("#nf-login").textContent = res.agent_login || "";
     $("#nf-password").textContent = res.agent_password || "";
+    const byAd = state.user.auth_mode === "ad";
+    $("#nf-password-line").classList.toggle("hidden", byAd);
+    $("#nf-hint").textContent = byAd
+      ? "L'agent se connecte avec son compte Ville (Active Directory) : renseignez son « Identifiant AD » dans Paramétrage > Utilisateurs si son identifiant Ville diffère de celui-ci."
+      : "Communiquez ces informations à l'agent. Le valideur peut réinitialiser le mot de passe dans Utilisateurs.";
     $("#new-fiche-form").classList.add("hidden");
     $("#new-fiche-success").classList.remove("hidden");
     toast("Fiche et compte agent créés");
@@ -3283,6 +3298,7 @@ async function saveFiche() {
         nom: f.nom,
         prenom: f.prenom || "",
         email: f.email || "",
+        matricule: f.matricule || "",
         validator_id: f.validator_id == null ? null : f.validator_id,
         params: f.params,
         periods: f.periods || [],
@@ -3419,10 +3435,11 @@ function renderSoldes(r) {
    ========================================================================== */
 function viewSettings() {
   if (!state.user.admin) { location.hash = "#/dashboard"; return; }
+  const embedded = !!$("#admin-body");
   // Copie de travail : l'état global n'est modifié qu'après enregistrement.
   const s = JSON.parse(JSON.stringify(state.settings));
   if (!Array.isArray(s.vacances_scolaires)) s.vacances_scolaires = [];
-  const c = $("#content");
+  const c = contentEl();
 
   const cell = (coll, i, f, value, type = "text", extra = "") =>
     `<input type="${type}" ${extra} data-coll="${coll}" data-i="${i}" data-f="${f}" value="${esc(value)}">`;
@@ -3486,7 +3503,7 @@ function viewSettings() {
     </tr>`).join("");
 
     c.innerHTML = `
-      <h1>Paramétrage</h1>
+      ${embedded ? "<h2>Calcul et calendrier</h2>" : "<h1>Paramétrage</h1>"}
       <div id="set-msg"></div>
       <div class="settings-grid" id="settings-root">
 
@@ -3747,6 +3764,309 @@ function viewSettings() {
 }
 
 /* ==========================================================================
+   Paramétrage : menu général à sous-sections (calcul, accès, e-mails, journaux)
+   ========================================================================== */
+const ADMIN_MENU = [
+  { group: "Congés", items: [["calcul", "Calcul et calendrier"]] },
+  { group: "Accès", items: [["users", "Utilisateurs"], ["apikeys", "Clés API"], ["connexions", "Journal des connexions"]] },
+  { group: "E-mails", items: [["emails", "Expéditeur et pied de page"], ["messages", "Messages automatiques"], ["journal-emails", "Journal des e-mails"]] },
+];
+
+/* Conteneur du contenu : la zone de la section en cours dans le Paramétrage, sinon la page entière. */
+function contentEl() { return $("#admin-body") || $("#content"); }
+
+function viewAdmin(hash) {
+  if (!state.user.admin) { location.hash = "#/dashboard"; return; }
+  const known = ADMIN_MENU.flatMap((g) => g.items.map((i) => i[0]));
+  const parts = hash.split("?")[0].split("/");
+  let section = parts[2] || "";
+  const arg = parts[3] || "";
+  if (!known.includes(section)) section = "calcul";
+  const menu = ADMIN_MENU.map((g) => `
+    <div class="admin-group">${esc(g.group)}</div>
+    ${g.items.map(([key, label]) => `<a href="#/settings/${key}" class="${key === section ? "active" : ""}">${esc(label)}</a>`).join("")}`).join("");
+  $("#content").innerHTML = `
+    <h1>Paramétrage</h1>
+    <div class="admin-layout">
+      <nav class="admin-menu">${menu}</nav>
+      <section id="admin-body"><p>Chargement…</p></section>
+    </div>`;
+  const run = {
+    calcul: () => viewSettings(), users: () => viewUsers(), apikeys: () => viewApiKeys(),
+    connexions: viewLoginLogs, emails: viewMailLayout, messages: () => viewMailMessages(arg), "journal-emails": viewMailLogs,
+  }[section];
+  Promise.resolve(run()).catch((e) => { $("#admin-body").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; });
+}
+
+/* ---- aides communes aux journaux ---- */
+function fmtDateTime(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(s || "");
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}` : esc(s || "");
+}
+
+function renderPager(el, total, limit, offset, go) {
+  const from = total ? offset + 1 : 0, to = Math.min(offset + limit, total);
+  el.innerHTML = `<span class="muted">${from}–${to} sur ${total}</span>
+    <button class="btn btn-small" data-p="prev" ${offset <= 0 ? "disabled" : ""}>← Précédent</button>
+    <button class="btn btn-small" data-p="next" ${offset + limit >= total ? "disabled" : ""}>Suivant →</button>`;
+  el.querySelector('[data-p="prev"]').addEventListener("click", () => go(Math.max(0, offset - limit)));
+  el.querySelector('[data-p="next"]').addEventListener("click", () => go(offset + limit));
+}
+
+async function retentionControl(el, field, label) {
+  const r = await api("/api/admin/log-retention");
+  el.innerHTML = `<label class="inline">${esc(label)} <input type="number" id="ret-days" min="30" max="3650" value="${r[field]}" style="width:90px"> jours
+    <button class="btn btn-small" id="ret-save">Enregistrer</button></label>
+    <span class="muted"> Les entrées plus anciennes sont supprimées automatiquement (RGPD).</span>`;
+  $("#ret-save").addEventListener("click", async () => {
+    try {
+      await api("/api/admin/log-retention", { method: "PUT", body: JSON.stringify({ ...r, [field]: Number($("#ret-days").value) }) });
+      toast("Durée de conservation enregistrée");
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---- Journal des connexions ---- */
+const EVENT_LABELS = { connexion: "Connexion", echec: "Échec", deconnexion: "Déconnexion", en_tant_que: "« En tant que » (début)", fin_en_tant_que: "« En tant que » (fin)" };
+const REASON_LABELS = { inconnu: "Identifiant inconnu", mot_de_passe: "Mot de passe incorrect", desactive: "Compte désactivé", service_ad: "Service AD indisponible", limite: "Trop de tentatives" };
+const METHOD_LABELS = { local: "Local", ad: "Active Directory", secours: "Secours (local)" };
+
+async function viewLoginLogs() {
+  const body = contentEl();
+  body.innerHTML = `
+    <h2>Journal des connexions</h2>
+    <p class="muted">Qui s'est connecté, quand et depuis quelle adresse (connexions, échecs, déconnexions, « se connecter en tant que »).</p>
+    <div class="log-filters">
+      <input id="ll-q" placeholder="Identifiant ou adresse IP…">
+      <select id="ll-event"><option value="">Tous les événements</option>${Object.entries(EVENT_LABELS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+      <select id="ll-ok"><option value="">Succès et échecs</option><option value="1">Succès</option><option value="0">Échecs</option></select>
+      <label class="inline">Du <input type="date" id="ll-from"></label>
+      <label class="inline">au <input type="date" id="ll-to"></label>
+      <button class="btn btn-small" id="ll-go">Filtrer</button>
+    </div>
+    <table class="data"><thead><tr><th>Date</th><th>Événement</th><th>Identifiant</th><th>Résultat</th><th>Méthode</th><th>Adresse IP</th><th>Navigateur</th></tr></thead>
+      <tbody id="ll-body"><tr><td colspan="7" class="muted">Chargement…</td></tr></tbody></table>
+    <div id="ll-pager" class="pager"></div>
+    <div id="ll-ret" class="log-retention"></div>`;
+  let offset = 0;
+  const limit = 50;
+  const load = async (off = 0) => {
+    offset = off;
+    const qs = new URLSearchParams({ limit, offset });
+    for (const [id, k] of [["ll-q", "q"], ["ll-event", "event"], ["ll-ok", "success"], ["ll-from", "from"], ["ll-to", "to"]]) {
+      const v = $("#" + id).value; if (v) qs.set(k, v);
+    }
+    const r = await api("/api/admin/login-logs?" + qs);
+    $("#ll-body").innerHTML = r.items.map((l) => `<tr class="${l.success ? "" : "log-fail"}">
+      <td>${fmtDateTime(l.at)}</td><td>${esc(EVENT_LABELS[l.event] || l.event)}</td><td>${esc(l.login || "—")}</td>
+      <td>${l.success ? "OK" : "<b>Refusé</b>"}${l.reason && l.event !== "en_tant_que" && l.event !== "fin_en_tant_que" ? " — " + esc(REASON_LABELS[l.reason] || l.reason) : (l.reason ? " " + esc(l.reason) : "")}</td>
+      <td>${esc(METHOD_LABELS[l.method] || l.method || "—")}</td><td>${esc(l.ip || "—")}</td>
+      <td class="muted" title="${esc(l.user_agent)}">${esc((l.user_agent || "").slice(0, 40))}</td></tr>`).join("")
+      || `<tr><td colspan="7" class="muted">Aucune entrée.</td></tr>`;
+    renderPager($("#ll-pager"), r.total, r.limit, r.offset, load);
+  };
+  $("#ll-go").addEventListener("click", () => load(0));
+  $("#ll-q").addEventListener("keydown", (e) => { if (e.key === "Enter") load(0); });
+  retentionControl($("#ll-ret"), "connexions_jours", "Conserver le journal des connexions");
+  await load(0);
+}
+
+/* ---- Journal des e-mails ---- */
+const MAIL_STATUS = { envoye: "Envoyé", echec: "Échec", non_envoye: "Non envoyé" };
+
+async function viewMailLogs() {
+  const body = contentEl();
+  body.innerHTML = `
+    <h2>Journal des e-mails</h2>
+    <p class="muted">Les e-mails envoyés (ou tentés) par l'application : destinataire, objet, résultat et texte envoyé.</p>
+    <div class="log-filters">
+      <input id="ml-q" placeholder="Destinataire ou objet…">
+      <select id="ml-status"><option value="">Tous les statuts</option>${Object.entries(MAIL_STATUS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+      <select id="ml-tpl"><option value="">Tous les messages</option></select>
+      <label class="inline">Du <input type="date" id="ml-from"></label>
+      <label class="inline">au <input type="date" id="ml-to"></label>
+      <button class="btn btn-small" id="ml-go">Filtrer</button>
+    </div>
+    <table class="data"><thead><tr><th>Date</th><th>Destinataire</th><th>Objet</th><th>Message</th><th>Statut</th><th></th></tr></thead>
+      <tbody id="ml-body"><tr><td colspan="6" class="muted">Chargement…</td></tr></tbody></table>
+    <div id="ml-pager" class="pager"></div>
+    <div id="ml-ret" class="log-retention"></div>`;
+  const limit = 50;
+  let templates = null;
+  const load = async (off = 0) => {
+    const qs = new URLSearchParams({ limit, offset: off });
+    for (const [id, k] of [["ml-q", "q"], ["ml-status", "status"], ["ml-tpl", "template"], ["ml-from", "from"], ["ml-to", "to"]]) {
+      const v = $("#" + id).value; if (v) qs.set(k, v);
+    }
+    const r = await api("/api/admin/mail-logs?" + qs);
+    if (!templates) {
+      templates = r.templates;
+      $("#ml-tpl").innerHTML += Object.entries(templates).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("");
+    }
+    $("#ml-body").innerHTML = r.items.map((m) => `<tr class="${m.status === "envoye" ? "" : "log-fail"}">
+      <td>${fmtDateTime(m.at)}</td><td>${esc(m.to_addr || "—")}</td><td>${esc(m.subject)}</td>
+      <td>${esc(templates[m.template] || m.template || "—")}</td>
+      <td>${esc(MAIL_STATUS[m.status] || m.status)}${m.error ? `<br><span class="muted">${esc(m.error)}</span>` : ""}</td>
+      <td><button class="btn btn-small" data-id="${m.id}">Voir</button></td></tr>`).join("")
+      || `<tr><td colspan="6" class="muted">Aucun e-mail.</td></tr>`;
+    $("#ml-body").querySelectorAll("button[data-id]").forEach((b) => b.addEventListener("click", async () => {
+      const m = await api("/api/admin/mail-logs/" + b.dataset.id);
+      showTextModal(`${m.subject}`, `À : ${m.to_addr}\nDate : ${fmtDateTime(m.at).replace(/&[a-z#0-9]+;/g, "")}\nStatut : ${MAIL_STATUS[m.status] || m.status}${m.error ? " (" + m.error + ")" : ""}\n\n${m.body}`);
+    }));
+    renderPager($("#ml-pager"), r.total, r.limit, r.offset, load);
+  };
+  $("#ml-go").addEventListener("click", () => load(0));
+  $("#ml-q").addEventListener("keydown", (e) => { if (e.key === "Enter") load(0); });
+  retentionControl($("#ml-ret"), "emails_jours", "Conserver le journal des e-mails");
+  await load(0);
+}
+
+function showTextModal(title, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "modal";
+  wrap.innerHTML = `<div class="modal-card" style="max-width:720px"><h3>${esc(title)}</h3>
+    <pre class="mail-body"></pre><div class="modal-actions"><button class="btn btn-primary">Fermer</button></div></div>`;
+  wrap.querySelector("pre").textContent = text;
+  wrap.querySelector("button").addEventListener("click", () => wrap.remove());
+  document.body.appendChild(wrap);
+}
+
+/* ---- E-mails : activation, expéditeur, signature et pied de page ---- */
+function renderMailSwitch(el, s) {
+  const on = s.enabled;
+  const detail = !s.apm_configured
+    ? "L'API centrale de la Ville (APM) n'est pas configurée dans <code>.env</code> : aucun e-mail ne peut partir, test compris."
+    : on ? "Les e-mails automatiques partent par l'API centrale de la Ville."
+      : "Les e-mails automatiques ne partent pas : ils sont seulement inscrits au journal. Les <b>messages de test partent quand même</b>.";
+  el.innerHTML = `<div class="card ${on && s.apm_configured ? "ok-banner" : "warn-banner"}">
+    <label class="inline"><input type="checkbox" id="mail-switch" ${on ? "checked" : ""}>
+      <b>Envoi automatique des e-mails : ${on ? "activé" : "désactivé"}</b></label>
+    <div class="muted" style="margin-top:4px">${detail}</div></div>`;
+  $("#mail-switch").addEventListener("change", async (e) => {
+    try {
+      const r = await api("/api/admin/mail-settings", { method: "PUT", body: JSON.stringify({ enabled: e.target.checked }) });
+      toast(r.enabled ? "Envoi des e-mails activé" : "Envoi des e-mails désactivé");
+      renderMailSwitch(el, r);
+    } catch (err) { e.target.checked = !e.target.checked; toast(err.message, true); }
+  });
+}
+
+/* Aperçu du MESSAGE seul : l'en-tête et le pied de page sont ajoutés par l'API centrale (pas prévisualisés ici). */
+function previewFrame(el, p) {
+  el.innerHTML = `<div class="muted" style="margin:6px 0">Aperçu du message avec des données d'exemple — l'en-tête et le pied de page sont ajoutés par l'API centrale.</div>
+    <div class="muted">Objet : <b>${esc(p.subject)}</b></div>
+    <iframe sandbox class="mail-preview" title="Aperçu du message"></iframe>`;
+  el.querySelector("iframe").srcdoc = `<body style="font-family:Arial,sans-serif;font-size:14px;color:#222;margin:12px">${p.html}</body>`;
+}
+
+async function viewMailLayout() {
+  const body = contentEl();
+  const s = await api("/api/admin/mail-settings");
+  const L = s.layout;
+  const f = (id, label, val, extra = "") => `<label>${label}<input id="ml-${id}" value="${esc(val)}" ${extra}></label>`;
+  body.innerHTML = `
+    <h2>Expéditeur et pied de page</h2>
+    <p class="muted">Réglages communs à <b>tous</b> les e-mails automatiques ; le texte de chaque message se règle dans « Messages automatiques ».
+      L'expéditeur et le pied de page sont transmis à l'API centrale de la Ville, qui ajoute son en-tête institutionnel.</p>
+    <div id="mail-switch-zone"></div>
+    <div class="card" style="margin-bottom:14px"><h3>Expéditeur</h3>
+      <div class="params-grid">${f("from_name", "Nom de l'expéditeur", L.from_name, 'placeholder="(par défaut de l\'API centrale)"')}
+        ${f("from_email", "Adresse de l'expéditeur", L.from_email, 'placeholder="(par défaut de l\'API centrale)"')}</div></div>
+    <div class="card" style="margin-bottom:14px"><h3>Signature</h3>
+      <label>Ajoutée en bas du texte de chaque message<textarea id="ml-signature" rows="3">${esc(L.signature)}</textarea></label></div>
+    <div class="card" style="margin-bottom:14px"><h3>Pied de page</h3>
+      <div class="params-grid">${f("footer1", "Ligne 1", L.footer1)}${f("footer2", "Ligne 2", L.footer2)}${f("footer3", "Ligne 3", L.footer3)}
+        <label>Couleur du pied de page<span class="color-pair"><input type="color" id="ml-footer_color-pick" value="${esc(L.footer_color)}"><input id="ml-footer_color" value="${esc(L.footer_color)}" maxlength="7" style="width:90px"></span></label></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="ml-save">Enregistrer</button>
+      <span class="muted">Envoyer un message de test à</span><input id="ml-test-to" type="email" placeholder="adresse e-mail" value="${esc(state.user.email || "")}" style="width:240px">
+      <button class="btn" id="ml-test">Envoyer le test</button>
+    </div>`;
+  renderMailSwitch($("#mail-switch-zone"), s);
+  $("#ml-footer_color-pick").addEventListener("input", (e) => { $("#ml-footer_color").value = e.target.value.toUpperCase(); });
+  $("#ml-footer_color").addEventListener("input", (e) => { if (/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) $("#ml-footer_color-pick").value = e.target.value; });
+  const collect = () => Object.fromEntries(["from_name", "from_email", "signature", "footer1", "footer2", "footer3", "footer_color"].map((k) => [k, $("#ml-" + k).value]));
+  $("#ml-save").addEventListener("click", async () => {
+    try { await api("/api/admin/mail-settings", { method: "PUT", body: JSON.stringify({ layout: collect() }) }); toast("Réglages enregistrés"); }
+    catch (e) { toast(e.message, true); }
+  });
+  $("#ml-test").addEventListener("click", async () => {
+    try {
+      await api("/api/admin/mail-settings", { method: "PUT", body: JSON.stringify({ layout: collect() }) });  // le test utilise les réglages saisis
+      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ to: $("#ml-test-to").value.trim() }) });
+      toast(r.ok ? "Message de test envoyé à " + r.to : "Non envoyé : " + r.error, !r.ok);
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---- E-mails : messages automatiques (liste à gauche, contenu à droite) ---- */
+async function viewMailMessages(selected) {
+  const body = contentEl();
+  const s = await api("/api/admin/mail-settings");
+  const current = s.templates.find((t) => t.key === selected) || s.templates[0];
+  body.innerHTML = `
+    <h2>Messages automatiques</h2>
+    <p class="muted">Choisissez un message dans la liste pour voir et modifier son contenu. Les <code>{variables}</code> sont remplacées à l'envoi ; une ligne dont toutes
+      les variables sont vides est supprimée.</p>
+    <div id="mail-switch-zone"></div>
+    <div class="msg-layout">
+      <nav class="msg-list">${s.templates.map((t) => `
+        <a href="#/settings/messages/${esc(t.key)}" class="${t.key === current.key ? "active" : ""}">
+          <b>${esc(t.label)}</b>${t.enabled ? "" : ' <span class="tag-off">désactivé</span>'}
+          <span class="muted">${esc(t.recipients)}</span></a>`).join("")}</nav>
+      <section class="msg-edit card" data-key="${esc(current.key)}">
+        <h3>${esc(current.label)}</h3>
+        <p class="muted">${esc(current.description)} Destinataire : ${esc(current.recipients)}.</p>
+        <label class="inline"><input type="checkbox" id="tpl-enabled" ${current.enabled ? "checked" : ""}> Message activé</label>
+        <label>Objet<input id="tpl-subject" value="${esc(current.subject)}"></label>
+        <label>Texte du message<textarea id="tpl-body" rows="14">${esc(current.body)}</textarea></label>
+        <div class="var-box">
+          <b>Variables disponibles</b> <span class="muted">(cliquez pour insérer dans l'objet ou le texte)</span>
+          <table class="var-table"><tbody>${Object.entries(current.variables).map(([v, d]) => `
+            <tr><td><button type="button" class="var-chip" data-v="${esc(v)}">{${esc(v)}}</button></td><td class="muted">${esc(d)}</td></tr>`).join("")}</tbody></table>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn btn-primary" id="tpl-save">Enregistrer</button>
+          <button class="btn" id="tpl-preview">Aperçu</button>
+          <button class="btn" id="tpl-test">M'envoyer un test</button>
+          <button class="btn btn-danger" id="tpl-reset">Revenir au texte d'origine</button>
+        </div>
+        <div id="tpl-prev" style="margin-top:10px"></div>
+      </section>
+    </div>`;
+  renderMailSwitch($("#mail-switch-zone"), s);
+  const key = current.key;
+  const val = () => ({ subject: $("#tpl-subject").value, body: $("#tpl-body").value, enabled: $("#tpl-enabled").checked });
+  let lastFocus = $("#tpl-body");
+  $("#tpl-subject").addEventListener("focus", (e) => { lastFocus = e.target; });
+  $("#tpl-body").addEventListener("focus", (e) => { lastFocus = e.target; });
+  body.querySelectorAll(".var-chip").forEach((chip) => chip.addEventListener("click", () => {
+    const t = `{${chip.dataset.v}}`, el = lastFocus, a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + t + el.value.slice(b);
+    el.focus(); el.selectionStart = el.selectionEnd = a + t.length;
+  }));
+  const preview = async () => previewFrame($("#tpl-prev"),
+    await api("/api/admin/mail-settings/preview", { method: "POST", body: JSON.stringify({ key, ...val() }) }));
+  $("#tpl-preview").addEventListener("click", () => preview().catch((e) => toast(e.message, true)));
+  $("#tpl-save").addEventListener("click", async () => {
+    try { await api("/api/admin/mail-settings", { method: "PUT", body: JSON.stringify({ templates: { [key]: val() } }) }); toast("Message enregistré"); viewMailMessages(key); }
+    catch (e) { toast(e.message, true); }
+  });
+  $("#tpl-test").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ key, to: state.user.email || "" }) });
+      toast(r.ok ? "Test envoyé à " + r.to : "Non envoyé : " + r.error, !r.ok);
+    } catch (e) { toast(e.message, true); }
+  });
+  $("#tpl-reset").addEventListener("click", async () => {
+    if (!confirm("Revenir au texte d'origine de ce message ?")) return;
+    try { await api("/api/admin/mail-settings/reset", { method: "POST", body: JSON.stringify({ key }) }); viewMailMessages(key); }
+    catch (e) { toast(e.message, true); }
+  });
+  preview().catch(() => {});
+}
+
+/* ==========================================================================
    Version et journal des versions (« Nouveautés »)
    ========================================================================== */
 async function loadVersion() {
@@ -3846,8 +4166,9 @@ function setupActAs() {
    ========================================================================== */
 async function viewApiKeys() {
   if (!state.user.admin) { location.hash = "#/dashboard"; return; }
-  const c = $("#content");
-  c.innerHTML = "<h1>Clés API</h1><p>Chargement…</p>";
+  const c = contentEl();
+  const H = $("#admin-body") ? "h2" : "h1";
+  c.innerHTML = `<${H}>Clés API</${H}><p>Chargement…</p>`;
   const data = await api("/api/v1/admin/api-keys");
   const scopeBoxes = Object.entries(data.scopes).map(([k, label]) =>
     `<label class="inline"><input type="checkbox" class="ak-scope" value="${esc(k)}"> <code>${esc(k)}</code> — ${esc(label)}</label>`).join("");
@@ -3866,7 +4187,7 @@ async function viewApiKeys() {
       </td>
     </tr>`).join("") || `<tr><td colspan="7" class="muted">Aucune clé.</td></tr>`;
   c.innerHTML = `
-    <h1>Clés API</h1>
+    <${H}>Clés API</${H}>
     <p class="muted">Permettent à d'autres applications de la Ville de <b>lire</b> les données (documentation :
       <a href="/api-docs/" target="_blank" rel="noopener">/api-docs</a>). Une clé n'est affichée qu'une seule fois, à sa création.</p>
     <div class="card" style="margin-bottom:16px">
@@ -3935,8 +4256,10 @@ async function viewApiKeys() {
 async function viewUsers() {
   if (!canManageUsers()) { location.hash = "#/dashboard"; return; }
   const isAdmin = !!state.user.admin;
-  const c = $("#content");
-  c.innerHTML = "<h1>Utilisateurs</h1><p>Chargement…</p>";
+  const c = contentEl();
+  const H = $("#admin-body") ? "h2" : "h1";
+  const adMode = state.user.auth_mode === "ad";
+  c.innerHTML = `<${H}>Utilisateurs</${H}><p>Chargement…</p>`;
   const users = await api("/api/users");
 
   const roleOptions = (current) => Object.entries(ROLE_LABELS).map(([value, label]) =>
@@ -3982,16 +4305,17 @@ async function viewUsers() {
     const self = u.id === state.user.id;
     const lockRole = !isAdmin || self;
     const group = role !== lastRole
-      ? `<tr class="role-group" data-role="${role}"><td colspan="9">${esc(ROLE_LABELS[role] || role)}</td></tr>`
+      ? `<tr class="role-group" data-role="${role}"><td colspan="10">${esc(ROLE_LABELS[role] || role)}</td></tr>`
       : "";
     lastRole = role;
     return group + `
       <tr data-id="${u.id}" data-role="${role}" data-login="${esc(u.login)}" data-nom="${esc(u.nom)}" data-email="${esc(u.email || "")}" data-actif="${u.actif ? 1 : 0}">
         <td>${isAdmin ? `<input data-f="login" value="${esc(u.login)}">` : esc(u.login)}</td>
         <td><input data-f="ad_login" value="${esc(u.ad_login || "")}" placeholder="(identique)"></td>
+        <td><input data-f="matricule" value="${esc(u.matricule || "")}" maxlength="20"></td>
         <td><input data-f="nom" value="${esc(u.nom)}"></td>
         <td><input data-f="email" type="email" value="${esc(u.email || "")}"></td>
-        <td><input data-f="password" type="password" placeholder="(inchangé)"></td>
+        <td>${adMode && role !== "administrateur" ? '<span class="muted" title="Mot de passe de l\'Active Directory">AD</span>' : '<input data-f="password" type="password" placeholder="(inchangé)">'}</td>
         <td><select data-f="role" ${lockRole ? "disabled" : ""}>${roleOptions(role)}</select></td>
         <td><select data-f="parent_id" ${lockRole || role === "administrateur" ? "disabled" : ""}>${parentOptions(role, u.parent_id, u.id, true)}</select></td>
         <td><input type="checkbox" data-f="actif" ${u.actif ? "checked" : ""} ${self ? "disabled" : ""}></td>
@@ -4004,7 +4328,7 @@ async function viewUsers() {
 
   c.innerHTML = `
     <div class="page-head">
-      <h1>Utilisateurs</h1>
+      <${H}>Utilisateurs</${H}>
       ${isAdmin ? `<button type="button" class="btn btn-small" id="btn-user-audit">Journal d'audit</button>` : ""}
     </div>
     <div id="users-msg"></div>
@@ -4015,9 +4339,10 @@ async function viewUsers() {
       <div class="params-grid new-user-grid">
         <label>Identifiant <input id="nu-login"></label>
         <label>Identifiant AD <input id="nu-ad-login" placeholder="(identique)"></label>
+        <label>Matricule <input id="nu-matricule" maxlength="20"></label>
         <label>Nom <input id="nu-nom"></label>
         <label>E-mail <input id="nu-email" type="email"></label>
-        <label>Mot de passe <input id="nu-pass" type="password"></label>
+        <label>${adMode ? "Mot de passe (administrateur seulement)" : "Mot de passe"} <input id="nu-pass" type="password"></label>
         <label>Rôle <select id="nu-role">${createRoleOptions}</select></label>
         <label>Responsable <select id="nu-parent">${parentOptions(defaultCreateRole, state.user.id, null, true)}</select></label>
         <button class="btn btn-primary new-user-submit" id="nu-create">Créer</button>
@@ -4044,11 +4369,11 @@ async function viewUsers() {
     </div>
     <table class="data users-table">
       <colgroup>
-        <col style="width:8%"><col style="width:9%"><col style="width:12%"><col style="width:13%"><col style="width:9%">
-        <col style="width:12%"><col style="width:18%"><col style="width:5%"><col style="width:14%">
+        <col style="width:8%"><col style="width:8%"><col style="width:7%"><col style="width:11%"><col style="width:12%"><col style="width:7%">
+        <col style="width:11%"><col style="width:15%"><col style="width:5%"><col style="width:13%">
       </colgroup>
       <thead><tr>
-        <th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
+        <th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Matricule</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
         <th>Rôle</th><th>Responsable</th><th>Actif</th><th>Actions</th>
       </tr></thead>
       <tbody id="users-table-body">
@@ -4127,6 +4452,7 @@ async function viewUsers() {
             login: $("#nu-login").value.trim(),
             nom: $("#nu-nom").value.trim(),
             ad_login: $("#nu-ad-login").value.trim(),
+            matricule: $("#nu-matricule").value.trim(),
             email: $("#nu-email").value.trim(),
             password: $("#nu-pass").value,
             role,
@@ -4156,14 +4482,15 @@ async function viewUsers() {
       const payload = {
         nom: tr.querySelector('[data-f="nom"]').value,
         ad_login: tr.querySelector('[data-f="ad_login"]').value.trim(),
+        matricule: tr.querySelector('[data-f="matricule"]').value.trim(),
         email: tr.querySelector('[data-f="email"]').value,
         role: roleEl.value,
         parent_id: parentEl.value || null,
         actif: tr.querySelector('[data-f="actif"]').checked,
       };
       if (loginEl) payload.login = loginEl.value.trim();
-      const pw = tr.querySelector('[data-f="password"]').value;
-      if (pw) payload.password = pw;
+      const pwEl = tr.querySelector('[data-f="password"]');
+      if (pwEl && pwEl.value) payload.password = pwEl.value;
       try {
         const updated = await api("/api/users/" + id, { method: "PUT", body: JSON.stringify(payload) });
         if (updated && state.user && updated.id === state.user.id) {

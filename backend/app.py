@@ -29,6 +29,7 @@ from rules import matrix_rows
 
 import act_as
 import apm
+import audit_logs
 import config
 import ratelimit
 from config import BASE_DIR, SECRET_FILE, UPLOAD_DIR
@@ -524,10 +525,28 @@ def _check_credentials(user, password):
     """
     local_ok = check_password_hash(user["mot_de_passe"], password)
     if config.AUTH_MODE != "ad":
-        return local_ok
+        return local_ok, "local"
     if user["admin"] and local_ok:
-        return True
-    return apm.ad_authenticate((user["ad_login"] or user["login"]).strip(), password)
+        return True, "secours"
+    return apm.ad_authenticate((user["ad_login"] or user["login"]).strip(), password), "ad"
+
+
+def _clean_matricule(value):
+    """(matricule normalisé, erreur) : lettres, chiffres, . _ - ; 20 caractères au maximum."""
+    value = (value or "").strip()
+    if value and not re.fullmatch(r"[A-Za-z0-9._-]{1,20}", value):
+        return value, "Matricule invalide (lettres, chiffres, . _ - ; 20 caractères au maximum)"
+    return value, None
+
+
+def _matricule_holder(db, matricule, exclude_user_id=None):
+    """Identifiant du compte qui porte déjà ce matricule (autre que exclude_user_id), sinon None."""
+    if not matricule:
+        return None
+    row = db.execute(
+        "SELECT login FROM users WHERE matricule=? AND id<>?", (matricule, exclude_user_id or 0)
+    ).fetchone()
+    return row["login"] if row else None
 
 
 def _password_managed_by_ad(user):
@@ -541,27 +560,36 @@ def login():
     password = data.get("password") or ""
     bucket = "login:" + (request.remote_addr or "?")
     if ratelimit.blocked(bucket, config.LOGIN_MAX_FAILURES, 900):
+        audit_logs.log_login("echec", login_name, None, False, "limite")
         return jsonify({"error": "Trop de tentatives de connexion, réessayez dans quelques minutes"}), 429
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE login=?", (login_name,)).fetchone()
     db.close()
     if not user:
         ratelimit.record(bucket)
+        audit_logs.log_login("echec", login_name, None, False, "inconnu")
         return jsonify({"error": "Identifiant/mot de passe incorrect"}), 401
     try:
-        valid = _check_credentials(user, password)
+        valid, method = _check_credentials(user, password)
     except apm.ApmError as exc:
         app.logger.error("Authentification AD indisponible : %s", exc)
+        audit_logs.log_login("echec", login_name, user["id"], False, "service_ad", "ad")
         return jsonify({"error": "Service d'authentification indisponible, réessayez plus tard"}), 503
     if not valid:
         ratelimit.record(bucket)
+        audit_logs.log_login("echec", login_name, user["id"], False, "mot_de_passe", method)
         return jsonify({"error": "Identifiant/mot de passe incorrect"}), 401
     if not user["actif"]:
+        audit_logs.log_login("echec", login_name, user["id"], False, "desactive", method)
         return jsonify({"error": "Ce compte est désactivé"}), 403
     session.clear()
     session["uid"] = user["id"]
     session.permanent = True
-    return jsonify({"user": public_user(user)})
+    audit_logs.log_login("connexion", login_name, user["id"], True, "", method)
+    out = public_user(user)
+    out["password_by_ad"] = _password_managed_by_ad(user)
+    out["auth_mode"] = config.AUTH_MODE
+    return jsonify({"user": out})
 
 
 @app.route("/api/me", methods=["GET"])
@@ -569,6 +597,8 @@ def login():
 def me():
     user = dict(request.user)
     user.pop("mot_de_passe", None)
+    user["password_by_ad"] = _password_managed_by_ad(request.user)
+    user["auth_mode"] = config.AUTH_MODE
     real = getattr(request, "real_user", None)
     if real:
         user["impersonation"] = {"by": {"id": real["id"], "login": real["login"], "nom": real["nom"]}}
@@ -615,6 +645,8 @@ def me_password():
 @app.route("/api/auth/logout", methods=["POST"])
 def logout():
     act_as.end_impersonation(_audit_user)
+    if session.get("uid"):
+        audit_logs.log_login("deconnexion", "", session.get("uid"), True)
     session.clear()
     return jsonify({"ok": True})
 
@@ -676,7 +708,7 @@ def users_list():
         return jsonify({"error": "Accès réservé aux administrateurs et valideurs"}), 403
     db = get_db()
     select = (
-        "SELECT u.id, u.login, u.ad_login, u.nom, u.email, u.admin, u.role, u.parent_id, "
+        "SELECT u.id, u.login, u.ad_login, u.matricule, u.nom, u.email, u.admin, u.role, u.parent_id, "
         "u.actif, u.cree_le, p.nom AS parent_nom, p.login AS parent_login "
         "FROM users u LEFT JOIN users p ON p.id = u.parent_id "
     )
@@ -731,9 +763,18 @@ def users_create():
     login_name = (data.get("login") or "").strip()
     password = data.get("password") or ""
     email = (data.get("email") or "").strip()
-    if not login_name or not password:
-        return jsonify({"error": "Identifiant et mot de passe obligatoires"}), 400
     role = (data.get("role") or ("administrateur" if data.get("admin") else "secteur")).strip()
+    if not login_name:
+        return jsonify({"error": "Identifiant obligatoire"}), 400
+    if not password:
+        # Mode AD : le mot de passe est celui du compte Ville ; un mot de passe local aléatoire (jamais communiqué)
+        # remplit la colonne. Les administrateurs gardent un mot de passe local (compte de secours).
+        if config.AUTH_MODE != "ad" or role == "administrateur":
+            return jsonify({"error": "Identifiant et mot de passe obligatoires"}), 400
+        password = uuid.uuid4().hex + "Aa1!"
+    matricule, merr = _clean_matricule(data.get("matricule"))
+    if merr:
+        return jsonify({"error": merr}), 400
     if role not in ROLE_LEVELS:
         return jsonify({"error": "Rôle invalide"}), 400
     creator_role = _user_role(request.user)
@@ -775,10 +816,14 @@ def users_create():
             return jsonify({"error": "Le responsable doit être dans votre périmètre"}), 403
     if role == "administrateur":
         parent_id = None
+    holder = _matricule_holder(db, matricule)
+    if holder:
+        db.close()
+        return jsonify({"error": "Ce matricule est déjà attribué au compte %s" % holder}), 400
     cur = db.execute(
-        "INSERT INTO users (login, ad_login, nom, email, mot_de_passe, admin, role, parent_id, actif) "
-        "VALUES (?,?,?,?,?,?,?,?,1)",
-        (login_name, (data.get("ad_login") or "").strip(), (data.get("nom") or login_name).strip(), email,
+        "INSERT INTO users (login, ad_login, matricule, nom, email, mot_de_passe, admin, role, parent_id, actif) "
+        "VALUES (?,?,?,?,?,?,?,?,?,1)",
+        (login_name, (data.get("ad_login") or "").strip(), matricule, (data.get("nom") or login_name).strip(), email,
          generate_password_hash(password), 1 if role == "administrateur" else 0,
          role, parent_id),
     )
@@ -791,7 +836,7 @@ def users_create():
                 "mot_de_passe", "", "défini")
     db.commit()
     user = db.execute(
-        "SELECT id, login, ad_login, nom, email, admin, role, parent_id, actif, cree_le "
+        "SELECT id, login, ad_login, matricule, nom, email, admin, role, parent_id, actif, cree_le "
         "FROM users WHERE id=?",
         (cur.lastrowid,),
     ).fetchone()
@@ -862,9 +907,14 @@ def users_update(uid):
     email = (data.get("email") if "email" in data else (user["email"] or "")).strip()
     actif = 1 if data.get("actif", user["actif"]) else 0
     ad_login = (data.get("ad_login") if "ad_login" in data else (user["ad_login"] or "")).strip()
+    matricule, merr = _clean_matricule(data["matricule"] if "matricule" in data else user["matricule"])
+    holder = _matricule_holder(db, matricule, uid)
+    if merr or holder:
+        db.close()
+        return jsonify({"error": merr or "Ce matricule est déjà attribué au compte %s" % holder}), 400
     db.execute(
-        "UPDATE users SET login=?, ad_login=?, nom=?, email=?, admin=?, role=?, parent_id=?, actif=? WHERE id=?",
-        (login_name, ad_login, (data.get("nom") or user["nom"]).strip(), email,
+        "UPDATE users SET login=?, ad_login=?, matricule=?, nom=?, email=?, admin=?, role=?, parent_id=?, actif=? WHERE id=?",
+        (login_name, ad_login, matricule, (data.get("nom") or user["nom"]).strip(), email,
          admin_flag, role, parent_id, actif, uid),
     )
     password = data.get("password")
@@ -888,6 +938,8 @@ def users_update(uid):
         changes.append(("e-mail", user["email"] or "", email))
     if ad_login != (user["ad_login"] or ""):
         changes.append(("identifiant AD", user["ad_login"] or "", ad_login))
+    if matricule != (user["matricule"] or ""):
+        changes.append(("matricule", user["matricule"] or "", matricule))
     new_nom = (data.get("nom") or user["nom"]).strip()
     if new_nom != user["nom"]:
         changes.append(("nom", user["nom"], new_nom))
@@ -898,7 +950,7 @@ def users_update(uid):
                     field, old_value, new_value)
     db.commit()
     user = db.execute(
-        "SELECT id, login, ad_login, nom, email, admin, role, parent_id, actif, cree_le "
+        "SELECT id, login, ad_login, matricule, nom, email, admin, role, parent_id, actif, cree_le "
         "FROM users WHERE id=?",
         (uid,),
     ).fetchone()
@@ -1141,6 +1193,11 @@ def agents_create():
     if validator_id not in allowed_validators:
         db.close()
         return jsonify({"error": "Compte valideur non autorisé pour ce propriétaire"}), 400
+    matricule, merr = _clean_matricule(data.get("matricule"))
+    holder = _matricule_holder(db, matricule)
+    if merr or holder:
+        db.close()
+        return jsonify({"error": merr or "Ce matricule est déjà attribué au compte %s" % holder}), 400
     params = _normalize_params(data.get("params"))
     is_manager = 1 if data.get("is_manager") else 0
     login = _agent_login(db, prenom, nom)
@@ -1148,15 +1205,15 @@ def agents_create():
     full_name = ("%s %s" % (nom, prenom)).strip()
     try:
         cur_user = db.execute(
-            "INSERT INTO users (login, nom, email, mot_de_passe, admin, role, parent_id, actif) "
-            "VALUES (?,?,?,?,0,'agent',?,1)",
-            (login, full_name, email, generate_password_hash(password), owner_id),
+            "INSERT INTO users (login, nom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
+            "VALUES (?,?,?,?,?,0,'agent',?,1)",
+            (login, full_name, email, matricule, generate_password_hash(password), owner_id),
         )
         agent_user_id = cur_user.lastrowid
         cur = db.execute(
-            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, validator_id, year, params, is_manager) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (owner_id, agent_user_id, nom, prenom, email, validator_id, year, json_dumps(params), is_manager),
+            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (owner_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, json_dumps(params), is_manager),
         )
         agent_row_id = cur.lastrowid
         if is_manager:
@@ -1382,10 +1439,15 @@ def agents_update(aid):
         is_manager = 1 if data.get("is_manager") else 0
     else:
         is_manager = int(agent["is_manager"] or 0)
+    matricule, merr = _clean_matricule(data["matricule"] if "matricule" in data else agent["matricule"])
+    holder = _matricule_holder(db, matricule, agent["agent_user_id"])
+    if merr or holder:
+        db.close()
+        return jsonify({"error": merr or "Ce matricule est déjà attribué au compte %s" % holder}), 400
     db.execute(
-        "UPDATE agents SET user_id=?, nom=?, prenom=?, email=?, validator_id=?, params=?, periods=?, is_manager=?, "
+        "UPDATE agents SET user_id=?, nom=?, prenom=?, email=?, matricule=?, validator_id=?, params=?, periods=?, is_manager=?, "
         "modifie_le=CURRENT_TIMESTAMP WHERE id=?",
-        (owner_id, nom, prenom, email, validator_id, params, periods_json, is_manager, aid),
+        (owner_id, nom, prenom, email, matricule, validator_id, params, periods_json, is_manager, aid),
     )
     if is_manager:
         db.execute(
@@ -1397,8 +1459,8 @@ def agents_update(aid):
         linked = db.execute("SELECT * FROM users WHERE id=?", (linked_id,)).fetchone()
         if linked and _user_role(row_to_dict(linked)) == "agent":
             db.execute(
-                "UPDATE users SET nom=?, email=?, parent_id=? WHERE id=?",
-                (("%s %s" % (nom, prenom)).strip(), email, owner_id, linked_id),
+                "UPDATE users SET nom=?, email=?, matricule=?, parent_id=? WHERE id=?",
+                (("%s %s" % (nom, prenom)).strip(), email, matricule, owner_id, linked_id),
             )
     if "cells" in data:
         db.execute("DELETE FROM cells WHERE agent_id=?", (aid,))
@@ -1506,10 +1568,10 @@ def agents_duplicate():
         params["date_depart"] = ""
         params = _normalize_params(params)
         cur = db.execute(
-            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, validator_id, year, params, is_manager) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (source["user_id"], source["agent_user_id"], source["nom"], source["prenom"],
-             source["email"], source["validator_id"], year, json_dumps(params),
+             source["email"], source["matricule"], source["validator_id"], year, json_dumps(params),
              int(source["is_manager"] or 0)),
         )
         if source["is_manager"]:
@@ -3476,10 +3538,17 @@ app.register_blueprint(api_v1.bp)
 api_keys.init_admin(app, admin_required)
 register_docs(app)
 act_as.init_act_as(app, current_user, _audit_user)
+import admin_settings  # noqa: E402
+
+admin_settings.init_admin_settings(app, admin_required)
 
 
 def bootstrap():
     init_db()
+    try:
+        audit_logs.purge()
+    except Exception as exc:  # noqa: BLE001
+        print("[boot] Purge des journaux impossible :", exc)
     db = get_db()
     if not db.execute("SELECT id FROM users LIMIT 1").fetchone():
         # Premier démarrage : import des paramètres du classeur + admin par défaut

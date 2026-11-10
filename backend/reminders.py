@@ -9,6 +9,7 @@ import os
 import threading
 import time
 
+import audit_logs
 import config
 import mailer
 from db import SQL_NOW_MINUS, get_db
@@ -76,31 +77,17 @@ def send_pending_reminders(days=DEFAULT_DAYS):
             email = (first["validator_email"] or "").strip()
             if not email:
                 continue
-            name = first["validator_nom"] or first["validator_login"] or "valideur"
+            base = (mailer.load_config() or {}).get("base_url") or ""
             lines = [
-                "Bonjour,",
-                "",
-                "Les demandes suivantes sont en attente depuis plus de %s jours :" % days,
-                "",
+                "- %s — %s — demande du %s" % (
+                    row["agent_nom"] or "Agent", row["code"] or "",
+                    str(row["soumis_le"] or row["cree_le"] or "")[:10])
+                for row in group
             ]
-            for row in group:
-                lines.append("- %s — %s — demande du %s" % (
-                    row["agent_nom"] or "Agent",
-                    row["code"] or "",
-                    str(row["soumis_le"] or row["cree_le"] or "")[:10],
-                ))
-            lines.extend([
-                "",
-                "Merci de les traiter dans l'outil de suivi des congés.",
-                "",
-                "Cordialement,",
-                "Outil de suivi des congés",
-            ])
-            ok, error = mailer.send_mail(
-                email,
-                "[Suivi congés] Relance : %s demande(s) en attente" % len(group),
-                "\n".join(lines),
-            )
+            ok, error = mailer.send_template("relance_demandes", email, {
+                "nombre": str(len(group)), "jours": str(days), "liste": "\n".join(lines),
+                "lien_demandes": "%s/#/requests" % base.rstrip("/") if base else "",
+            })
             if ok:
                 sent += 1
             else:
@@ -123,6 +110,10 @@ def start_reminder_scheduler(interval=DEFAULT_INTERVAL):
                 send_pending_reminders()
             except Exception as exc:  # noqa: BLE001 - ne doit pas bloquer l'app
                 _log("échec de la relance automatique : %s" % exc)
+            try:
+                audit_logs.purge()
+            except Exception as exc:  # noqa: BLE001
+                _log("purge des journaux impossible : %s" % exc)
             time.sleep(max(300, int(interval)))
 
     thread = threading.Thread(target=run, name="conges-reminders", daemon=True)
