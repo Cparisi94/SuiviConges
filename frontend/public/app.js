@@ -595,6 +595,7 @@ async function route() {
   if (hash.startsWith("#/settings")) return viewSettings();
   if (hash.startsWith("#/users")) return viewUsers();
   if (hash.startsWith("#/apikeys")) return viewApiKeys();
+  if (hash.startsWith("#/versions")) return viewVersions();
   return viewDashboard();
 }
 
@@ -3746,6 +3747,35 @@ function viewSettings() {
 }
 
 /* ==========================================================================
+   Version et journal des versions (« Nouveautés »)
+   ========================================================================== */
+async function loadVersion() {
+  try {
+    const v = await fetch("/api/version").then((r) => r.json());
+    const label = "v" + v.version;
+    $("#app-version").textContent = label;
+    $("#login-version").textContent = "Version " + v.version + " — " + v.date;
+  } catch (_) { /* affichage facultatif */ }
+}
+
+async function viewVersions() {
+  const c = $("#content");
+  c.innerHTML = "<h1>Journal des versions</h1><p>Chargement…</p>";
+  const data = await api("/api/changelog");
+  const fmtDate = (d) => String(d || "").split("-").reverse().join("/");
+  c.innerHTML = `
+    <h1>Journal des versions</h1>
+    <p class="muted">Version actuelle : <b>${esc(data.version)}</b></p>
+    ${data.versions.map((v) => `
+      <div class="card" style="margin-bottom:12px">
+        <h3>${esc(v.version)} <span class="muted">— ${esc(fmtDate(v.date))}</span>
+          ${v.version === data.version ? '<span class="req-badge" style="position:static;margin-left:8px">actuelle</span>' : ""}</h3>
+        <p><b>${esc(v.titre)}</b></p>
+        <ul>${v.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>
+      </div>`).join("")}`;
+}
+
+/* ==========================================================================
    « Se connecter en tant que » (administrateurs) : recherche prédictive AD
    ========================================================================== */
 function renderActAsBanner() {
@@ -4196,4 +4226,5 @@ $("#user-audit-modal").addEventListener("mousedown", (e) => {
 
 /* ---------------------------- démarrage ---------------------------- */
 $("#year-select").addEventListener("change", (e) => setYear(Number(e.target.value)));
+loadVersion();
 tryRestoreSession();

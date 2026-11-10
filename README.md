@@ -45,7 +45,7 @@ démarrage sur un schéma vide, un compte `admin` est créé avec le mot de pass
 `CONGES_INITIAL_ADMIN_PASSWORD`, ou un mot de passe aléatoire affiché une seule fois dans la
 console. `CONGES_AUTH_MODE=ad` active la connexion par l'Active Directory (via l'API centrale APM).
 
-Détail des évolutions techniques : [modifications.md](modifications.md).
+Version actuelle : voir `backend/version.py` (affichée dans l'application) ; journal : [CHANGELOG.md](CHANGELOG.md) ; référence fonctionnelle : [MANIFEST.md](MANIFEST.md) ; évolutions techniques expliquées au métier : [modifications.md](modifications.md).
 
 ## Rôles et hiérarchie
 

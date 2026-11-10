@@ -3,6 +3,7 @@
 from flask import jsonify
 from flask_swagger_ui import get_swaggerui_blueprint
 
+import version
 from api_keys import SCOPES
 
 _PAGE = [
@@ -34,7 +35,7 @@ def build_spec():
         "openapi": "3.0.3",
         "info": {
             "title": "Suivi des congés — API",
-            "version": "1.0.0",
+            "version": version.VERSION,
             "description": "API en lecture seule destinée aux applications de la Ville. "
                            "Authentification par clé API (en-tête `X-API-Key`) délivrée par l'administrateur. "
                            "Périmètres : " + "; ".join("`%s` (%s)" % kv for kv in SCOPES.items()),
@@ -43,6 +44,8 @@ def build_spec():
         "paths": {
             "/api/status": {"get": {"summary": "État de l'application et de ses dépendances (sans clé)",
                                     "responses": {"200": {"description": "OK"}, "503": {"description": "Dégradé"}}}},
+            "/api/version": {"get": {"summary": "Version de l'application", "responses": {"200": {"description": "OK"}}}},
+            "/api/changelog": {"get": {"summary": "Journal des versions (nouveautés)", "responses": {"200": {"description": "OK"}}}},
             "/api/v1/agents": _get("Liste paginée des fiches agents", "agents:read",
                                    _PAGE + [_YEAR, {"name": "q", "in": "query", "schema": {"type": "string"},
                                                     "description": "Recherche sur nom / prénom"}]),

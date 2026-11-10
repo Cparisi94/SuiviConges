@@ -13,6 +13,7 @@
   <form id="login-form" class="login-card">
     <h1>Suivi des congés</h1>
     <p class="login-sub">Connectez-vous pour accéder à votre espace</p>
+    <p class="login-version muted" id="login-version"></p>
     <label>Identifiant
       <input type="text" id="login-user" autocomplete="username" required>
     </label>
@@ -40,6 +41,7 @@
     </nav>
     <div class="topbar-right">
       <select id="year-select" class="year-select" title="Année de travail"></select>
+      <a href="#/versions" id="app-version" class="version-link" title="Journal des versions"></a>
       <span id="user-badge"></span>
       <button id="btn-act-as" class="btn btn-ghost hidden" title="Se connecter en tant que… : agir avec les droits d'un agent">En tant que…</button>
       <button id="btn-password" class="btn btn-ghost" title="Changer mon mot de passe">Mot de passe</button>

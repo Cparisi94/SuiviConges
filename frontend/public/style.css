@@ -1426,3 +1426,9 @@ table.data.requests-table th { white-space: normal; line-height: 1.2; vertical-a
 .ak-scopes { margin: 10px 0; }
 .ak-scopes label.inline { margin: 4px 0; font-size: 13px; color: inherit; }
 .ak-scopes label.inline input { width: auto; margin: 0; }
+
+/* Version affichée */
+.version-link { color: rgba(255,255,255,.75); font-size: 11px; text-decoration: none; margin-right: 6px; }
+.version-link:hover { color: #fff; text-decoration: underline; }
+.login-version { text-align: center; font-size: 11px; margin: -6px 0 10px; }
+@media print { .version-link { display: none !important; } }

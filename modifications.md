@@ -298,3 +298,28 @@ La liste des routes bloquées depuis la DMZ est une proposition prudente : la DR
 d'en ouvrir certaines. Le backend devra être joignable depuis l'hôte de la DMZ (port 8110, par pare-feu) et
 démarré avec `CONGES_PROXY_HOPS=2` pour connaître la vraie adresse des clients.
 **Non vérifié** : comme pour l'étape 6, aucune image n'a pu être construite (Docker absent de ce poste).
+
+## Complément — Numéro de version et journal des versions (version 0.1.0)
+
+**Ce qui a changé**
+- L'application porte maintenant un **numéro de version**, **0.1.0**, affiché en haut de l'écran et sur la page de connexion.
+  Un clic ouvre le **Journal des versions** : pour chaque version, la date et la liste des nouveautés, en langage métier.
+- Convention (la même que l'application delib) : tant que l'application n'est pas en production, la version est de la forme
+  **0.x.y** — **x** augmente quand on ajoute un module ou une fonctionnalité, **y** quand on corrige ou améliore sans nouveau module ;
+  **1.0.0** sera la version de production.
+- **À chaque nouvelle version, la documentation est mise à jour** : le journal des versions (`CHANGELOG.md` et l'écran), le **manifeste
+  applicatif** (`MANIFEST.md`, qui décrit toutes les fonctions et règles de l'application), cette note d'explication pour le métier et,
+  si besoin, le `README.md`. Un test automatique vérifie que ces documents restent cohérents entre eux, pour qu'aucune version
+  ne soit livrée sans documentation. La procédure est écrite dans `CLAUDE.md`.
+- Le manifeste (`MANIFEST.md`) est la **référence fonctionnelle** de l'application : rôles et droits, fiche agent, calcul des droits,
+  circuit des demandes, heures, tableaux de bord, planning, administration, API, sécurité, questions ouvertes et backlog.
+
+**Pourquoi**
+Pour que la DRH et la DSI sachent à tout moment quelle version est en service, ce qu'elle apporte, et que la documentation ne prenne
+pas de retard sur l'application.
+
+**Impact pour les utilisateurs**
+Un numéro de version discret s'affiche ; rien d'autre ne change.
+
+**Vérifications**
+33 tests automatiques passent (dont 6 nouveaux sur le versionnage et son affichage).

@@ -14,6 +14,7 @@ from flask import Blueprint, jsonify, request
 
 import apm
 import config
+import version
 from api_keys import api_key_required
 from db import get_db, row_to_dict
 from http_utils import error, page_args, paged
@@ -65,11 +66,25 @@ def status():
     body = {
         "status": "ok" if db_state == "ok" else "degraded",
         "service": "suivi-conges",
+        "version": version.VERSION,
         "database": {"state": db_state, "latency_ms": round((time.monotonic() - started) * 1000)},
         "apm": "configured" if apm.configured() else "not_configured",
         "auth_mode": config.AUTH_MODE,
     }
     return jsonify(body), 200 if db_state == "ok" else 503
+
+
+@bp.route("/api/version", methods=["GET"])
+def app_version():
+    """Version courante (publique : utilisée par l'écran de connexion)."""
+    current = version.current()
+    return jsonify({"version": version.VERSION, "date": current["date"], "titre": current["titre"]})
+
+
+@bp.route("/api/changelog", methods=["GET"])
+def app_changelog():
+    """Journal des versions (« Nouveautés »)."""
+    return jsonify({"version": version.VERSION, "versions": version.VERSIONS})
 
 
 # --------------------------------------------------------------------------- #
