@@ -20,3 +20,12 @@ services:
       - BACKEND_URL=${BACKEND_URL:?Définir BACKEND_URL (adresse interne du backend, port 8110)}
     ports:
       - "${DMZ_FRONT_PORT:-8112}:80"
+
+# Réseau de l'application : sous-réseau FIXE, pour ne pas dépendre des plages automatiques de Docker (qui peuvent être
+# épuisées sur un serveur très utilisé : « all predefined address pools have been fully subnetted »). Il ne doit chevaucher
+# aucun réseau existant (docker network ls) ni route du serveur : changer CONGES_DMZ_SUBNET dans .env si besoin.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${CONGES_DMZ_SUBNET:-10.77.112.0/24}

@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 VERSIONS = [
+    {
+        "version": "0.2.2",
+        "date": "2026-11-10",
+        "type": "patch",
+        "titre": "Déploiement Docker : sous-réseau fixe configurable",
+        "items": [
+            "Le déploiement Docker déclare un sous-réseau fixe et configurable (variables CONGES_SUBNET et CONGES_DMZ_SUBNET) : il ne dépend plus des plages d'adresses automatiques du serveur, qui peuvent être épuisées sur un serveur Docker très utilisé.",
+        ],
+    },
     {
         "version": "0.2.1",
         "date": "2026-11-10",

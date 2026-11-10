@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.2.2 — 2026-11-10 — Déploiement Docker : sous-réseau fixe configurable
+
+- Le déploiement Docker déclare un sous-réseau fixe et configurable (variables CONGES_SUBNET et CONGES_DMZ_SUBNET) : il ne dépend plus des plages d'adresses automatiques du serveur, qui peuvent être épuisées sur un serveur Docker très utilisé.
+
 ## 0.2.1 — 2026-11-10 — E-mails : activation réglable dans l'application, tests toujours possibles, écran Messages en liste
 
 - L'envoi automatique des e-mails s'active et se désactive dans Paramétrage > E-mails (case à cocher), et non plus dans le fichier de configuration ; il est désactivé par défaut.

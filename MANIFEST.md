@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.2.1 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.2.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -555,6 +555,7 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 - **DEP-02** — Le backend n'est publié que sur la machine locale (`BACK_BIND=127.0.0.1`) tant qu'aucun frontend distant ne doit le joindre ; il faudra l'ouvrir à l'adresse du frontend DMZ par pare-feu.
 - **DEP-03** — Frontend interne : en-têtes de sécurité, politique de contenu stricte, limitation des connexions (10/min) ; **frontend DMZ** : 5 connexions/min, routes `/api/v1`, `/api-docs`, `/api/status`, `/api/admin/act-as` **invisibles** (404).
 - **DEP-04** — Le HTTPS est assuré par le reverse-proxy de la Ville ; `CONGES_PROXY_HOPS` (1 avec nginx seul, 2 avec le proxy de la Ville) conditionne l'adresse IP vue par l'application.
+- **DEP-08** — **Réseau Docker** : sous-réseau **fixe** par déploiement (`CONGES_SUBNET`, `10.77.110.0/24` par défaut ; `CONGES_DMZ_SUBNET`, `10.77.112.0/24` pour le frontend DMZ), pour ne pas dépendre des plages automatiques de Docker, épuisées sur les serveurs très utilisés (« all predefined address pools have been fully subnetted ») ; il ne doit chevaucher aucun réseau ni route existants.
 - **DEP-05** — Un seul processus serveur : relances automatiques et limitation de débit sont en mémoire de processus.
 - **DEP-06** — **Non vérifié** : les images n'ont pas encore été construites ni lancées sur un serveur Docker.
 - **DEP-07** — Les sauvegardes de la base relèvent de la DSI ; le volume des pièces jointes est à sauvegarder avec.
@@ -659,6 +660,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.2.2** | 2026-11-10 | Déploiement Docker : sous-réseau fixe configurable. |
 | **0.2.1** | 2026-11-10 | E-mails : activation réglable dans l'application, tests toujours possibles, écran Messages en liste. |
 | **0.2.0** | 2026-11-10 | Paramétrage général, journaux, gabarits d'e-mails et matricule : menu Paramétrage à sous-sections (utilisateurs et clés API déplacés), journal des connexions, journal des e-mails, gabarits des e-mails automatiques et mise en page commune (expéditeur, en-tête, signature, pied de page), matricule, mot de passe masqué pour les comptes AD, connexion Sedit RH préparée. |
 | **0.1.0** | 2026-11-10 | Première version versionnée : application du prototype DRH mise en conformité avec le guide de la Ville (sessions signées, PostgreSQL, AD et mail par l'APM, API `/api/v1`, clés API, `/api/status`, Swagger, « se connecter en tant que », Docker, frontend DMZ, organisation `backend/` / `frontend/`), manifeste et journal des versions. |

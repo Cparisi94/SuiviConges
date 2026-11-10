@@ -385,3 +385,17 @@ Aucun pour les agents. Les administrateurs retrouvent l'envoi des e-mails désac
 **Vérifications**
 43 tests automatiques passent (activation par l'administrateur, test envoyé alors que l'envoi est désactivé, aperçu sans en-tête ni pied de page, en-tête refusé). Les écrans (liste des messages, changement de message, case d'activation) ont été essayés dans un navigateur sur une instance de test jetable.
 **Non vérifié** : envoi réel d'un e-mail par l'API centrale.
+
+## Version 0.2.2 — Déploiement Docker : sous-réseau fixe configurable
+
+**Ce qui a changé**
+- Le déploiement Docker déclare maintenant un **sous-réseau fixe** pour l'application (`10.77.110.0/24` par défaut, `10.77.112.0/24` pour le frontend DMZ), modifiable dans le `.env` (`CONGES_SUBNET`, `CONGES_DMZ_SUBNET`).
+
+**Pourquoi**
+Sur le serveur `docker-apps`, le démarrage échouait avec « all predefined address pools have been fully subnetted » : les plages d'adresses automatiques de Docker étaient toutes utilisées par les autres applications, et Docker ne pouvait plus créer de réseau pour celle-ci.
+
+**Impact pour les utilisateurs**
+Aucun. Si la plage choisie chevauche un réseau existant, Docker le signale au démarrage : il suffit alors de changer la valeur dans le `.env`.
+
+**Vérifications**
+La syntaxe des deux fichiers `docker-compose` a été contrôlée et les tests passent. **Non vérifié** : le démarrage sur le serveur (Docker n'est pas disponible sur le poste de développement).

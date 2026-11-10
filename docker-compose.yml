@@ -37,3 +37,12 @@ services:
 
 volumes:
   conges_data:
+
+# Réseau de l'application : sous-réseau FIXE, pour ne pas dépendre des plages automatiques de Docker (qui peuvent être
+# épuisées sur un serveur très utilisé : « all predefined address pools have been fully subnetted »). Il ne doit chevaucher
+# aucun réseau existant (docker network ls) ni route du serveur : changer CONGES_SUBNET dans .env si besoin.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${CONGES_SUBNET:-10.77.110.0/24}
