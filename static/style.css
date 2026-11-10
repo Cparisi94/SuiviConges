@@ -1409,3 +1409,20 @@ table.data.requests-table th { white-space: normal; line-height: 1.2; vertical-a
   .soldes-panel .solde-block { padding: 3px 5px; }
   .legend { margin-top: 3px; }
 }
+
+/* « Se connecter en tant que » */
+.actas-banner {
+  position: sticky; top: 0; z-index: 60; background: #b8431f; color: #fff;
+  padding: 6px 16px; text-align: center; font-size: 13px;
+}
+.actas-banner .btn { margin-left: 10px; }
+.actas-list { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; }
+.actas-list li { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+.actas-list li:hover:not(.disabled) { background: #fdf0ea; }
+.actas-list li.disabled { cursor: not-allowed; opacity: .55; }
+@media print { .actas-banner, #btn-act-as { display: none !important; } }
+
+/* Écran Clés API : périmètres en liste de cases à cocher */
+.ak-scopes { margin: 10px 0; }
+.ak-scopes label.inline { margin: 4px 0; font-size: 13px; color: inherit; }
+.ak-scopes label.inline input { width: auto; margin: 0; }

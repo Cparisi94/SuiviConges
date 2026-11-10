@@ -21,7 +21,7 @@ import app as application  # noqa: E402
 
 if __name__ == "__main__":
     application.bootstrap()
-    host = os.environ.get("CONGES_HOST", "0.0.0.0")
-    port = int(os.environ.get("CONGES_PORT", "5000"))
+    host = os.environ.get("CONGES_HOST") or "0.0.0.0"
+    port = int(os.environ.get("CONGES_PORT", "8110"))
     print("=== Demarrage Outil conges (partage) sur %s:%s ===" % (host, port))
     application.app.run(host=host, port=port, debug=False, use_reloader=False)

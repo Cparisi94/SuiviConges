@@ -8,21 +8,32 @@ et tableau de bord global.
 
 ## Démarrage
 
-```bat
-start.bat
+**Production / recette (Docker)** :
+
+```bash
+cp .env.example .env        # renseigner CONGES_SECRET_KEY, POSTGRES_*, APM_API_KEY…
+docker-compose up -d --build
 ```
 
-Puis ouvrez **http://127.0.0.1:5000** dans votre navigateur.
+L'application est servie par le frontend (nginx) sur `FRONT_PORT` (8111 par défaut ; futur frontend DMZ : 8112) ; le backend
+(gunicorn, port 8110) n'est publié que sur la machine locale tant qu'aucun frontend DMZ ne doit le joindre. Le HTTPS est assuré par le reverse-proxy de la Ville devant le frontend.
+Vérification : `GET /api/status`. Documentation de l'API : `/api-docs`.
 
-- **Identifiant** : `admin`
-- **Mot de passe** : `admin`
+**Poste de développement** (Python 3.12+) :
 
-> ⚠️ Changez immédiatement ce mot de passe (onglet **Utilisateurs**).
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt     # Linux : .venv/bin/pip
+.venv/Scripts/python app.py                       # http://127.0.0.1:8110
+```
 
-Au premier démarrage, les paramètres (codes d'absence, pénibilités,
-matrice des droits, jours fériés, vacances scolaires zone C, couleurs…) sont
-**importés automatiquement** depuis le classeur Excel, copié dans `source/`.
-La base `suivi-conges.db` (SQLite) est créée automatiquement.
+Les données sont dans le PostgreSQL de la Ville, schéma `conges` (accès dans `.env`, voir
+`.env.example`). Les migrations de `migrations/` sont appliquées au démarrage. Au tout premier
+démarrage sur un schéma vide, un compte `admin` est créé avec le mot de passe de
+`CONGES_INITIAL_ADMIN_PASSWORD`, ou un mot de passe aléatoire affiché une seule fois dans la
+console. `CONGES_AUTH_MODE=ad` active la connexion par l'Active Directory (via l'API centrale APM).
+
+Détail des évolutions techniques : [modifications.md](modifications.md).
 
 ## Rôles et hiérarchie
 
@@ -101,24 +112,32 @@ Chaque fiche agent contient :
 
 ## Tests
 
-```bat
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" tests.py
+```bash
+.venv/Scripts/python -m unittest discover -s tests
 ```
 
-Compare les 546 lignes × 6 colonnes de la matrice de droits (3 276 valeurs)
-aux valeurs en cache du classeur Excel d'origine.
+Les tests utilisent un schéma PostgreSQL temporaire (créé puis supprimé) : les données réelles ne
+sont jamais touchées. Ils couvrent les régressions métier, l'authentification (locale / AD simulée),
+les mails (APM simulée), les clés API et le « se connecter en tant que ».
 
 ## Architecture
 
 ```
-app.py        Application Flask (API JSON + service du frontend)
-rules.py      Moteur de calcul — réimplémente les formules Excel (FLOOR, ROUND,
-              ROUNDDOWN, VLOOKUP, COUNTIF, prorata, générations, déductions…)
-db.py         Schéma SQLite (users, agents, cells, settings)
-seed.py       Import des paramètres depuis le classeur Excel (onglet Paramétrage)
-tests.py      Validation du moteur contre les valeurs Excel
-static/       Frontend SPA (HTML/CSS/JS sans dépendance)
-source/       Copie du classeur Excel d'origine
+app.py              Application Flask (API interne JSON + service du frontend en développement)
+wsgi.py             Point d'entrée gunicorn (migrations, compte initial, tâches de fond)
+config.py           Configuration : variables d'environnement / .env
+pg_db.py, db.py     Accès PostgreSQL (pool, schéma dédié, migrations) et helpers
+migrations/         Migrations SQL numérotées (0001_…)
+rules.py            Moteur de calcul — formules du classeur Excel (droits, prorata, déductions…)
+apm.py              Client unique de l'API centrale APM (AD, mail)
+mailer.py           Notifications aux valideurs (via l'APM)  ·  reminders.py : relances
+api_v1.py           API publique /api/v1 (lecture seule) + /api/status
+api_keys.py         Clés API (périmètres, IP, expiration, journal) + administration
+act_as.py           « Se connecter en tant que » (administrateurs)
+openapi_spec.py     Description OpenAPI + Swagger UI (/api-docs)
+static/             Frontend (HTML/CSS/JS sans dépendance) — servi par nginx en Docker
+docker/             Dockerfiles backend et frontend, configuration nginx
+docker-compose.yml  Déploiement (backend + frontend)
 ```
 
 ## Écarts documentés par rapport au classeur
@@ -143,4 +162,6 @@ source/       Copie du classeur Excel d'origine
 
 ## Sauvegarde
 
-Copiez le fichier `suivi-conges.db` (et éventuellement `source/`).
+Les données sont dans PostgreSQL (sauvegarde assurée par la DSI, schéma `conges`). Les pièces
+jointes des demandes sont dans le volume Docker `conges_data` (`/data/uploads`) : à sauvegarder
+avec le reste.

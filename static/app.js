@@ -178,7 +178,6 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 /* ---------------------------- utilitaires ---------------------------- */
 function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-  if (state.user) headers["X-User-Id"] = state.user.id;
   return fetch(path, { ...opts, headers }).then(async (r) => {
     let data = null;
     try { data = await r.json(); } catch (_) { /* vide */ }
@@ -310,6 +309,7 @@ function saveSession(user) {
 }
 function logoutLocal() {
   state.user = null;
+  renderActAsBanner();
   localStorage.removeItem("suivi_user");
   localStorage.removeItem(TABS_KEY);
   state.tabs = [];
@@ -363,6 +363,8 @@ function showApp() {
   if (isAgent) state.planningFilter = "all";
   $("#nav-settings").classList.toggle("hidden", !isAdmin);
   $("#nav-users").classList.toggle("hidden", !canManageUsers());
+  $("#nav-apikeys").classList.toggle("hidden", !isAdmin || !!state.user.impersonation);
+  setupActAs();
   route();
   refreshRequestBadge();
 }
@@ -592,6 +594,7 @@ async function route() {
   if (hash.startsWith("#/planning")) return viewPlanning();
   if (hash.startsWith("#/settings")) return viewSettings();
   if (hash.startsWith("#/users")) return viewUsers();
+  if (hash.startsWith("#/apikeys")) return viewApiKeys();
   return viewDashboard();
 }
 
@@ -1482,7 +1485,6 @@ async function viewRequests() {
 async function downloadAttachment(id, name) {
   try {
     const headers = {};
-    if (state.user) headers["X-User-Id"] = String(state.user.id);
     const res = await fetch(`/api/requests/${id}/attachment`, { headers });
     if (!res.ok) {
       let data = null;
@@ -2662,7 +2664,6 @@ async function sendLeaveRequest() {
   const file = $("#request-file").files[0];
   if (file) form.append("attachment", file);
   const headers = {};
-  if (state.user) headers["X-User-Id"] = String(state.user.id);
   try {
     const res = await fetch("/api/requests", { method: "POST", body: form, headers });
     let data = null;
@@ -2723,7 +2724,6 @@ function openCassageModal() {
 
 async function sendSpecialRequest(payload, modal, errorEl) {
   const headers = { "Content-Type": "application/json" };
-  if (state.user) headers["X-User-Id"] = String(state.user.id);
   try {
     const res = await fetch("/api/requests", {
       method: "POST",
@@ -3746,6 +3746,160 @@ function viewSettings() {
 }
 
 /* ==========================================================================
+   « Se connecter en tant que » (administrateurs) : recherche prédictive AD
+   ========================================================================== */
+function renderActAsBanner() {
+  let bar = $("#actas-banner");
+  const imp = state.user && state.user.impersonation;
+  if (!imp) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "actas-banner";
+    bar.className = "actas-banner";
+    document.body.prepend(bar);
+  }
+  bar.innerHTML = `Vous agissez en tant que <b>${esc(state.user.nom || state.user.login)}</b>
+    (connecté comme ${esc(imp.by.nom || imp.by.login)}) <button class="btn btn-small" id="actas-back">Revenir à mon compte</button>`;
+  $("#actas-back").addEventListener("click", async () => {
+    try { await api("/api/admin/act-as", { method: "DELETE" }); location.hash = "#/dashboard"; location.reload(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+
+function setupActAs() {
+  const btn = $("#btn-act-as");
+  btn.classList.toggle("hidden", !(state.user.admin && !state.user.impersonation));
+  renderActAsBanner();
+  if (btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+  const modal = $("#actas-modal"), input = $("#actas-q"), list = $("#actas-list"), msg = $("#actas-msg");
+  let timer = null, seq = 0;
+  const close = () => modal.classList.add("hidden");
+  btn.addEventListener("click", () => {
+    modal.classList.remove("hidden");
+    input.value = ""; list.innerHTML = ""; msg.textContent = "";
+    input.focus();
+  });
+  $("#actas-cancel").addEventListener("click", close);
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { list.innerHTML = ""; msg.textContent = ""; return; }
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      msg.textContent = "Recherche…";
+      try {
+        const r = await api("/api/admin/act-as/search?q=" + encodeURIComponent(q));
+        if (mine !== seq) return;  // une saisie plus récente a pris le relais
+        msg.textContent = r.ad_error ? "Annuaire AD indisponible : seuls les comptes de l'application sont proposés."
+          : (r.items.length ? "" : "Aucun résultat.");
+        list.innerHTML = r.items.map((it, i) => `
+          <li class="${it.selectable ? "" : "disabled"}" data-i="${i}">
+            <b>${esc(it.displayName)}</b> <span class="muted">${esc(it.username)}${it.email ? " · " + esc(it.email) : ""}</span>
+            ${it.account ? `<span class="muted"> — compte ${esc(it.account.login)}</span>` : ""}
+            ${it.selectable ? "" : `<em class="muted"> (${esc(it.reason)})</em>`}
+          </li>`).join("");
+        list.querySelectorAll("li:not(.disabled)").forEach((li) => li.addEventListener("click", async () => {
+          const it = r.items[Number(li.dataset.i)];
+          try {
+            await api("/api/admin/act-as", { method: "POST", body: JSON.stringify({ user_id: it.account.id }) });
+            location.hash = "#/dashboard"; location.reload();
+          } catch (e) { toast(e.message, true); }
+        }));
+      } catch (e) { msg.textContent = e.message; }
+    }, 250);
+  });
+}
+
+/* ==========================================================================
+   Clés API (admin) — accès des applications tierces à /api/v1
+   ========================================================================== */
+async function viewApiKeys() {
+  if (!state.user.admin) { location.hash = "#/dashboard"; return; }
+  const c = $("#content");
+  c.innerHTML = "<h1>Clés API</h1><p>Chargement…</p>";
+  const data = await api("/api/v1/admin/api-keys");
+  const scopeBoxes = Object.entries(data.scopes).map(([k, label]) =>
+    `<label class="inline"><input type="checkbox" class="ak-scope" value="${esc(k)}"> <code>${esc(k)}</code> — ${esc(label)}</label>`).join("");
+  const rows = data.items.map((k) => `
+    <tr data-id="${k.id}">
+      <td><b>${esc(k.name)}</b><br><span class="muted"><code>${esc(k.key_prefix)}…</code></span></td>
+      <td>${esc(k.scopes.split(",").join(", "))}</td>
+      <td>${esc(k.allowed_ips || "toutes")}</td>
+      <td>${esc(k.expires_at || "—")}</td>
+      <td>${esc(k.last_used_at || "jamais")}</td>
+      <td>${k.actif ? "Active" : "<b>Désactivée</b>"}</td>
+      <td>
+        <button class="btn btn-small" data-act="toggle">${k.actif ? "Désactiver" : "Réactiver"}</button>
+        <button class="btn btn-small" data-act="logs">Journal</button>
+        <button class="btn btn-small btn-danger" data-act="del">Supprimer</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="7" class="muted">Aucune clé.</td></tr>`;
+  c.innerHTML = `
+    <h1>Clés API</h1>
+    <p class="muted">Permettent à d'autres applications de la Ville de <b>lire</b> les données (documentation :
+      <a href="/api-docs/" target="_blank" rel="noopener">/api-docs</a>). Une clé n'est affichée qu'une seule fois, à sa création.</p>
+    <div class="card" style="margin-bottom:16px">
+      <h3>Nouvelle clé</h3>
+      <div class="params-grid">
+        <label>Application <input id="ak-name" placeholder="ex. Portail RH"></label>
+        <label>Expire le <input id="ak-exp" type="date"></label>
+        <label>IP / réseaux autorisés <input id="ak-ips" placeholder="ex. 10.103.0.0/16 (vide = toutes)"></label>
+      </div>
+      <div class="ak-scopes">${scopeBoxes}</div>
+      <button class="btn btn-primary" id="ak-create">Créer la clé</button>
+      <div id="ak-new" class="hidden card" style="margin-top:12px"></div>
+    </div>
+    <table class="data"><thead><tr>
+      <th>Application</th><th>Périmètres</th><th>IP autorisées</th><th>Expiration</th><th>Dernier appel</th><th>État</th><th>Actions</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <div id="ak-logs"></div>`;
+
+  $("#ak-create").addEventListener("click", async () => {
+    try {
+      const created = await api("/api/v1/admin/api-keys", {
+        method: "POST",
+        body: JSON.stringify({
+          name: $("#ak-name").value.trim(),
+          expires_at: $("#ak-exp").value,
+          allowed_ips: $("#ak-ips").value.trim(),
+          scopes: $$(".ak-scope").filter((b) => b.checked).map((b) => b.value),
+        }),
+      });
+      const box = $("#ak-new");
+      box.classList.remove("hidden");
+      box.innerHTML = `<p><b>Clé créée pour « ${esc(created.name)} ».</b> Copiez-la maintenant : elle ne sera plus affichée.</p>
+        <p><code id="ak-key" style="user-select:all;word-break:break-all">${esc(created.key)}</code></p>
+        <button class="btn btn-small" id="ak-copy">Copier</button>
+        <button class="btn btn-small" id="ak-done">J'ai noté la clé</button>`;
+      $("#ak-copy").addEventListener("click", () => navigator.clipboard.writeText(created.key).then(() => toast("Clé copiée")));
+      $("#ak-done").addEventListener("click", viewApiKeys);
+    } catch (e) { toast(e.message, true); }
+  });
+
+  c.querySelectorAll("tr[data-id]").forEach((tr) => {
+    const id = tr.dataset.id;
+    const key = data.items.find((k) => String(k.id) === id);
+    tr.querySelector('[data-act="toggle"]').addEventListener("click", async () => {
+      await api(`/api/v1/admin/api-keys/${id}`, { method: "PUT", body: JSON.stringify({ actif: !key.actif }) });
+      viewApiKeys();
+    });
+    tr.querySelector('[data-act="del"]').addEventListener("click", async () => {
+      if (!confirm(`Supprimer définitivement la clé « ${key.name} » ? L'application concernée perdra son accès.`)) return;
+      await api(`/api/v1/admin/api-keys/${id}`, { method: "DELETE" });
+      viewApiKeys();
+    });
+    tr.querySelector('[data-act="logs"]').addEventListener("click", async () => {
+      const logs = await api(`/api/v1/admin/api-keys/${id}/logs?limit=50`);
+      $("#ak-logs").innerHTML = `<h3>Journal — ${esc(key.name)} (${logs.total} appel(s), 50 derniers)</h3>
+        <table class="data"><thead><tr><th>Date</th><th>Appel</th><th>Statut</th><th>IP</th></tr></thead><tbody>${
+          logs.items.map((l) => `<tr><td>${esc(l.at)}</td><td>${esc(l.method)} ${esc(l.path)}</td><td>${l.status}</td><td>${esc(l.ip)}</td></tr>`).join("")
+          || `<tr><td colspan="4" class="muted">Aucun appel.</td></tr>`}</tbody></table>`;
+    });
+  });
+}
+
+/* ==========================================================================
    Utilisateurs (admin)
    ========================================================================== */
 async function viewUsers() {
@@ -3798,12 +3952,13 @@ async function viewUsers() {
     const self = u.id === state.user.id;
     const lockRole = !isAdmin || self;
     const group = role !== lastRole
-      ? `<tr class="role-group" data-role="${role}"><td colspan="8">${esc(ROLE_LABELS[role] || role)}</td></tr>`
+      ? `<tr class="role-group" data-role="${role}"><td colspan="9">${esc(ROLE_LABELS[role] || role)}</td></tr>`
       : "";
     lastRole = role;
     return group + `
       <tr data-id="${u.id}" data-role="${role}" data-login="${esc(u.login)}" data-nom="${esc(u.nom)}" data-email="${esc(u.email || "")}" data-actif="${u.actif ? 1 : 0}">
         <td>${isAdmin ? `<input data-f="login" value="${esc(u.login)}">` : esc(u.login)}</td>
+        <td><input data-f="ad_login" value="${esc(u.ad_login || "")}" placeholder="(identique)"></td>
         <td><input data-f="nom" value="${esc(u.nom)}"></td>
         <td><input data-f="email" type="email" value="${esc(u.email || "")}"></td>
         <td><input data-f="password" type="password" placeholder="(inchangé)"></td>
@@ -3829,6 +3984,7 @@ async function viewUsers() {
       <h3>Nouvel utilisateur</h3>
       <div class="params-grid new-user-grid">
         <label>Identifiant <input id="nu-login"></label>
+        <label>Identifiant AD <input id="nu-ad-login" placeholder="(identique)"></label>
         <label>Nom <input id="nu-nom"></label>
         <label>E-mail <input id="nu-email" type="email"></label>
         <label>Mot de passe <input id="nu-pass" type="password"></label>
@@ -3858,11 +4014,11 @@ async function viewUsers() {
     </div>
     <table class="data users-table">
       <colgroup>
-        <col style="width:9%"><col style="width:14%"><col style="width:15%"><col style="width:10%">
-        <col style="width:13%"><col style="width:20%"><col style="width:5%"><col style="width:14%">
+        <col style="width:8%"><col style="width:9%"><col style="width:12%"><col style="width:13%"><col style="width:9%">
+        <col style="width:12%"><col style="width:18%"><col style="width:5%"><col style="width:14%">
       </colgroup>
       <thead><tr>
-        <th>Identifiant</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
+        <th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
         <th>Rôle</th><th>Responsable</th><th>Actif</th><th>Actions</th>
       </tr></thead>
       <tbody id="users-table-body">
@@ -3940,6 +4096,7 @@ async function viewUsers() {
           body: JSON.stringify({
             login: $("#nu-login").value.trim(),
             nom: $("#nu-nom").value.trim(),
+            ad_login: $("#nu-ad-login").value.trim(),
             email: $("#nu-email").value.trim(),
             password: $("#nu-pass").value,
             role,
@@ -3968,6 +4125,7 @@ async function viewUsers() {
       const loginEl = tr.querySelector('[data-f="login"]');
       const payload = {
         nom: tr.querySelector('[data-f="nom"]').value,
+        ad_login: tr.querySelector('[data-f="ad_login"]').value.trim(),
         email: tr.querySelector('[data-f="email"]').value,
         role: roleEl.value,
         parent_id: parentEl.value || null,

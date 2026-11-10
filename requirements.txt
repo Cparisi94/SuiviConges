@@ -1,0 +1,5 @@
+flask>=3
+flask-swagger-ui>=4.11
+psycopg[binary]>=3.2
+psycopg_pool>=3.2
+requests>=2.32

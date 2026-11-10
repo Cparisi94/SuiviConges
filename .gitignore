@@ -30,3 +30,9 @@ uploads/
 # Classeur source
 source/
 *.xlsx
+
+# Configuration locale
+.env
+
+# Environnement virtuel
+.venv/

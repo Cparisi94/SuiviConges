@@ -36,10 +36,12 @@
       <a href="#/planning" data-nav="planning">Planning</a>
       <a href="#/settings" data-nav="settings" id="nav-settings">Paramétrage</a>
       <a href="#/users" data-nav="users" id="nav-users">Utilisateurs</a>
+      <a href="#/apikeys" data-nav="apikeys" id="nav-apikeys">Clés API</a>
     </nav>
     <div class="topbar-right">
       <select id="year-select" class="year-select" title="Année de travail"></select>
       <span id="user-badge"></span>
+      <button id="btn-act-as" class="btn btn-ghost hidden" title="Se connecter en tant que… : agir avec les droits d'un agent">En tant que…</button>
       <button id="btn-password" class="btn btn-ghost" title="Changer mon mot de passe">Mot de passe</button>
       <button id="btn-logout" class="btn btn-ghost">Déconnexion</button>
     </div>
@@ -242,6 +244,18 @@
       <button type="button" class="btn" id="owner-cancel">Annuler</button>
       <button type="button" class="btn btn-primary" id="owner-submit">Enregistrer</button>
     </div>
+  </div>
+</div>
+
+<!-- Modale « Se connecter en tant que » (recherche prédictive dans l'AD) -->
+<div id="actas-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Se connecter en tant que…</h3>
+    <p class="muted">Recherchez un agent (nom, prénom ou identifiant). Vous agirez avec ses droits, sans son mot de passe ; l'opération est journalisée à votre nom.</p>
+    <input type="text" id="actas-q" placeholder="Nom, prénom ou identifiant…" autocomplete="off">
+    <div id="actas-msg" class="muted" style="margin:6px 0"></div>
+    <ul id="actas-list" class="actas-list"></ul>
+    <div class="modal-actions"><button type="button" class="btn" id="actas-cancel">Fermer</button></div>
   </div>
 </div>
 

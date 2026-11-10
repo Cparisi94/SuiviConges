@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """Notifications e-mail pour les demandes de congés.
 
-La configuration SMTP est lue dans mail.json (non exposé par le serveur web).
-Si le fichier est absent, désactivé ou incomplet, aucun e-mail n'est envoyé.
+Les mails partent par l'API centrale de la Ville (APM, `POST /api/v1/mail/send`) ; le pied de
+page est transmis en paramètres. Si l'envoi est désactivé (CONGES_MAIL_ENABLED) ou si l'APM
+n'est pas configurée, aucun e-mail n'est envoyé.
 """
 import datetime as dt
-import json
+import html
 import os
-import smtplib
-import ssl
+import re
 import threading
-from email.message import EmailMessage
+
+import apm
+import config
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "mail.json")
 LOG_PATH = os.path.join(BASE_DIR, "mail.log")
 
 MOIS = [
@@ -33,16 +34,10 @@ def _log(message):
 
 
 def load_config():
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except (OSError, ValueError):
+    """Configuration des mails (via l'APM), ou None si l'envoi est désactivé / incomplet."""
+    if not config.MAIL_ENABLED or not apm.configured():
         return None
-    if not cfg.get("enabled"):
-        return None
-    if not cfg.get("host") or not cfg.get("from"):
-        return None
-    return cfg
+    return {"base_url": config.BASE_URL}
 
 
 def _format_days(days):
@@ -65,42 +60,30 @@ def cell_label(key, year):
     )
 
 
+def _to_html(body):
+    """Texte brut -> HTML simple (le gabarit institutionnel est ajouté par l'APM)."""
+    lines = []
+    for line in body.split("\n"):
+        text = html.escape(line)
+        lines.append(re.sub(r"(https?://[^\s<]+)", r'<a href="\1">\1</a>', text))
+    return "<p>" + "<br>\n".join(lines) + "</p>"
+
+
 def _deliver(cfg, to, subject, body):
-    msg = EmailMessage()
-    msg["From"] = cfg["from"]
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
-
-    host = cfg["host"]
-    ssl_enabled = bool(cfg.get("ssl"))
-    port = int(cfg.get("port") or (465 if ssl_enabled else 25))
-    timeout = int(cfg.get("timeout") or 15)
-
-    if ssl_enabled:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(host, port, context=context, timeout=timeout) as smtp:
-            if cfg.get("username"):
-                smtp.login(cfg["username"], cfg.get("password") or "")
-            smtp.send_message(msg)
-        return
-
-    with smtplib.SMTP(host, port, timeout=timeout) as smtp:
-        smtp.ehlo()
-        if cfg.get("starttls"):
-            context = ssl.create_default_context()
-            smtp.starttls(context=context)
-            smtp.ehlo()
-        if cfg.get("username"):
-            smtp.login(cfg["username"], cfg.get("password") or "")
-        smtp.send_message(msg)
+    apm.send_mail(
+        to, subject, _to_html(body),
+        footer={
+            "line1": config.MAIL_FOOTER1, "line2": config.MAIL_FOOTER2,
+            "line3": config.MAIL_FOOTER3, "color": config.MAIL_FOOTER_COLOR,
+        },
+    )
 
 
 def send_mail(to, subject, body):
     """Envoi synchrone. Retourne (ok, message_erreur)."""
     cfg = load_config()
     if not cfg:
-        return False, "Configuration mail absente ou désactivée (mail.json)"
+        return False, "Configuration mail absente ou désactivée (CONGES_MAIL_ENABLED / APM)"
     to = (to or "").strip()
     if not to:
         return False, "Aucune adresse e-mail de destinataire"

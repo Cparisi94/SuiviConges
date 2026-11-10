@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Test manuel de la configuration mail.json.
+"""Test manuel de l'envoi de mail via l'APM (CONGES_MAIL_ENABLED, APM_API_URL, APM_API_KEY).
 
 Usage :
     python tester_mail.py destinataire@example.fr
@@ -15,13 +15,13 @@ def main():
         return 1
     cfg = load_config()
     if not cfg:
-        print("Envoi désactivé ou configuration incomplète dans mail.json.")
-        print("Vérifiez 'enabled', 'host' et 'from'.")
+        print("Envoi désactivé ou APM non configurée.")
+        print("Vérifiez CONGES_MAIL_ENABLED, APM_API_URL et APM_API_KEY dans .env.")
         return 1
     ok, error = send_mail(
         sys.argv[1],
         "[Suivi congés] Test d'envoi",
-        "Ceci est un test de la configuration SMTP de l'outil de suivi des congés.",
+        "Ceci est un test d'envoi par l'APM de l'outil de suivi des congés.",
     )
     if ok:
         print("E-mail de test envoyé à", sys.argv[1])

@@ -10,13 +10,15 @@ import re
 import unicodedata
 import uuid
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
-from db import get_db, init_db, public_user, row_to_dict, set_setting
+from db import (
+    SQL_DAYS_SINCE_SUBMIT, SQL_NOW_MINUS, get_db, init_db, public_user, row_to_dict,
+    set_setting,
+)
 from mailer import notify_validator
-from backup_db import start_backup_scheduler
 from reminders import start_reminder_scheduler
 from rules import add_months
 from rules import agent_summary
@@ -25,9 +27,11 @@ from rules import ca_prev_code
 from rules import compute as rule_compute
 from rules import matrix_rows
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SECRET_FILE = os.path.join(BASE_DIR, ".secret_key")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads", "requests")
+import act_as
+import apm
+import config
+import ratelimit
+from config import BASE_DIR, SECRET_FILE, UPLOAD_DIR
 MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024
 ALLOWED_ATTACHMENT_EXT = {
     ".pdf", ".png", ".jpg", ".jpeg", ".gif",
@@ -89,12 +93,19 @@ def cells_to_list(cells: dict) -> list:
 
 
 def _secret_key():
+    if config.SECRET_KEY:
+        return config.SECRET_KEY.encode("utf-8")
     if os.path.exists(SECRET_FILE):
         with open(SECRET_FILE, "rb") as fh:
             return fh.read()
     key = os.urandom(32)
-    with open(SECRET_KEY_FILE := SECRET_FILE, "wb") as fh:
-        fh.write(key)
+    try:
+        with open(SECRET_KEY_FILE := SECRET_FILE, "wb") as fh:
+            fh.write(key)
+    except OSError as exc:
+        raise RuntimeError(
+            "Impossible d'écrire %s : définir CONGES_SECRET_KEY dans l'environnement (.env)" % SECRET_FILE
+        ) from exc
     try:
         os.chmod(SECRET_KEY_FILE, 0o600)
     except OSError:
@@ -103,6 +114,29 @@ def _secret_key():
 
 
 app.secret_key = _secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=config.COOKIE_SECURE,
+    PERMANENT_SESSION_LIFETIME=dt.timedelta(hours=config.SESSION_HOURS),
+)
+
+
+if config.PROXY_HOPS:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=config.PROXY_HOPS, x_proto=config.PROXY_HOPS)
+
+
+@app.after_request
+def _cors(resp):
+    """CORS limité aux origines listées dans CONGES_CORS_ORIGINS (aucune par défaut)."""
+    origin = (request.headers.get("Origin") or "").rstrip("/")
+    if origin and origin in config.CORS_ORIGINS:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Vary"] = "Origin"
+    return resp
 
 
 @app.after_request
@@ -124,12 +158,24 @@ def _no_cache_assets(resp):
 #  Session / authentification
 # --------------------------------------------------------------------------- #
 def current_user():
-    uid = request.headers.get("X-User-Id") or request.cookies.get("uid")
+    # L'identité provient uniquement de la session signée côté serveur :
+    # aucun en-tête ni cookie fourni par le client n'est cru sur parole.
+    uid = session.get("uid")
     if not uid:
         return None
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE id=? AND actif=1", (int(uid),)).fetchone()
+    real = None
+    if session.get("real_uid"):
+        # « Se connecter en tant que » : l'identité réelle doit rester un administrateur actif.
+        real = db.execute(
+            "SELECT * FROM users WHERE id=? AND actif=1 AND admin=1", (int(session["real_uid"]),)
+        ).fetchone()
     db.close()
+    if session.get("real_uid") and not real:
+        session.clear()
+        return None
+    request.real_user = row_to_dict(real) if real else None
     return row_to_dict(user) if user else None
 
 
@@ -470,18 +516,51 @@ def _reparent_children(db, deleted):
         db.execute("UPDATE users SET parent_id=? WHERE id=?", (new_parent, child["id"]))
 
 
+def _check_credentials(user, password):
+    """Vérifie le mot de passe selon CONGES_AUTH_MODE ; lève ApmError si l'AD est indisponible.
+
+    Mode « ad » : l'Active Directory (via l'APM) valide le mot de passe. Les comptes
+    administrateurs conservent leur mot de passe local, compte de secours si l'AD est en panne.
+    """
+    local_ok = check_password_hash(user["mot_de_passe"], password)
+    if config.AUTH_MODE != "ad":
+        return local_ok
+    if user["admin"] and local_ok:
+        return True
+    return apm.ad_authenticate((user["ad_login"] or user["login"]).strip(), password)
+
+
+def _password_managed_by_ad(user):
+    return config.AUTH_MODE == "ad" and not user["admin"]
+
+
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data = request.get_json(force=True) or {}
     login_name = (data.get("login") or "").strip()
     password = data.get("password") or ""
+    bucket = "login:" + (request.remote_addr or "?")
+    if ratelimit.blocked(bucket, config.LOGIN_MAX_FAILURES, 900):
+        return jsonify({"error": "Trop de tentatives de connexion, réessayez dans quelques minutes"}), 429
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE login=?", (login_name,)).fetchone()
     db.close()
-    if not user or not check_password_hash(user["mot_de_passe"], password):
+    if not user:
+        ratelimit.record(bucket)
+        return jsonify({"error": "Identifiant/mot de passe incorrect"}), 401
+    try:
+        valid = _check_credentials(user, password)
+    except apm.ApmError as exc:
+        app.logger.error("Authentification AD indisponible : %s", exc)
+        return jsonify({"error": "Service d'authentification indisponible, réessayez plus tard"}), 503
+    if not valid:
+        ratelimit.record(bucket)
         return jsonify({"error": "Identifiant/mot de passe incorrect"}), 401
     if not user["actif"]:
         return jsonify({"error": "Ce compte est désactivé"}), 403
+    session.clear()
+    session["uid"] = user["id"]
+    session.permanent = True
     return jsonify({"user": public_user(user)})
 
 
@@ -490,12 +569,20 @@ def login():
 def me():
     user = dict(request.user)
     user.pop("mot_de_passe", None)
+    real = getattr(request, "real_user", None)
+    if real:
+        user["impersonation"] = {"by": {"id": real["id"], "login": real["login"], "nom": real["nom"]}}
     return jsonify({"user": user})
 
 
 @app.route("/api/me/password", methods=["POST"])
 @login_required
 def me_password():
+    if getattr(request, "real_user", None):
+        return jsonify({"error": "Changement de mot de passe impossible en mode « se connecter en tant que »"}), 403
+    if _password_managed_by_ad(request.user):
+        return jsonify({"error": "Votre mot de passe est celui de votre compte Ville (Active Directory) : "
+                                 "il se change depuis votre poste, pas dans cette application"}), 400
     data = request.get_json(force=True) or {}
     current_password = data.get("current_password") or ""
     new_password = data.get("new_password") or ""
@@ -527,6 +614,8 @@ def me_password():
 
 @app.route("/api/auth/logout", methods=["POST"])
 def logout():
+    act_as.end_impersonation(_audit_user)
+    session.clear()
     return jsonify({"ok": True})
 
 
@@ -587,7 +676,7 @@ def users_list():
         return jsonify({"error": "Accès réservé aux administrateurs et valideurs"}), 403
     db = get_db()
     select = (
-        "SELECT u.id, u.login, u.nom, u.email, u.admin, u.role, u.parent_id, "
+        "SELECT u.id, u.login, u.ad_login, u.nom, u.email, u.admin, u.role, u.parent_id, "
         "u.actif, u.cree_le, p.nom AS parent_nom, p.login AS parent_login "
         "FROM users u LEFT JOIN users p ON p.id = u.parent_id "
     )
@@ -687,9 +776,9 @@ def users_create():
     if role == "administrateur":
         parent_id = None
     cur = db.execute(
-        "INSERT INTO users (login, nom, email, mot_de_passe, admin, role, parent_id, actif) "
-        "VALUES (?,?,?,?,?,?,?,1)",
-        (login_name, (data.get("nom") or login_name).strip(), email,
+        "INSERT INTO users (login, ad_login, nom, email, mot_de_passe, admin, role, parent_id, actif) "
+        "VALUES (?,?,?,?,?,?,?,?,1)",
+        (login_name, (data.get("ad_login") or "").strip(), (data.get("nom") or login_name).strip(), email,
          generate_password_hash(password), 1 if role == "administrateur" else 0,
          role, parent_id),
     )
@@ -702,7 +791,7 @@ def users_create():
                 "mot_de_passe", "", "défini")
     db.commit()
     user = db.execute(
-        "SELECT id, login, nom, email, admin, role, parent_id, actif, cree_le "
+        "SELECT id, login, ad_login, nom, email, admin, role, parent_id, actif, cree_le "
         "FROM users WHERE id=?",
         (cur.lastrowid,),
     ).fetchone()
@@ -772,9 +861,10 @@ def users_update(uid):
                 return jsonify({"error": "Cet identifiant existe déjà"}), 400
     email = (data.get("email") if "email" in data else (user["email"] or "")).strip()
     actif = 1 if data.get("actif", user["actif"]) else 0
+    ad_login = (data.get("ad_login") if "ad_login" in data else (user["ad_login"] or "")).strip()
     db.execute(
-        "UPDATE users SET login=?, nom=?, email=?, admin=?, role=?, parent_id=?, actif=? WHERE id=?",
-        (login_name, (data.get("nom") or user["nom"]).strip(), email,
+        "UPDATE users SET login=?, ad_login=?, nom=?, email=?, admin=?, role=?, parent_id=?, actif=? WHERE id=?",
+        (login_name, ad_login, (data.get("nom") or user["nom"]).strip(), email,
          admin_flag, role, parent_id, actif, uid),
     )
     password = data.get("password")
@@ -796,6 +886,8 @@ def users_update(uid):
                         "Oui" if admin_flag else "Non"))
     if email != (user["email"] or ""):
         changes.append(("e-mail", user["email"] or "", email))
+    if ad_login != (user["ad_login"] or ""):
+        changes.append(("identifiant AD", user["ad_login"] or "", ad_login))
     new_nom = (data.get("nom") or user["nom"]).strip()
     if new_nom != user["nom"]:
         changes.append(("nom", user["nom"], new_nom))
@@ -806,7 +898,7 @@ def users_update(uid):
                     field, old_value, new_value)
     db.commit()
     user = db.execute(
-        "SELECT id, login, nom, email, admin, role, parent_id, actif, cree_le "
+        "SELECT id, login, ad_login, nom, email, admin, role, parent_id, actif, cree_le "
         "FROM users WHERE id=?",
         (uid,),
     ).fetchone()
@@ -2072,6 +2164,9 @@ def _delete_hourly_absence(db, request_id):
 
 
 def _audit_request(db, request_id, action, actor_id, comment=""):
+    real = getattr(request, "real_user", None)
+    if real and actor_id != real["id"]:
+        comment = ((comment or "") + " [par %s, en tant que]" % real["login"]).strip()
     db.execute(
         "INSERT INTO leave_request_events (request_id, action, actor_id, comment) VALUES (?,?,?,?)",
         (request_id, action, actor_id, comment or ""),
@@ -2089,6 +2184,10 @@ def _audit_user(db, target_id, target_login, actor, action, field="",
                 old_value="", new_value="", comment=""):
     """Trace une modification de compte sans jamais stocker de mot de passe."""
     actor = actor or {}
+    real = getattr(request, "real_user", None)
+    if real and actor.get("id") != real["id"]:
+        comment = ((comment or "") + " [en tant que %s]" % (actor.get("login") or "?")).strip()
+        actor = real
     db.execute(
         "INSERT INTO user_audit "
         "(user_id, target_login, actor_id, actor_login, action, field, old_value, new_value, comment) "
@@ -2332,13 +2431,12 @@ def reminders_list():
     sql = (
         "SELECT r.id, r.code, r.status, r.soumis_le, r.cree_le, "
         "TRIM(a.nom || ' ' || COALESCE(a.prenom, '')) AS agent_nom, "
-        "v.login AS validator_login, v.nom AS validator_nom, "
-        "CAST(julianday('now') - julianday(COALESCE(r.soumis_le, r.cree_le)) AS INTEGER) AS jours "
+        "v.login AS validator_login, v.nom AS validator_nom, " + SQL_DAYS_SINCE_SUBMIT + " AS jours "
         "FROM leave_requests r "
         "JOIN agents a ON a.id=r.agent_id "
         "LEFT JOIN users v ON v.id=r.validator_id "
         "WHERE r.status IN ('en_attente','annulation_demandee') "
-        "AND COALESCE(r.soumis_le, r.cree_le) < datetime('now', ?)"
+        "AND COALESCE(r.soumis_le, r.cree_le) < " + SQL_NOW_MINUS
     )
     params = ["-%d days" % days]
     role = _user_role(request.user)
@@ -2942,6 +3040,31 @@ def api_compute():
 # --------------------------------------------------------------------------- #
 #  Tableau de bord global
 # --------------------------------------------------------------------------- #
+def _agent_summary_for_row(agent_row, settings):
+    """Synthèse des soldes d'une fiche (ligne `agents` + `proprietaire`) ; {"error": …} si le calcul échoue."""
+    params = json_loads(agent_row["params"])
+    db = get_db()
+    cells_rows = db.execute("SELECT jour, code FROM cells WHERE agent_id=?", (agent_row["id"],)).fetchall()
+    cassages = _agent_cassages(db, agent_row["id"])
+    hourly = _agent_hourly(db, agent_row["id"])
+    recoveries = _agent_recoveries(db, agent_row["id"])
+    db.close()
+    cells = {str(c["jour"]): c["code"] for c in cells_rows}
+    agent_for_rules = dict(params)
+    agent_for_rules["periods"] = json_loads(agent_row["periods"]) if agent_row["periods"] else []
+    agent_for_rules["id"] = agent_row["id"]
+    agent_for_rules["nom"] = ("%s %s" % (agent_row["nom"], agent_row["prenom"] or "")).strip()
+    agent_for_rules["owner_id"] = agent_row["user_id"]
+    agent_for_rules["owner_name"] = agent_row["proprietaire"]
+    agent_for_rules["is_manager"] = agent_row["is_manager"]
+    agent_for_rules["updated_at"] = agent_row["modifie_le"]
+    try:
+        return agent_summary(agent_for_rules, cells_to_list(cells), settings,
+                             cassages=cassages, hourly=hourly, recoveries=recoveries)
+    except Exception as exc:  # noqa: BLE001 — fiche incomplète ne doit pas casser le dashboard
+        return {"id": agent_row["id"], "nom": agent_row["nom"], "error": str(exc)}
+
+
 @app.route("/api/dashboard", methods=["GET"])
 @login_required
 def dashboard():
@@ -2964,32 +3087,7 @@ def dashboard():
     db.close()
 
     settings = _settings_for_year(load_settings(), year)
-    out = []
-    for agent_row in agents:
-        params = json_loads(agent_row["params"])
-        db = get_db()
-        cells_rows = db.execute("SELECT jour, code FROM cells WHERE agent_id=?", (agent_row["id"],)).fetchall()
-        cassages = _agent_cassages(db, agent_row["id"])
-        hourly = _agent_hourly(db, agent_row["id"])
-        recoveries = _agent_recoveries(db, agent_row["id"])
-        db.close()
-        cells = {str(c["jour"]): c["code"] for c in cells_rows}
-        agent_for_rules = dict(params)
-        agent_for_rules["periods"] = json_loads(agent_row["periods"]) if agent_row["periods"] else []
-        agent_for_rules["id"] = agent_row["id"]
-        agent_for_rules["nom"] = ("%s %s" % (agent_row["nom"], agent_row["prenom"] or "")).strip()
-        agent_for_rules["owner_id"] = agent_row["user_id"]
-        agent_for_rules["owner_name"] = agent_row["proprietaire"]
-        agent_for_rules["is_manager"] = agent_row["is_manager"]
-        agent_for_rules["updated_at"] = agent_row["modifie_le"]
-        try:
-            summary = agent_summary(agent_for_rules, cells_to_list(cells), settings,
-                                    cassages=cassages, hourly=hourly,
-                                    recoveries=recoveries)
-        except Exception as exc:  # noqa: BLE001 — fiche incomplète ne doit pas casser le dashboard
-            summary = {"id": agent_row["id"], "nom": agent_row["nom"], "error": str(exc)}
-        out.append(summary)
-    return jsonify(out)
+    return jsonify([_agent_summary_for_row(agent_row, settings) for agent_row in agents])
 
 
 @app.route("/api/hr-dashboard", methods=["GET"])
@@ -3120,14 +3218,13 @@ def hr_dashboard():
             row_to_dict(r) for r in db.execute(
                 "SELECT r.id, r.code, r.soumis_le, r.cree_le, "
                 "TRIM(a.nom || ' ' || COALESCE(a.prenom, '')) AS agent_nom, "
-                "v.login AS validator_login, v.nom AS validator_nom, "
-                "CAST(julianday('now') - julianday(COALESCE(r.soumis_le, r.cree_le)) AS INTEGER) AS jours "
+                "v.login AS validator_login, v.nom AS validator_nom, " + SQL_DAYS_SINCE_SUBMIT + " AS jours "
                 "FROM leave_requests r JOIN agents a ON a.id=r.agent_id "
                 "LEFT JOIN users v ON v.id=r.validator_id "
-                "WHERE r.agent_id IN (%s) AND r.status IN ('en_attente','annulation_demandee') "
-                "AND COALESCE(r.soumis_le, r.cree_le) < datetime('now','-3 days') "
-                "ORDER BY r.soumis_le ASC" % marks,
-                agent_ids,
+                "WHERE r.agent_id IN (" + marks + ") AND r.status IN ('en_attente','annulation_demandee') "
+                "AND COALESCE(r.soumis_le, r.cree_le) < " + SQL_NOW_MINUS + " "
+                "ORDER BY r.soumis_le ASC",
+                list(agent_ids) + ["-3 days"],
             ).fetchall()
         ]
         today = dt.date.today()
@@ -3369,6 +3466,16 @@ def health():
     return jsonify({"ok": True})
 
 
+import api_keys  # noqa: E402
+import api_v1  # noqa: E402
+from openapi_spec import register_docs  # noqa: E402
+
+app.register_blueprint(api_v1.bp)
+api_keys.init_admin(app, admin_required)
+register_docs(app)
+act_as.init_act_as(app, current_user, _audit_user)
+
+
 def bootstrap():
     init_db()
     db = get_db()
@@ -3382,19 +3489,22 @@ def bootstrap():
             db = get_db()
         except Exception as exc:  # noqa: BLE001
             print("[boot] Import Excel impossible :", exc)
+        generated = not config.INITIAL_ADMIN_PASSWORD
+        admin_password = config.INITIAL_ADMIN_PASSWORD or uuid.uuid4().hex[:12]
         db.execute(
-            "INSERT OR IGNORE INTO users (login, nom, mot_de_passe, admin, role, actif) "
-            "VALUES (?,?,?,?,?,1)",
-            ("admin", "Administrateur", generate_password_hash("admin"), 1, "administrateur"),
+            "INSERT INTO users (login, nom, mot_de_passe, admin, role, actif) "
+            "VALUES (?,?,?,?,?,1) ON CONFLICT (login) DO NOTHING",
+            ("admin", "Administrateur", generate_password_hash(admin_password), 1, "administrateur"),
         )
         db.commit()
-        print("[boot] Compte administrateur créé — identifiant : admin / mot de passe : admin")
+        print("[boot] Compte administrateur créé — identifiant : admin")
+        if generated:
+            print("[boot] Mot de passe initial (affiché une seule fois) : %s" % admin_password)
         print("[boot] Pensez à changer ce mot de passe dans l'onglet Paramétrage > Utilisateurs.")
     db.close()
-    start_backup_scheduler()
     start_reminder_scheduler()
 
 
 if __name__ == "__main__":
     bootstrap()
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host=config.HOST, port=config.PORT, debug=False)

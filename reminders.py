@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """Relances automatiques des demandes en attente.
 
-Les relances e-mail ne partent que si mail.json est active. Une relance
+Les relances e-mail ne partent que si l'envoi de mail (APM) est activé. Une relance
 maximale par jour est envoyee a chaque valideur concerne.
 """
 import datetime as dt
 import os
-import sqlite3
 import threading
 import time
 
+import config
 import mailer
-from db import DB_PATH
+from db import SQL_NOW_MINUS, get_db
 
 DEFAULT_DAYS = 3
 DEFAULT_INTERVAL = 6 * 3600
@@ -50,7 +50,7 @@ def pending_requests(conn, days=DEFAULT_DAYS):
         "JOIN agents a ON a.id=r.agent_id "
         "LEFT JOIN users v ON v.id=r.validator_id "
         "WHERE r.status IN ('en_attente','annulation_demandee') "
-        "AND COALESCE(r.soumis_le, r.cree_le) < datetime('now', ?) "
+        "AND COALESCE(r.soumis_le, r.cree_le) < " + SQL_NOW_MINUS + " "
         "ORDER BY v.id, r.soumis_le",
         ("-%d days" % int(days),),
     ).fetchall()
@@ -60,8 +60,7 @@ def send_pending_reminders(days=DEFAULT_DAYS):
     """Envoie une relance quotidienne aux valideurs ayant des demandes anciennes."""
     if not mailer.load_config():
         return {"sent": 0, "disabled": True}
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db()
     today = dt.date.today().isoformat()
     try:
         if _get_setting(conn, "last_pending_reminder_date") == today:
@@ -115,7 +114,7 @@ def send_pending_reminders(days=DEFAULT_DAYS):
 
 
 def start_reminder_scheduler(interval=DEFAULT_INTERVAL):
-    if os.environ.get("CONGES_DISABLE_REMINDERS") == "1":
+    if config.DISABLE_REMINDERS:
         return None
 
     def run():
