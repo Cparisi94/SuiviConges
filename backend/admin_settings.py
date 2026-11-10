@@ -4,6 +4,7 @@
 Toutes ces routes sont réservées aux administrateurs (décorateur fourni par app.py).
 """
 import datetime as dt
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -12,6 +13,7 @@ import audit_logs
 import config
 import mail_templates
 import mailer
+import sedit_rh
 from http_utils import error, page_args, paged
 
 bp = Blueprint("admin_settings", __name__, url_prefix="/api/admin")
@@ -159,7 +161,7 @@ def init_admin_settings(app, admin_required):
         data = request.get_json(force=True) or {}
         to = (data.get("to") or request.user.get("email") or "").strip()
         if not to or "@" not in to:
-            return error("Saisissez une adresse e-mail pour le test", 400)
+            return error("Saisissez une adresse e-mail valide pour le test", 400)
         key = data.get("key") or "test_envoi"
         if key not in mail_templates.TEMPLATES:
             return error("Message inconnu", 404)
@@ -173,5 +175,26 @@ def init_admin_settings(app, admin_required):
         # Un test part même si l'envoi automatique ou ce message est désactivé.
         ok, err = mailer.send_rendered(to, rendered, key, force=True)
         return jsonify({"ok": ok, "error": err, "to": to})
+
+    # ------------------------------------------------------------------ API Sedit RH : test de connexion
+    @bp.route("/sedit-rh", methods=["GET"])
+    @admin_required
+    def sedit_rh_info():
+        return jsonify({"configured": sedit_rh.configured(), "url": config.SEDITRH_API_URL,
+                        "key_set": bool(config.SEDITRH_API_KEY)})   # la clé elle-même n'est jamais renvoyée
+
+    @bp.route("/sedit-rh/test", methods=["POST"])
+    @admin_required
+    def sedit_rh_test():
+        started = time.monotonic()
+        out = {"configured": sedit_rh.configured(), "url": config.SEDITRH_API_URL, "ok": False,
+               "status": None, "latency_ms": None, "total_agents": None, "par_statut": [], "error": ""}
+        try:
+            result = sedit_rh.headcount()
+            out.update(ok=True, status=200, total_agents=result["total"], par_statut=result["par_statut"])
+        except sedit_rh.SeditError as exc:
+            out.update(error=str(exc), status=exc.status)
+        out["latency_ms"] = round((time.monotonic() - started) * 1000)
+        return jsonify(out)
 
     app.register_blueprint(bp)

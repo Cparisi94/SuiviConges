@@ -13,9 +13,45 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.2.2"
+VERSION = "0.4.0"
 
 VERSIONS = [
+    {
+        "version": "0.4.0",
+        "date": "2026-11-10",
+        "type": "minor",
+        "titre": "Organisation Sedit RH, matricules et création d'agents depuis la base RH",
+        "items": [
+            "Nouvel écran Paramétrage > Intégrations > Matricules : retrouve dans Sedit RH, par nom et prénom, le matricule des agents déjà présents dans l'application ; seules les correspondances certaines sont proposées, on coche ce qu'on applique (les homonymes et les introuvables sont signalés, jamais modifiés).",
+            "Matricules appliqués à la base : 30 agents sur 34 (les 4 autres sont introuvables dans Sedit RH et restent à saisir à la main dans Utilisateurs).",
+            "Nouvel écran Paramétrage > Intégrations > Organisation RH : l'organisation de Sedit RH sous forme d'arborescence Direction › Service › Secteur › Agent, comme la hiérarchie de l'application, avec le nombre d'agents, ceux déjà présents dans l'application, le compte valideur correspondant à chaque unité, une recherche et un filtre.",
+            "Création d'agents depuis l'organisation RH : on coche un agent, un secteur, un service ou une direction entière (seuls les agents absents sont cochables), puis « Créer les agents sélectionnés » : aperçu complet avant toute création (rien n'est écrit), puis création des comptes et des fiches avec le matricule repris de Sedit RH.",
+            "Les comptes valideurs manquants de l'organisation (direction, service, secteur) peuvent être créés automatiquement, sous le compte du même nom s'il existe ; les agents sont rattachés au compte de leur unité, ou à un propriétaire par défaut choisi.",
+            "L'e-mail et l'identifiant de connexion sont cherchés dans l'annuaire Active Directory quand le nom correspond à un seul compte ; sinon ils restent à renseigner. La date d'arrivée issue de Sedit RH n'est reprise que si elle tombe dans l'année de la fiche.",
+            "Les données de Sedit RH ne sont lues qu'à la demande de l'administrateur et conservées quelques minutes en mémoire : seuls les agents que l'on choisit de créer ou de rapprocher sont enregistrés.",
+        ],
+    },
+    {
+        "version": "0.3.0",
+        "date": "2026-11-10",
+        "type": "minor",
+        "titre": "Test de l'API Sedit RH et nombre d'agents",
+        "items": [
+            "Nouveau menu Paramétrage > Intégrations > API Sedit RH : affiche la configuration (adresse, clé renseignée ou non — la clé n'est jamais affichée) et un bouton pour tester la connexion.",
+            "Le test interroge l'API Sedit RH et indique si la connexion réussit (durée de réponse comprise), le nombre d'agents en poste et leur répartition par statut ; en cas d'échec, la cause est expliquée (API non configurée, injoignable, clé refusée, droit manquant).",
+            "Le nombre d'agents est lu dans les effectifs agrégés de Sedit RH : aucune donnée personnelle d'agent n'est lue ni enregistrée.",
+            "Correction d'affichage : les boutons principaux (orange) ne deviennent plus illisibles lorsque la souris les survole.",
+        ],
+    },
+    {
+        "version": "0.2.3",
+        "date": "2026-11-10",
+        "type": "patch",
+        "titre": "E-mails : adresse du test d'envoi saisissable à côté du bouton",
+        "items": [
+            "Messages automatiques : l'adresse du test d'envoi se saisit dans un champ à côté du bouton « Envoyer le test » (elle est mémorisée dans le navigateur), au lieu de réclamer une adresse e-mail sur le compte sans dire où la saisir.",
+        ],
+    },
     {
         "version": "0.2.2",
         "date": "2026-11-10",

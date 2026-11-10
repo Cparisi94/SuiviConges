@@ -399,3 +399,60 @@ Aucun. Si la plage choisie chevauche un réseau existant, Docker le signale au d
 
 **Vérifications**
 La syntaxe des deux fichiers `docker-compose` a été contrôlée et les tests passent. **Non vérifié** : le démarrage sur le serveur (Docker n'est pas disponible sur le poste de développement).
+
+## Version 0.2.3 — E-mails : adresse du test d'envoi
+
+**Ce qui a changé**
+- Le bouton de test d'envoi des messages automatiques s'accompagne d'un **champ « Envoyer un test à »** où l'on saisit l'adresse qui recevra le message. L'adresse saisie est **mémorisée** dans le navigateur pour les tests suivants (même chose sur l'écran « Expéditeur et pied de page »).
+
+**Pourquoi**
+Le test utilisait l'adresse e-mail du compte de l'administrateur et affichait une demande d'adresse sans indiquer où la saisir, alors que ce compte n'en a pas.
+
+**Impact pour les utilisateurs**
+Aucun, hors écran Paramétrage > E-mails.
+
+**Vérifications**
+43 tests automatiques passent ; l'écran a été essayé dans un navigateur sur une instance de test jetable.
+
+## Version 0.3.0 — Test de l'API Sedit RH et nombre d'agents
+
+**Ce qui a changé**
+- Un **nouveau menu** « Intégrations > API Sedit RH » dans le Paramétrage. Il affiche l'adresse configurée et si la clé est renseignée (jamais la clé elle-même), et propose un bouton **« Tester la connexion et compter les agents »**.
+- Le test indique si la connexion fonctionne (avec le temps de réponse), le **nombre d'agents en poste** et leur **répartition par statut** (titulaires, contractuels, stagiaires…). En cas de problème, la cause est expliquée : API non configurée, injoignable, clé refusée, droit manquant.
+
+**Pourquoi**
+Vérifier simplement, depuis l'application, que la liaison avec le système RH fonctionne, avant de s'en servir (rapprochement par matricule, pré-remplissage des fiches). Le nombre d'agents sert de première valeur de contrôle.
+
+- **Correction d'affichage** découverte pendant les essais : dans toute l'application, un bouton principal (orange) devenait illisible quand la souris le survolait (texte blanc sur fond clair) ; c'est corrigé.
+
+**Respect des données personnelles**
+Le nombre est lu dans les **effectifs agrégés** de Sedit RH : l'application ne lit, n'affiche et n'enregistre **aucune donnée d'agent** pour ce test.
+
+**À savoir**
+La clé de l'application doit porter le droit « effectifs:read ». Sur l'API Sedit RH locale de développement, j'ai ajouté ce droit à la clé créée pour SuiviConges ; en production, il faudra le demander lors de la création de la clé. Le `.env.example` le précise.
+
+**Vérifications**
+45 tests automatiques passent (comptage, repli sur la somme, clé jamais renvoyée, droits administrateur, erreurs expliquées : non configuré, 401, 403, réseau). L'écran a été essayé dans un navigateur contre l'API Sedit RH locale.
+
+## Version 0.4.0 — Organisation Sedit RH, matricules et création d'agents
+
+**Ce qui a changé**
+- **Matricules des agents de la base** : un écran *Paramétrage > Intégrations > Matricules* retrouve, dans Sedit RH et par nom et prénom, le matricule des agents déjà présents dans l'application. Seules les correspondances **certaines** sont proposées ; l'administrateur coche ce qu'il applique. Les homonymes et les agents introuvables sont signalés et jamais modifiés.
+  **Appliqué à la base actuelle : 30 agents sur 34 ont maintenant leur matricule** ; les 4 autres sont introuvables dans Sedit RH (à saisir à la main dans Utilisateurs, ou à vérifier : agent parti, orthographe différente).
+- **Organisation RH** : un écran *Paramétrage > Intégrations > Organisation RH* présente l'organisation de Sedit RH sous forme d'arborescence **Direction › Service › Secteur › Agent**, comme la hiérarchie de l'application, avec le nombre d'agents, ceux qui sont déjà dans l'application, et le compte valideur correspondant à chaque unité. Recherche, filtres, actualisation.
+- **Création d'agents depuis la base RH** : on coche des agents, un secteur, un service ou une direction entière, puis « Créer les agents sélectionnés ». Un **aperçu** montre ce qui sera créé (rien n'est écrit à ce stade), puis la création crée les **comptes** et les **fiches** avec le matricule de Sedit RH. Les comptes valideurs manquants de l'organisation (direction, service, secteur) peuvent être créés automatiquement ; l'**e-mail** et l'**identifiant** de connexion sont cherchés dans l'annuaire Active Directory quand le nom correspond à un seul compte.
+
+**Pourquoi**
+Éviter de ressaisir à la main les agents et leur organisation, rapprocher durablement l'application du système RH grâce au matricule, et pouvoir peupler l'application service par service.
+
+**Respect des données personnelles**
+La liste des agents de Sedit RH n'est lue qu'à la demande de l'administrateur, conservée quelques minutes en mémoire et **jamais copiée** : seuls les agents que l'on choisit de créer ou de rapprocher sont enregistrés (identité, matricule). Tout est réservé aux administrateurs et inscrit au journal d'audit.
+
+**À savoir / à décider**
+- Les agents créés n'ont pas encore leurs paramètres de calcul (pénibilité, durée hebdomadaire, quotité) : Sedit RH ne les fournit pas. La date d'arrivée n'est reprise que si elle tombe dans l'année de la fiche.
+- Les **comptes d'unité** créés automatiquement sont des comptes structurels (sans titulaire) : il faut ensuite les attribuer à leurs responsables, en leur donnant un identifiant AD.
+- Un agent sans e-mail dans l'annuaire est créé sans e-mail (à renseigner dans sa fiche). Faut-il plutôt le refuser ? (Q16 du manifeste.)
+- Le rapprochement se fait par nom et prénom : deux agents de même nom ne sont jamais rapprochés automatiquement.
+
+**Vérifications**
+49 tests automatiques passent (rapprochement certain / ambigu / introuvable, application sans écrasement, arbre avec niveaux fusionnés, création des comptes d'unité et des agents, réutilisation des comptes existants, idempotence, droits administrateur, erreurs de Sedit RH). Les trois écrans ont été essayés dans un navigateur contre l'API Sedit RH réelle, sur une base de test jetable (3 rapprochements, aperçu et création de 16 agents d'une direction avec ses 4 comptes d'unité), puis supprimée.

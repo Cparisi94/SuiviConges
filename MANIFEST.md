@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.2.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.4.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -39,7 +39,9 @@ Sources analysées pour ce document :
 | **D13** | Un **matricule** est porté par les comptes et les fiches (unique) ; il servira de clé de rapprochement avec **Sedit RH**. | 7.1, 14.2 |
 | **D14** | Les **e-mails automatiques ont des gabarits modifiables** (objet, texte, variables) et une **mise en page commune** (expéditeur, signature, pied de page), dans l'application ; l'**activation de l'envoi** est un réglage de l'administrateur (pas du `.env`) ; l'en-tête est le gabarit institutionnel de l'APM. | 14.7 |
 | **D15** | Deux **journaux d'administration** (connexions, e-mails) avec **durée de conservation réglable** ; les agents gérés par l'AD n'ont plus de gestion de mot de passe dans l'application. | 14.6, 15 |
-| **D16** | La connexion à **Sedit RH** (adresse et clé) est configurée dans `.env`, en local pour l'instant (API `api-apps/sedit-rh`, port 3440). | 18 |
+| **D17** | Les **matricules des agents de la base** sont récupérés dans Sedit RH par rapprochement de **nom et prénom** (correspondances certaines seulement, validées par l'administrateur) ; 30 agents sur 34 rapprochés. | 14.9 |
+| **D18** | L'**organisation Sedit RH** est présentée comme la hiérarchie de l'application (Direction › Service › Secteur › Agent) et permet de **créer des agents** dans l'application (comptes et fiches) en cochant des agents ou des unités ; les **comptes valideurs d'unité** manquants peuvent être créés (miroir de l'organisation RH). | 14.10 |
+| **D16** | La connexion à **Sedit RH** (adresse et clé) est configurée dans `.env`, en local pour l'instant (API `api-apps/sedit-rh`, port 3440) ; un écran Paramétrage > API Sedit RH **teste la connexion et compte les agents**. | 14.8, 18 |
 
 ---
 
@@ -112,7 +114,7 @@ colonnes, 3 276 valeurs) a été validée contre les valeurs en cache du classeu
 | Fichiers de plus de ~300 lignes à découper | **Écart** : `app.py` (≈ 3 500 lignes), `app.js` (≈ 4 300 lignes), `rules.py` (≈ 830 lignes) |
 | Organisation `backend/` et `frontend/` | **Conforme** depuis la v0.1.0 |
 | ESLint / TypeScript strict | **Non applicable** tant que le frontend est en JavaScript simple |
-| Tests sur la logique critique | **Partiel** : 43 tests (voir 23) |
+| Tests sur la logique critique | **Partiel** : 49 tests (voir 23) |
 
 ---
 
@@ -379,7 +381,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 ### 14.1 Menu général
 - **ADM-00** — **Paramétrage** (administrateur) est un **menu à sous-sections** (barre latérale, regroupées par thème) :
   **Congés** — Calcul et calendrier ; **Accès** — Utilisateurs, Clés API, Journal des connexions ;
-  **E-mails** — Expéditeur et pied de page, Messages automatiques, Journal des e-mails.
+  **E-mails** — Expéditeur et pied de page, Messages automatiques, Journal des e-mails ; **Intégrations** — API Sedit RH, Organisation RH, Matricules.
 - Les anciennes adresses `#/users` et `#/apikeys` redirigent vers le Paramétrage pour un administrateur. Les **valideurs non administrateurs** gardent l'entrée « Utilisateurs » du menu principal (limitée à leur périmètre).
 
 ### 14.2 Utilisateurs
@@ -416,10 +418,33 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **MAI-09** — L'**en-tête** des e-mails est le **gabarit institutionnel de l'APM** : l'API centrale n'accepte que l'expéditeur et le pied de page en paramètres ; il n'est donc pas paramétrable depuis l'application (voir Q15).
 - **MAI-02** — **Messages automatiques** : écran en deux parties — **liste des messages à gauche**, **contenu à droite** (objet, texte, activation) ; adresse `#/settings/messages/<message>`. Messages actuels : **Nouvelle demande à valider** (au valideur), **Relance des demandes en attente** (au valideur, une fois par jour) et **Message de test**. Le registre est extensible (un nouveau message = une entrée dans `mail_templates.py`).
 - **MAI-03** — **Variables** : `{agent}`, `{code}`, `{dates}`, `{lien_fiche}`… ; la **liste des variables du message avec leur signification** est affichée à côté du texte et chaque variable s'insère d'un clic. Une **variable inconnue est refusée** à l'enregistrement ; une **ligne dont toutes les variables sont vides est supprimée**.
-- **MAI-04** — Le texte est du **texte brut** : tout est échappé à l'envoi (pas d'HTML saisi), les adresses `http(s)` deviennent des liens. **Aperçu du message seul** (données d'exemple), **envoi de test** à une adresse, **retour au texte d'origine** par message.
+- **MAI-04** — Le texte est du **texte brut** : tout est échappé à l'envoi (pas d'HTML saisi), les adresses `http(s)` deviennent des liens. **Aperçu du message seul** (données d'exemple), **envoi de test** à une adresse saisie à côté du bouton (mémorisée dans le navigateur ; l'e-mail du compte n'est pas requis), **retour au texte d'origine** par message.
 - **MAI-05** — Les e-mails partent par l'APM : le pied de page et l'expéditeur sont transmis **en paramètres** (`footer1..3`, `footerColor`, `from_name`, `from_email`), la signature fait partie du contenu. Les réglages sont stockés dans la table `settings` (clé `mail`, y compris `enabled`) ; à défaut, le pied de page vient de `CONGES_MAIL_FOOTER*`.
 - **MAI-06** — **Journal des e-mails** (administrateur) : pour chaque envoi ou tentative, date, destinataire, objet, **message** concerné, **statut** (envoyé, échec avec l'erreur, non envoyé — envoi désactivé, message désactivé, APM non configurée, pas d'adresse), texte envoyé (bouton « Voir »), demande concernée. Recherche, filtres (statut, message, période), pagination, **conservation réglable** comme le journal des connexions.
 - **MAI-07** — L'écran signale l'état de l'envoi (activé, désactivé, APM non configurée).
+
+### 14.8 API Sedit RH : test de connexion
+- **SED-01** — Écran **Paramétrage > Intégrations > API Sedit RH** (administrateur) : affiche l'**adresse** configurée et si la **clé** est renseignée (la clé n'est **jamais** affichée ni renvoyée) ; adresse et clé se règlent dans `.env` (`SEDITRH_API_URL`, `SEDITRH_API_KEY`).
+- **SED-02** — Le bouton **« Tester la connexion et compter les agents »** interroge l'API Sedit RH et affiche : le **résultat** (connexion réussie ou en échec), le **temps de réponse**, le **nombre d'agents en poste** et leur **répartition par statut** (avec barres de proportion).
+- **SED-03** — Le nombre d'agents est lu dans les **effectifs agrégés** (`GET /api/v1/effectifs?par=statut`, droit `effectifs:read`) : **aucune donnée personnelle** d'agent n'est lue ni enregistrée. La clé doit donc porter les droits `effectifs:read` (en plus de `agents:read` et `organisation:read`).
+- **SED-04** — En cas d'échec, la **cause** est expliquée : API non configurée, injoignable (réseau), clé refusée (401 : invalide, expirée ou suspendue), accès refusé (403 : droit manquant, avec le détail renvoyé par l'API), autre erreur du serveur.
+
+### 14.9 Matricules : rapprochement avec Sedit RH
+- **RH-01** — Écran **Paramétrage > Intégrations > Matricules** : pour chaque agent de l'application **sans matricule**, recherche dans les agents **en poste** de Sedit RH par **nom et prénom** (comparaison sans accents ni ponctuation).
+- **RH-02** — Résultats : **certaine** (un seul agent de ce nom — proposée et pré-cochée), **ambiguë** (homonymes : jamais appliquée, candidats affichés), **introuvable** (à saisir à la main dans Utilisateurs), **déjà attribuée** (le matricule appartient à un autre compte). L'administrateur **décoche** ce qu'il ne veut pas appliquer.
+- **RH-03** — Application : le matricule est écrit sur le **compte** et sur **toutes les fiches** de l'agent ; **jamais d'écrasement** d'un matricule déjà renseigné ; unicité respectée ; chaque application est inscrite au journal d'audit des comptes (« Rapprochement avec Sedit RH »).
+- **RH-04** — Résultat sur la base actuelle : 30 agents sur 34 rapprochés, 4 introuvables.
+
+### 14.10 Organisation RH et création d'agents
+- **ORG-01** — Écran **Paramétrage > Intégrations > Organisation RH** : arborescence **Direction › Service › Secteur › Agent** construite depuis Sedit RH (agents en poste), à l'image de la hiérarchie de l'application ; un niveau identique au niveau supérieur (même code ou même libellé) est **fusionné**.
+- **ORG-02** — Chaque unité affiche son **nombre d'agents**, le nombre d'agents **absents de l'application** et le **compte valideur** de l'application qui porte le même nom (ou « pas de compte valideur ») ; chaque agent indique s'il est **déjà dans l'application** (par matricule ou par nom).
+- **ORG-03** — **Recherche** (nom, prénom, matricule), filtre (tous / absents / déjà présents), **actualisation** à la demande ; dépliage à la demande (2 400 agents).
+- **ORG-04** — **Sélection** : case par agent (seuls les agents absents sont cochables) ou case d'**unité** (secteur, service, direction) qui coche tous ses agents absents ; compteur de sélection.
+- **ORG-05** — **Création** (« Créer les agents sélectionnés ») avec options : **année** des fiches, **créer les comptes valideurs manquants** (direction, service, secteur — sous le compte du même nom s'il existe, sinon sous l'administrateur ; identifiants `DIR-…`, `SRV-…`, `SEC-…`, mot de passe aléatoire inconnu), **propriétaire par défaut**, **recherche dans l'AD**. Un **aperçu** (agents à créer, déjà présents, ignorés, comptes d'unité à créer, e-mail trouvé) précède toujours la création ; la création est **tout ou rien** et **idempotente** (un agent déjà présent est ignoré).
+- **ORG-06** — Chaque agent est créé avec son **compte** (rôle agent) et sa **fiche**, rattachés au compte de son unité le plus bas (secteur, sinon service, sinon direction) ou au propriétaire par défaut ; le **matricule** vient de Sedit RH ; la **date d'arrivée / de départ** n'est reprise que si elle tombe dans l'année de la fiche (prorata correct) ; les autres paramètres de calcul (pénibilité, durée, quotité) restent à renseigner (non fournis par Sedit RH).
+- **ORG-07** — **E-mail et identifiant AD** : cherchés dans l'annuaire (APM) par nom ; retenus **seulement si un seul compte correspond** ; sinon l'agent est créé **sans e-mail** (à renseigner dans sa fiche) et sans identifiant AD (à renseigner dans Utilisateurs pour qu'il puisse se connecter).
+- **ORG-08** — Les **comptes d'unité** créés sont des comptes valideurs **structurels**, à attribuer à leurs responsables (en leur donnant un identifiant AD) ; ils sont journalisés (« Création depuis l'organisation Sedit RH »).
+- **ORG-09** — **Protection des données** : la liste des agents RH n'est lue qu'à la demande de l'administrateur, gardée **5 minutes en mémoire** et **jamais écrite** sur disque ni en base ; seuls les agents créés ou rapprochés sont enregistrés. Toutes ces routes sont réservées aux administrateurs.
 
 ---
 
@@ -467,7 +492,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 | **APM — Active Directory** | `POST /api/v1/ad/authenticate` (connexion), `GET /api/v1/ad/search` (recherche prédictive) | `ad_auth`, `ad_search` |
 | **APM — Mail** | `POST /api/v1/mail/send` | `mail_send` |
 | **PostgreSQL de la Ville** | stockage, schéma `conges` | rôle de base (voir 21) |
-| **API Sedit RH** (`api-apps/sedit-rh`, port 3440) | **connexion préparée** : `SEDITRH_API_URL` et `SEDITRH_API_KEY` (clé `srh_live_…`, droits `agents:read` et `organisation:read`, lecture seule) dans `.env`, état dans `/api/status` ; en développement l'API tourne en local ; le **matricule** sert de clé (`/api/v1/agents/{matricule}`) — aucun appel métier n'est encore branché (Q13) | clé Sedit RH |
+| **API Sedit RH** (`api-apps/sedit-rh`, port 3440) | **connexion testable depuis l'application** (14.8) : `SEDITRH_API_URL` et `SEDITRH_API_KEY` (clé `srh_live_…`, droits `agents:read`, `organisation:read` et `effectifs:read`, lecture seule) dans `.env`, état dans `/api/status` ; en développement l'API tourne en local ; le **matricule** sert de clé (`/api/v1/agents/{matricule}`) — le **nombre d'agents** (effectifs agrégés), puis, à la demande de l'administrateur, la **liste des agents en poste** (matricules, organisation, création d'agents — 14.9 et 14.10) ; le rapprochement est fait par nom et prénom, le matricule est enregistré dans l'application | clé Sedit RH |
 | **Hub DSI** | non utilisé aujourd'hui ; piste : lire l'organisation (directions / services) et les agents plutôt que de les ressaisir `[H]` | clé `dsk_` |
 
 - **INT-01** — Tous les appels à l'APM passent par un **module unique** (`apm.py`) ; une panne réseau ou une réponse 5xx est une erreur « service indisponible », jamais un « mot de passe faux ».
@@ -510,7 +535,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 | Fiches | `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/{id}`, `POST /api/agents/{id}/clone`, `POST /api/agents/duplicate`, `PUT/DELETE /api/hourly/{id}` |
 | Demandes | `GET/POST /api/requests`, `…/approve`, `…/refuse`, `…/cancel`, `…/cancel-request`, `…/cancel-approve`, `…/cancel-refuse`, `…/attachment`, `GET /api/requests/counts`, `GET /api/reminders` |
 | Calcul et synthèses | `POST /api/compute`, `GET /api/dashboard`, `GET /api/hr-dashboard`, `GET /api/planning` |
-| Administration | `/api/v1/admin/api-keys` (+ `/logs`), `/api/admin/act-as` (+ `/search`), `/api/admin/login-logs`, `/api/admin/mail-logs` (+ `/{id}`), `/api/admin/log-retention`, `/api/admin/mail-settings` (+ `/preview`, `/test`, `/reset`) |
+| Administration | `/api/v1/admin/api-keys` (+ `/logs`), `/api/admin/act-as` (+ `/search`), `/api/admin/login-logs`, `/api/admin/mail-logs` (+ `/{id}`), `/api/admin/log-retention`, `/api/admin/mail-settings` (+ `/preview`, `/test`, `/reset`), `/api/admin/sedit-rh` (+ `/test`), `/api/admin/rh/organisation`, `/api/admin/rh/matricules` (+ `/apply`), `/api/admin/rh/import` (+ `/preview`) |
 | Publiques | `/api/status`, `/api/version`, `/api/changelog`, `/api/v1/*` (clé), `/api-docs`, `/health` |
 
 ---
@@ -567,13 +592,13 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 ```
 backend/    app.py (routes internes), rules.py (calcul), pg_db.py / db.py (accès PostgreSQL), config.py, apm.py, mailer.py, reminders.py,
             api_v1.py, api_keys.py, act_as.py, admin_settings.py (journaux, e-mails), audit_logs.py, mail_templates.py,
-            openapi_spec.py, ratelimit.py, http_utils.py, version.py, wsgi.py, migrations/, tests/, Dockerfile
+            sedit_rh.py (API Sedit RH), rh_import.py (matricules, organisation RH, création d'agents), openapi_spec.py, ratelimit.py, http_utils.py, version.py, wsgi.py, migrations/, tests/, Dockerfile
 frontend/   public/ (index.html, app.js, style.css), nginx.conf.template, nginx.dmz.conf.template, proxy_params_conges, Dockerfile
 racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md, MANIFEST.md, CHANGELOG.md, modifications.md, CLAUDE.md
             (backend/version.py = source unique de la version)
 ```
 
-- **QUA-01** — **43 tests automatiques** : régressions métier, authentification locale / AD simulée, mails (APM simulée), clés API, documentation, « se connecter en tant que » (sur un schéma PostgreSQL temporaire, créé puis supprimé) et **cohérence du versionnage** (`test_version.py`, sans base), journaux, gabarits d'e-mails, matricule.
+- **QUA-01** — **49 tests automatiques** : régressions métier, authentification locale / AD simulée, mails (APM simulée), clés API, documentation, « se connecter en tant que » (sur un schéma PostgreSQL temporaire, créé puis supprimé) et **cohérence du versionnage** (`test_version.py`, sans base), journaux, gabarits d'e-mails, matricule.
 - **QUA-02** — Dette connue : fichiers volumineux (`app.py`, `app.js`, `rules.py`), pas de lint, pas de typage ; le découpage par modules `modules/<feature>/` du guide reste à faire.
 - **QUA-03** — Les 114 consultations de référence (tableaux de bord, planning, fiches, demandes…) ont été **comparées avant / après** la migration vers PostgreSQL : résultats identiques.
 
@@ -624,7 +649,8 @@ racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md,
 | **Q10** | Quel rôle PostgreSQL dédié, quelle clé APM propre, quel certificat (`VILLE_CA_FILE`) pour la production ? | DSI |
 | **Q11** | Quelles applications consommeront l'API `/api/v1` et avec quels périmètres ? | DRH / DSI |
 | **Q12** | Les niveaux hiérarchiques doivent-ils devenir configurables ? | DRH |
-| **Q13** | Que faire de Sedit RH : pré-remplir la fiche (nom, prénom, direction, service) à partir du matricule, synchroniser les agents et l'organisation, contrôler les arrivées / départs ? Quelle clé et quelle adresse en production ? | DRH / DSI |
+| **Q13** | Sedit RH, suite : synchroniser **automatiquement** les agents et l'organisation (arrivées, départs, changements de service) plutôt qu'à la demande ? Reprendre d'autres informations (fonction « responsable de secteur » pour désigner les valideurs d'unité) ? Quelle clé et quelle adresse en production ? | DRH / DSI |
+| **Q16** | Comptes d'unité créés automatiquement : qui doit en être le titulaire (valideur) et comment le désigner (fonction RH, saisie à la main) ? Les agents sans e-mail dans l'AD doivent-ils être refusés plutôt que créés sans e-mail ? | DRH |
 | **Q15** | L'en-tête des e-mails (gabarit institutionnel de l'APM) doit-il pouvoir être personnalisé par application ? Cela suppose que l'APM accepte un paramètre d'en-tête (aujourd'hui : expéditeur et pied de page seulement). | DSI |
 | **Q14** | Quels autres e-mails automatiques souhaite-t-on (validation / refus à l'agent, annulation, alerte RCH) — voir Q4 — pour les ajouter au registre des gabarits ? | DRH |
 
@@ -645,6 +671,7 @@ racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md,
 **Sécurité et fiabilité** — traiter SEC-01 à SEC-10 ; archivage plutôt que suppression des comptes ; changement de mot de passe obligatoire à la première connexion ; expiration de session ; empêcher les cycles hiérarchiques (déjà contrôlé à la création).
 **Circuit et notifications** — mails à l'agent (validation / refus / annulation) ; alerte d'expiration RCH à 30 jours ; délégation de validation ; pièce jointe pour les déclarations RCH ; validation multi-niveaux.
 **Administration** — import CSV / annuaire des comptes ; organigramme visuel ; actions groupées (changer un responsable, désactiver plusieurs comptes) ; **exports Excel / CSV** ; indicateurs RH supplémentaires.
+**À reprendre plus tard (mis de côté le 2026-11-10, voir Q13 et Q16)** — désigner automatiquement le titulaire des comptes d'unité créés depuis Sedit RH (piste : la fonction RH « Responsable de secteur ») ; décider s'il faut refuser la création d'un agent dont l'e-mail est introuvable dans l'AD plutôt que de le créer sans e-mail ; synchronisation automatique (et non plus à la demande) des agents et de l'organisation.
 **Évolutions lourdes** — niveaux hiérarchiques configurables ; matrice de droits plus fine (consulter / valider / gérer) ; responsive mobile et accessibilité ; conversion des dates en `TIMESTAMPTZ` ; migration éventuelle vers la stack du guide ; versionnement des routes internes.
 
 ---
@@ -660,6 +687,9 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.4.0** | 2026-11-10 | Organisation Sedit RH, matricules et création d'agents depuis la base RH. |
+| **0.3.0** | 2026-11-10 | Test de l'API Sedit RH et nombre d'agents. |
+| **0.2.3** | 2026-11-10 | E-mails : adresse du test d'envoi saisissable à côté du bouton. |
 | **0.2.2** | 2026-11-10 | Déploiement Docker : sous-réseau fixe configurable. |
 | **0.2.1** | 2026-11-10 | E-mails : activation réglable dans l'application, tests toujours possibles, écran Messages en liste. |
 | **0.2.0** | 2026-11-10 | Paramétrage général, journaux, gabarits d'e-mails et matricule : menu Paramétrage à sous-sections (utilisateurs et clés API déplacés), journal des connexions, journal des e-mails, gabarits des e-mails automatiques et mise en page commune (expéditeur, en-tête, signature, pied de page), matricule, mot de passe masqué pour les comptes AD, connexion Sedit RH préparée. |

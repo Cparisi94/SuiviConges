@@ -3770,6 +3770,7 @@ const ADMIN_MENU = [
   { group: "Congés", items: [["calcul", "Calcul et calendrier"]] },
   { group: "Accès", items: [["users", "Utilisateurs"], ["apikeys", "Clés API"], ["connexions", "Journal des connexions"]] },
   { group: "E-mails", items: [["emails", "Expéditeur et pied de page"], ["messages", "Messages automatiques"], ["journal-emails", "Journal des e-mails"]] },
+  { group: "Intégrations", items: [["sedit-rh", "API Sedit RH"], ["organisation-rh", "Organisation RH"], ["matricules", "Matricules"]] },
 ];
 
 /* Conteneur du contenu : la zone de la section en cours dans le Paramétrage, sinon la page entière. */
@@ -3793,7 +3794,7 @@ function viewAdmin(hash) {
     </div>`;
   const run = {
     calcul: () => viewSettings(), users: () => viewUsers(), apikeys: () => viewApiKeys(),
-    connexions: viewLoginLogs, emails: viewMailLayout, messages: () => viewMailMessages(arg), "journal-emails": viewMailLogs,
+    connexions: viewLoginLogs, emails: viewMailLayout, messages: () => viewMailMessages(arg), "journal-emails": viewMailLogs, "sedit-rh": viewSeditRh, "organisation-rh": viewOrgRh, matricules: viewMatricules,
   }[section];
   Promise.resolve(run()).catch((e) => { $("#admin-body").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; });
 }
@@ -3931,6 +3932,257 @@ function showTextModal(title, text) {
   document.body.appendChild(wrap);
 }
 
+/* Adresse du test d'envoi : dernière saisie (mémorisée dans le navigateur), sinon l'e-mail du compte. */
+function testAddress() {
+  try { return localStorage.getItem("suivi_test_mail") || state.user.email || ""; } catch (_) { return state.user.email || ""; }
+}
+function rememberTestAddress(v) { try { if (v) localStorage.setItem("suivi_test_mail", v); } catch (_) { /* facultatif */ } }
+
+/* ---- Sedit RH : matricules des agents de la base ---- */
+const MATRICULE_STATUS = {
+  certain: ["Correspondance certaine", "ok"], ambigu: ["Plusieurs agents du même nom", "warn"],
+  introuvable: ["Introuvable dans Sedit RH", "off"], deja_pris: ["Matricule déjà attribué", "warn"],
+};
+
+async function viewMatricules() {
+  const body = contentEl();
+  body.innerHTML = `<h2>Matricules des agents de la base</h2><p class="muted">Recherche, dans Sedit RH, des agents déjà présents dans l'application (rapprochement par nom et prénom)…</p>`;
+  const r = await api("/api/admin/rh/matricules");
+  const certain = r.items.filter((i) => i.status === "certain");
+  const row = (i) => {
+    const [label, cls] = MATRICULE_STATUS[i.status];
+    const info = i.status === "certain" || i.status === "deja_pris"
+      ? `${esc(i.matricule)}<br><span class="muted">${esc(i.rh.direction)}${i.rh.service && i.rh.service !== i.rh.direction ? " › " + esc(i.rh.service) : ""}${i.rh.secteur ? " › " + esc(i.rh.secteur) : ""}</span>`
+      : i.status === "ambigu"
+        ? i.candidates.map((c) => `<span class="muted">${esc(c.matricule)} — ${esc(c.service || c.direction)}</span>`).join("<br>")
+        : '<span class="muted">À saisir à la main dans Utilisateurs</span>';
+    return `<tr class="${i.status === "certain" ? "" : "row-off"}">
+      <td>${i.status === "certain" ? `<input type="checkbox" class="mt-check" data-uid="${i.agent_user_id}" data-m="${esc(i.matricule)}" checked>` : ""}</td>
+      <td>${esc(i.login)}</td><td><b>${esc(i.nom)}</b> ${esc(i.prenom)}</td><td>${info}</td>
+      <td><span class="chip chip-${cls}">${esc(label)}</span>${i.holder ? ` <span class="muted">(${esc(i.holder)})</span>` : ""}</td></tr>`;
+  };
+  body.innerHTML = `
+    <h2>Matricules des agents de la base</h2>
+    <p class="muted">Pour chaque agent de l'application <b>sans matricule</b>, recherche dans Sedit RH (agents en poste) par nom et prénom. Seules les correspondances <b>certaines</b>
+      (un seul agent de ce nom) sont proposées ; décochez ce que vous ne voulez pas appliquer. Les matricules déjà renseignés ne sont jamais modifiés.</p>
+    <div class="log-filters">
+      <span><b>${r.counts.certain}</b> certaine(s)</span><span><b>${r.counts.ambigu}</b> ambiguë(s)</span>
+      <span><b>${r.counts.introuvable}</b> introuvable(s)</span><span><b>${r.counts.deja_pris}</b> déjà attribuée(s)</span>
+    </div>
+    ${r.items.length ? `<table class="data"><thead><tr><th></th><th>Compte</th><th>Agent</th><th>Matricule Sedit RH</th><th>Résultat</th></tr></thead>
+      <tbody>${r.items.map(row).join("")}</tbody></table>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary" id="mt-apply" ${certain.length ? "" : "disabled"}>Appliquer les matricules cochés</button>
+        <button class="btn btn-small" id="mt-toggle" ${certain.length ? "" : "disabled"}>Tout décocher</button><span id="mt-count" class="muted"></span></div>`
+      : '<p class="muted">Tous les agents de la base ont déjà un matricule.</p>'}`;
+  if (!r.items.length) return;
+  const boxes = () => [...body.querySelectorAll(".mt-check")];
+  const count = () => { const n = boxes().filter((b) => b.checked).length; $("#mt-count").textContent = n + " sélectionné(s)"; $("#mt-apply").disabled = !n; };
+  boxes().forEach((b) => b.addEventListener("change", count));
+  $("#mt-toggle").addEventListener("click", (e) => {
+    const all = boxes().every((b) => b.checked);
+    boxes().forEach((b) => { b.checked = !all; });
+    e.target.textContent = all ? "Tout cocher" : "Tout décocher"; count();
+  });
+  count();
+  $("#mt-apply").addEventListener("click", async () => {
+    try {
+      const items = boxes().filter((b) => b.checked).map((b) => ({ agent_user_id: Number(b.dataset.uid), matricule: b.dataset.m }));
+      const res = await api("/api/admin/rh/matricules/apply", { method: "POST", body: JSON.stringify({ items }) });
+      toast(`${res.applied} matricule(s) enregistré(s)` + (res.refused.length ? `, ${res.refused.length} refusé(s)` : ""), res.refused.length > 0 && !res.applied);
+      viewMatricules();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---- Sedit RH : organisation (Direction > Service > Secteur > Agents) et création d'agents ---- */
+const LEVEL_LABEL = { direction: "Direction", service: "Service", secteur: "Secteur" };
+
+async function viewOrgRh() {
+  const body = contentEl();
+  body.innerHTML = `<h2>Organisation Sedit RH</h2><p class="muted">Lecture de l'organisation et des agents en poste dans Sedit RH…</p>`;
+  let data = await api("/api/admin/rh/organisation");
+  const selected = new Set(), open = new Set();
+  const index = new Map();
+  let nextId = 0, filterText = "", mode = "all";
+  const indexTree = (nodes, path) => nodes.forEach((n) => { n._id = "n" + (nextId++); n._path = path; index.set(n._id, n); indexTree(n.children, path + 1); });
+
+  const matches = (a) => (mode === "all" || (mode === "missing" ? !a.in_app : a.in_app)) &&
+    (!filterText || (a.nom + " " + a.prenom + " " + a.matricule).toLowerCase().includes(filterText));
+  const visibleAgents = (n) => [...n.agents.filter(matches), ...n.children.flatMap(visibleAgents)];
+  const missingOf = (n) => [...n.agents.filter((a) => !a.in_app && matches(a)), ...n.children.flatMap(missingOf)];
+
+  const nodeHtml = (n) => {
+    const shown = visibleAgents(n);
+    if (!shown.length) return "";
+    const isOpen = open.has(n._id) || (filterText && shown.length <= 300);
+    const miss = missingOf(n);
+    const acct = n.account ? `<span class="chip chip-ok" title="Compte valideur de l'application">compte : ${esc(n.account.login)}</span>` : '<span class="chip chip-off">pas de compte valideur</span>';
+    const kids = isOpen ? n.children.map(nodeHtml).join("") + (n.agents.some(matches) ? `<table class="data org-agents"><tbody>${n.agents.filter(matches).map((a) => `
+      <tr><td style="width:28px"><input type="checkbox" class="org-agent" data-m="${esc(a.matricule)}" ${a.in_app ? "disabled" : ""}></td>
+        <td style="width:90px">${esc(a.matricule)}</td><td><b>${esc(a.nom)}</b> ${esc(a.prenom)}</td><td class="muted">${esc(a.fonction)}</td><td class="muted">${esc(a.statut)}</td>
+        <td>${a.in_app ? `<span class="chip chip-ok">dans l'application (${esc(a.login)})</span>` : '<span class="chip chip-off">absent</span>'}</td></tr>`).join("")}</tbody></table>` : "") : "";
+    return `<div class="org-node lv-${n.level}" data-id="${n._id}">
+      <div class="org-head"><button type="button" class="org-toggle" data-id="${n._id}">${isOpen ? "▾" : "▸"}</button>
+        <input type="checkbox" class="org-check" data-id="${n._id}" ${miss.length ? "" : "disabled"}>
+        <span class="lv-tag">${LEVEL_LABEL[n.level]}</span> <b>${esc(n.libelle)}</b>
+        <span class="muted">${shown.length} agent(s)${miss.length ? " · " + miss.length + " absent(s) de l'application" : ""}</span> ${acct}</div>
+      <div class="org-body ${isOpen ? "" : "hidden"}">${kids}</div></div>`;
+  };
+
+  const refreshChecks = () => {
+    body.querySelectorAll(".org-agent").forEach((c) => { c.checked = selected.has(c.dataset.m); });
+    body.querySelectorAll(".org-check").forEach((c) => {
+      const miss = missingOf(index.get(c.dataset.id)), n = miss.filter((a) => selected.has(a.matricule)).length;
+      c.checked = miss.length > 0 && n === miss.length; c.indeterminate = n > 0 && n < miss.length;
+    });
+    $("#org-selected").textContent = selected.size ? selected.size + " agent(s) sélectionné(s)" : "";
+    $("#org-create").disabled = !selected.size;
+  };
+
+  const render = () => {
+    const html = data.tree.map(nodeHtml).join("");
+    $("#org-tree").innerHTML = html || '<p class="muted">Aucun agent ne correspond.</p>';
+    $("#org-tree").querySelectorAll(".org-toggle").forEach((b) => b.addEventListener("click", () => {
+      open.has(b.dataset.id) ? open.delete(b.dataset.id) : open.add(b.dataset.id); render();
+    }));
+    $("#org-tree").querySelectorAll(".org-check").forEach((c) => c.addEventListener("change", () => {
+      const miss = missingOf(index.get(c.dataset.id));
+      miss.forEach((a) => { c.checked ? selected.add(a.matricule) : selected.delete(a.matricule); });
+      refreshChecks();
+    }));
+    $("#org-tree").querySelectorAll(".org-agent").forEach((c) => c.addEventListener("change", () => {
+      c.checked ? selected.add(c.dataset.m) : selected.delete(c.dataset.m); refreshChecks();
+    }));
+    refreshChecks();
+  };
+
+  const draw = () => {
+    indexTree(data.tree, 0);
+    body.innerHTML = `
+      <h2>Organisation Sedit RH</h2>
+      <p class="muted">Organisation et agents <b>en poste</b> dans Sedit RH, présentés comme la hiérarchie de l'application (Direction › Service › Secteur › Agent).
+        Cochez des agents, un secteur, un service ou une direction entière, puis créez-les dans l'application : seuls les agents <b>absents</b> sont proposés.</p>
+      <div class="log-filters">
+        <input id="org-q" placeholder="Rechercher (nom, prénom, matricule)…">
+        <select id="org-mode"><option value="all">Tous les agents</option><option value="missing">Absents de l'application</option><option value="present">Déjà dans l'application</option></select>
+        <button class="btn btn-small" id="org-refresh">Actualiser depuis Sedit RH</button>
+        <span class="muted"><b>${data.total}</b> agents · <b>${data.missing}</b> absents de l'application</span>
+      </div>
+      <div class="org-bar"><span id="org-selected" class="muted"></span>
+        <button class="btn btn-small" id="org-clear">Tout désélectionner</button>
+        <button class="btn btn-primary" id="org-create" disabled>Créer les agents sélectionnés…</button></div>
+      <div id="org-tree" class="org-tree"></div>`;
+    $("#org-q").addEventListener("input", (e) => { filterText = e.target.value.trim().toLowerCase(); render(); });
+    $("#org-mode").addEventListener("change", (e) => { mode = e.target.value; render(); });
+    $("#org-clear").addEventListener("click", () => { selected.clear(); refreshChecks(); });
+    $("#org-refresh").addEventListener("click", async () => {
+      try { data = await api("/api/admin/rh/organisation?refresh=1"); index.clear(); nextId = 0; draw(); toast("Données Sedit RH actualisées"); }
+      catch (e) { toast(e.message, true); }
+    });
+    $("#org-create").addEventListener("click", () => openRhImportModal([...selected], () => viewOrgRh()));
+    render();
+  };
+  draw();
+}
+
+/* Fenêtre de création : options, aperçu (rien n'est écrit), confirmation, résultat. */
+async function openRhImportModal(matricules, done) {
+  const users = (await api("/api/users")).filter((u) => u.role !== "agent" && u.actif);
+  const wrap = document.createElement("div");
+  wrap.className = "modal";
+  wrap.innerHTML = `<div class="modal-card" style="max-width:940px;width:94vw;max-height:88vh;overflow:auto">
+    <h3>Créer ${matricules.length} agent(s) depuis Sedit RH</h3>
+    <div id="ri-error" class="form-error hidden"></div>
+    <div id="ri-form">
+      <label>Année des fiches <input type="number" id="ri-year" min="2000" max="2100" value="${state.year}" style="width:100px"></label>
+      <label class="inline"><input type="checkbox" id="ri-units" checked> Créer les comptes valideurs manquants de l'organisation (direction, service, secteur), sous le compte du même nom s'il existe</label>
+      <label>Propriétaire par défaut (si un agent n'a pas de compte d'unité)
+        <select id="ri-owner"><option value="">— aucun —</option>${users.map((u) => `<option value="${u.id}">${esc(u.nom || u.login)} (${esc(u.login)})</option>`).join("")}</select></label>
+      <label class="inline"><input type="checkbox" id="ri-ad" checked> Chercher l'e-mail et l'identifiant dans l'annuaire Active Directory (si un seul compte correspond au nom)</label>
+      <p class="muted">Chaque agent est créé avec son compte et sa fiche, rattachés au compte de son unité ; le matricule est repris de Sedit RH. Un aperçu précède toujours la création.</p>
+      <div class="modal-actions"><button class="btn" id="ri-cancel">Annuler</button><button class="btn btn-primary" id="ri-preview">Prévisualiser</button></div>
+    </div>
+    <div id="ri-result"></div></div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  const payload = () => ({ matricules, year: Number($("#ri-year").value), create_units: $("#ri-units").checked,
+    default_owner_id: $("#ri-owner").value ? Number($("#ri-owner").value) : null, use_ad: $("#ri-ad").checked });
+  const err = (m) => { const e = $("#ri-error"); e.textContent = m; e.classList.toggle("hidden", !m); };
+  $("#ri-cancel").addEventListener("click", close);
+  $("#ri-preview").addEventListener("click", async () => {
+    err(""); $("#ri-result").innerHTML = '<p class="muted">Préparation (recherche dans l\'annuaire en cours)…</p>';
+    try {
+      const p = await api("/api/admin/rh/import/preview", { method: "POST", body: JSON.stringify(payload()) });
+      const todo = p.items.filter((i) => i.status === "a_creer");
+      $("#ri-result").innerHTML = `
+        <p><b>${p.counts.a_creer}</b> agent(s) à créer · ${p.counts.existe} déjà présent(s) · ${p.counts.ignore} ignoré(s) · <b>${p.units_new.length}</b> compte(s) d'unité à créer</p>
+        ${p.units_new.length ? `<p class="muted">Comptes d'unité : ${p.units_new.map((u) => `${LEVEL_LABEL[u.level]} « ${esc(u.libelle)} »`).join(" ; ")}</p>` : ""}
+        <table class="data"><thead><tr><th>Matricule</th><th>Agent</th><th>Propriétaire</th><th>E-mail (AD)</th><th>Résultat</th></tr></thead><tbody>
+          ${p.items.map((i) => `<tr class="${i.status === "a_creer" ? "" : "row-off"}"><td>${esc(i.matricule)}</td><td>${esc(i.nom || "")} ${esc(i.prenom || "")}</td>
+            <td>${esc(i.owner || "")}</td><td>${i.status === "a_creer" ? (i.email ? esc(i.email) : '<span class="muted">à renseigner</span>') : ""}</td>
+            <td>${i.status === "a_creer" ? "À créer" : `<span class="muted">${esc(i.reason)}</span>`}</td></tr>`).join("")}</tbody></table>
+        <div class="modal-actions"><button class="btn" id="ri-back">Modifier les options</button>
+          <button class="btn btn-primary" id="ri-go" ${todo.length ? "" : "disabled"}>Créer ${todo.length} agent(s)</button></div>`;
+      $("#ri-back").addEventListener("click", () => { $("#ri-result").innerHTML = ""; });
+      $("#ri-go").addEventListener("click", async () => {
+        $("#ri-go").disabled = true; $("#ri-go").textContent = "Création…";
+        try {
+          const r = await api("/api/admin/rh/import", { method: "POST", body: JSON.stringify(payload()) });
+          $("#ri-form").classList.add("hidden");
+          $("#ri-result").innerHTML = `<p><b>${r.created.length}</b> agent(s) créé(s) · ${r.units_created.length} compte(s) d'unité créé(s) · ${r.skipped.length} ignoré(s).</p>
+            <p class="muted">${r.created.filter((c) => !c.email).length} agent(s) sans e-mail (à renseigner dans leur fiche) ; ${r.created.filter((c) => !c.ad_login).length} sans identifiant AD
+              (à renseigner dans Paramétrage > Utilisateurs pour qu'ils puissent se connecter). Les comptes d'unité sont à attribuer à leurs responsables.</p>
+            <div class="modal-actions"><button class="btn btn-primary" id="ri-ok">Fermer</button></div>`;
+          $("#ri-ok").addEventListener("click", () => { close(); done(); });
+          toast(r.created.length + " agent(s) créé(s)");
+        } catch (e) { err(e.message); $("#ri-go").disabled = false; $("#ri-go").textContent = "Réessayer"; }
+      });
+    } catch (e) { $("#ri-result").innerHTML = ""; err(e.message); }
+  });
+}
+
+/* ---- API Sedit RH : test de connexion et nombre d'agents ---- */
+async function viewSeditRh() {
+  const body = contentEl();
+  const info = await api("/api/admin/sedit-rh");
+  body.innerHTML = `
+    <h2>API Sedit RH</h2>
+    <p class="muted">Connexion à l'API Sedit RH (agents et organisation de la Ville, lecture seule). L'adresse et la clé se règlent dans le fichier de configuration <code>.env</code>
+      (<code>SEDITRH_API_URL</code>, <code>SEDITRH_API_KEY</code>) ; la clé n'est jamais affichée.</p>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Configuration</h3>
+      <table class="var-table"><tbody>
+        <tr><td>Adresse</td><td>${info.url ? `<code>${esc(info.url)}</code>` : '<span class="muted">non renseignée</span>'}</td></tr>
+        <tr><td>Clé d'accès</td><td>${info.key_set ? "renseignée" : '<span class="muted">non renseignée</span>'}</td></tr>
+      </tbody></table>
+      <div style="margin-top:10px"><button class="btn btn-primary" id="sr-test" ${info.configured ? "" : "disabled"}>Tester la connexion et compter les agents</button></div>
+    </div>
+    <div id="sr-result"></div>`;
+  $("#sr-test").addEventListener("click", async () => {
+    const out = $("#sr-result");
+    out.innerHTML = '<div class="card"><p class="muted">Interrogation de l\'API Sedit RH…</p></div>';
+    try {
+      const r = await api("/api/admin/sedit-rh/test", { method: "POST" });
+      if (!r.ok) {
+        out.innerHTML = `<div class="card warn-banner"><h3>Connexion en échec</h3><p>${esc(r.error)}</p>
+          <p class="muted">${r.latency_ms} ms${r.status ? " · HTTP " + r.status : ""}</p></div>`;
+        return;
+      }
+      const max = Math.max(...r.par_statut.map((s) => s.effectif), 1);
+      out.innerHTML = `
+        <div class="card ok-banner" style="margin-bottom:14px"><h3>Connexion réussie</h3>
+          <p class="muted">API Sedit RH joignable, clé acceptée — ${r.latency_ms} ms.</p>
+          <p style="font-size:28px;margin:6px 0"><b>${r.total_agents.toLocaleString("fr-FR")}</b> <span style="font-size:14px">agents en poste</span></p></div>
+        <div class="card"><h3>Répartition par statut</h3>
+          <table class="data"><thead><tr><th>Code</th><th>Statut</th><th style="text-align:right">Agents</th><th style="width:40%"></th></tr></thead><tbody>
+            ${r.par_statut.map((s) => `<tr><td>${esc(s.code)}</td><td>${esc(s.libelle)}</td><td style="text-align:right">${s.effectif.toLocaleString("fr-FR")}</td>
+              <td><div class="bar"><span style="width:${Math.round((s.effectif / max) * 100)}%"></span></div></td></tr>`).join("")}
+          </tbody></table></div>`;
+    } catch (e) { out.innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+  });
+}
+
 /* ---- E-mails : activation, expéditeur, signature et pied de page ---- */
 function renderMailSwitch(el, s) {
   const on = s.enabled;
@@ -3979,7 +4231,7 @@ async function viewMailLayout() {
         <label>Couleur du pied de page<span class="color-pair"><input type="color" id="ml-footer_color-pick" value="${esc(L.footer_color)}"><input id="ml-footer_color" value="${esc(L.footer_color)}" maxlength="7" style="width:90px"></span></label></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-primary" id="ml-save">Enregistrer</button>
-      <span class="muted">Envoyer un message de test à</span><input id="ml-test-to" type="email" placeholder="adresse e-mail" value="${esc(state.user.email || "")}" style="width:240px">
+      <span class="muted">Envoyer un message de test à</span><input id="ml-test-to" type="email" placeholder="adresse e-mail" value="${esc(testAddress())}" style="width:240px">
       <button class="btn" id="ml-test">Envoyer le test</button>
     </div>`;
   renderMailSwitch($("#mail-switch-zone"), s);
@@ -3993,7 +4245,10 @@ async function viewMailLayout() {
   $("#ml-test").addEventListener("click", async () => {
     try {
       await api("/api/admin/mail-settings", { method: "PUT", body: JSON.stringify({ layout: collect() }) });  // le test utilise les réglages saisis
-      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ to: $("#ml-test-to").value.trim() }) });
+      const to = $("#ml-test-to").value.trim();
+      if (!to) { toast("Saisissez l'adresse e-mail qui recevra le test", true); return; }
+      rememberTestAddress(to);
+      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ to }) });
       toast(r.ok ? "Message de test envoyé à " + r.to : "Non envoyé : " + r.error, !r.ok);
     } catch (e) { toast(e.message, true); }
   });
@@ -4028,7 +4283,9 @@ async function viewMailMessages(selected) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button class="btn btn-primary" id="tpl-save">Enregistrer</button>
           <button class="btn" id="tpl-preview">Aperçu</button>
-          <button class="btn" id="tpl-test">M'envoyer un test</button>
+          <span class="muted">Envoyer un test à</span>
+          <input id="tpl-test-to" type="email" placeholder="adresse e-mail" value="${esc(testAddress())}" style="width:240px">
+          <button class="btn" id="tpl-test">Envoyer le test</button>
           <button class="btn btn-danger" id="tpl-reset">Revenir au texte d'origine</button>
         </div>
         <div id="tpl-prev" style="margin-top:10px"></div>
@@ -4054,7 +4311,10 @@ async function viewMailMessages(selected) {
   });
   $("#tpl-test").addEventListener("click", async () => {
     try {
-      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ key, to: state.user.email || "" }) });
+      const to = $("#tpl-test-to").value.trim();
+      if (!to) { toast("Saisissez l'adresse e-mail qui recevra le test", true); $("#tpl-test-to").focus(); return; }
+      rememberTestAddress(to);
+      const r = await api("/api/admin/mail-settings/test", { method: "POST", body: JSON.stringify({ key, to }) });
       toast(r.ok ? "Test envoyé à " + r.to : "Non envoyé : " + r.error, !r.ok);
     } catch (e) { toast(e.message, true); }
   });

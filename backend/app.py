@@ -1139,6 +1139,34 @@ def _agent_password():
     return "Conges" + uuid.uuid4().hex[:4].upper() + "!"
 
 
+def _create_fiche_with_account(db, nom, prenom, email, matricule, owner_id, validator_id, year, params,
+                               is_manager=0, ad_login=""):
+    """Crée le compte de l'agent et sa fiche (sans contrôle ni commit : l'appelant valide et commite).
+
+    Retourne (id de la fiche, id du compte agent, identifiant, mot de passe local généré)."""
+    login = _agent_login(db, prenom, nom)
+    password = _agent_password()
+    full_name = ("%s %s" % (nom, prenom)).strip()
+    cur_user = db.execute(
+        "INSERT INTO users (login, ad_login, nom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
+        "VALUES (?,?,?,?,?,?,0,'agent',?,1)",
+        (login, ad_login, full_name, email, matricule, generate_password_hash(password), owner_id),
+    )
+    agent_user_id = cur_user.lastrowid
+    cur = db.execute(
+        "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (owner_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, json_dumps(params), is_manager),
+    )
+    agent_row_id = cur.lastrowid
+    if is_manager:
+        db.execute(
+            "UPDATE agents SET is_manager=0 WHERE user_id=? AND year=? AND id<>?",
+            (owner_id, year, agent_row_id),
+        )
+    return agent_row_id, agent_user_id, login, password
+
+
 @app.route("/api/agents", methods=["POST"])
 @login_required
 def agents_create():
@@ -1200,27 +1228,9 @@ def agents_create():
         return jsonify({"error": merr or "Ce matricule est déjà attribué au compte %s" % holder}), 400
     params = _normalize_params(data.get("params"))
     is_manager = 1 if data.get("is_manager") else 0
-    login = _agent_login(db, prenom, nom)
-    password = _agent_password()
-    full_name = ("%s %s" % (nom, prenom)).strip()
     try:
-        cur_user = db.execute(
-            "INSERT INTO users (login, nom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
-            "VALUES (?,?,?,?,?,0,'agent',?,1)",
-            (login, full_name, email, matricule, generate_password_hash(password), owner_id),
-        )
-        agent_user_id = cur_user.lastrowid
-        cur = db.execute(
-            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (owner_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, json_dumps(params), is_manager),
-        )
-        agent_row_id = cur.lastrowid
-        if is_manager:
-            db.execute(
-                "UPDATE agents SET is_manager=0 WHERE user_id=? AND year=? AND id<>?",
-                (owner_id, year, agent_row_id),
-            )
+        agent_row_id, agent_user_id, login, password = _create_fiche_with_account(
+            db, nom, prenom, email, matricule, owner_id, validator_id, year, params, is_manager)
         db.commit()
     except Exception:
         db.rollback()
@@ -3539,8 +3549,11 @@ api_keys.init_admin(app, admin_required)
 register_docs(app)
 act_as.init_act_as(app, current_user, _audit_user)
 import admin_settings  # noqa: E402
+import rh_import  # noqa: E402
 
 admin_settings.init_admin_settings(app, admin_required)
+rh_import.init_rh(app, admin_required, _create_fiche_with_account, _audit_user, _normalize_params,
+                  _matricule_holder, _clean_matricule)
 
 
 def bootstrap():

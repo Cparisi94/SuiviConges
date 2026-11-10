@@ -150,6 +150,8 @@ backend/                    API Flask (Python), image Docker `backend/Dockerfile
   act_as.py                 « Se connecter en tant que » (administrateurs)
   admin_settings.py         Routes du Paramétrage : journaux (connexions, e-mails), réglages et gabarits des e-mails
   audit_logs.py             Écriture, consultation et purge des journaux ; mail_templates.py : gabarits et mise en page des e-mails
+  sedit_rh.py               Client de l'API Sedit RH (test de connexion, effectifs, agents en poste)
+  rh_import.py              Rapprochement des matricules, organisation RH et création d'agents depuis Sedit RH
   version.py                Version et journal des versions (source unique)
   openapi_spec.py           Description OpenAPI + Swagger UI (/api-docs)
   tests/                    Tests automatiques

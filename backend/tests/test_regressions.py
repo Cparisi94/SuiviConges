@@ -23,6 +23,8 @@ import mail_templates  # noqa: E402
 import mailer  # noqa: E402
 import pg_db  # noqa: E402
 import ratelimit  # noqa: E402
+import rh_import  # noqa: E402
+import sedit_rh  # noqa: E402
 
 
 class PrototypeRegressionTests(unittest.TestCase):
@@ -652,6 +654,196 @@ class PrototypeRegressionTests(unittest.TestCase):
         log = self._call("GET", "/api/admin/mail-logs?q=bloque@example.fr", uid=1).get_json()
         self.assertEqual(log["items"][0]["status"], "non_envoye")
         self.assertIn("désactivé", log["items"][0]["error"])
+
+
+    # --- API Sedit RH : test de connexion et nombre d'agents ---------------------------- #
+    def _sedit(self, status=200, payload=None, side_effect=None, calls=None):
+        def fake_get(url, params=None, headers=None, timeout=None, verify=None):
+            if calls is not None:
+                calls.append({"url": url, "params": params, "headers": headers})
+            if side_effect:
+                raise side_effect
+            return mock.Mock(status_code=status, json=lambda: payload)
+        return [mock.patch.object(config, "SEDITRH_API_URL", "http://sedit.test"),
+                mock.patch.object(config, "SEDITRH_API_KEY", "srh_live_secret123"),
+                mock.patch.object(sedit_rh.requests, "get", fake_get)]
+
+    def test_sedit_rh_counts_agents_and_never_exposes_the_key(self):
+        payload = {"data": [{"code": "CDI", "libelle": "CDI", "effectif": 77},
+                            {"code": "TIT", "libelle": "Titulaire", "effectif": 1340}], "meta": {"total": 1417}}
+        calls = []
+        p = self._sedit(payload=payload, calls=calls)
+        with p[0], p[1], p[2]:
+            result = self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()
+            info = self._call("GET", "/api/admin/sedit-rh", uid=1).get_json()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["total_agents"], 1417)
+        self.assertEqual([s["code"] for s in result["par_statut"]], ["TIT", "CDI"])   # trié par effectif décroissant
+        self.assertEqual(calls[0]["url"], "http://sedit.test/api/v1/effectifs")
+        self.assertEqual(calls[0]["params"], {"par": "statut"})
+        self.assertEqual(calls[0]["headers"], {"Authorization": "Bearer srh_live_secret123"})
+        self.assertNotIn("srh_live_secret123", json.dumps(result) + json.dumps(info))
+        self.assertTrue(info["configured"] and info["key_set"])
+        self.assertEqual(self._call("POST", "/api/admin/sedit-rh/test", uid=2).status_code, 403)
+
+    def test_sedit_rh_total_falls_back_to_the_sum_and_errors_are_explained(self):
+        p = self._sedit(payload={"data": [{"code": "A", "libelle": "A", "effectif": 5}, {"code": "B", "libelle": "B", "effectif": 7}]})
+        with p[0], p[1], p[2]:
+            self.assertEqual(self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()["total_agents"], 12)
+        with mock.patch.object(config, "SEDITRH_API_URL", ""):
+            r = self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()
+            self.assertFalse(r["ok"])
+            self.assertIn("pas configurée", r["error"])
+        p = self._sedit(status=403, payload={"detail": "Scope manquant : effectifs:read"})
+        with p[0], p[1], p[2]:
+            r = self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()
+            self.assertEqual((r["ok"], r["status"]), (False, 403))
+            self.assertIn("effectifs:read", r["error"])
+        p = self._sedit(status=401, payload={})
+        with p[0], p[1], p[2]:
+            r = self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()
+            self.assertIn("Clé refusée", r["error"])
+        p = self._sedit(side_effect=sedit_rh.requests.ConnectionError("x"))
+        with p[0], p[1], p[2]:
+            r = self._call("POST", "/api/admin/sedit-rh/test", uid=1).get_json()
+            self.assertIn("injoignable", r["error"])
+            self.assertIsNotNone(r["latency_ms"])
+
+
+    # --- Sedit RH : matricules, organisation, création d'agents ---------------------------- #
+    @staticmethod
+    def _rh_agent(matricule, nom, prenom, d, s=None, sec=None, arrivee="2010-01-01", fonction="Agent"):
+        unit = lambda u: {"code": u[0], "libelle": u[1]} if u else {"code": None, "libelle": None}
+        return {"matricule": matricule, "nom": nom, "prenom": prenom, "statut": {"code": "TIT", "libelle": "Titulaire"},
+                "direction": unit(d), "service": unit(s), "secteur": unit(sec), "fonction": {"code": "1", "libelle": fonction},
+                "date_arrivee": arrivee, "date_depart": None, "en_poste": True}
+
+    def _rh_patches(self, agents, ad=None):
+        def fake_ad(query, limit=15):
+            return list((ad or {}).get(query.upper(), []))
+        return [mock.patch.object(sedit_rh, "all_agents", lambda force=False: agents),
+                mock.patch.object(apm, "configured", return_value=True),
+                mock.patch.object(apm, "ad_search", fake_ad)]
+
+    def test_rh_matricules_are_proposed_then_applied_only_when_certain(self):
+        fiche = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "ZZRAPPRO", "prenom": "UN", "email": "r@example.fr", "year": 2026, "owner_id": 3, "validator_id": 3}).get_json()
+        twin = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "ZZJUMEAU", "prenom": "UN", "email": "j@example.fr", "year": 2026, "owner_id": 3, "validator_id": 3}).get_json()
+        absent = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "ZZABSENT", "prenom": "UN", "email": "a@example.fr", "year": 2026, "owner_id": 3, "validator_id": 3}).get_json()
+        rh = [self._rh_agent("RHZ1", "ZZRappro", "Un", ("D1", "DIR TEST")),
+              self._rh_agent("RHZ2", "ZZJumeau", "Un", ("D1", "DIR TEST")),
+              self._rh_agent("RHZ3", "ZZJumeau", "Un", ("D1", "DIR TEST"))]
+        p = self._rh_patches(rh)
+        with p[0], p[1], p[2]:
+            body = self._call("GET", "/api/admin/rh/matricules", uid=1).get_json()
+            by_login = {i["login"]: i for i in body["items"]}
+            self.assertEqual(by_login[fiche["agent_login"]]["status"], "certain")
+            self.assertEqual(by_login[fiche["agent_login"]]["matricule"], "RHZ1")
+            self.assertEqual(by_login[twin["agent_login"]]["status"], "ambigu")           # homonymes : jamais proposé
+            self.assertEqual(by_login[absent["agent_login"]]["status"], "introuvable")
+            applied = self._call("POST", "/api/admin/rh/matricules/apply", uid=1, payload={"items": [
+                {"agent_user_id": fiche["agent_id"], "matricule": "RHZ1"},
+                {"agent_user_id": twin["agent_id"], "matricule": "INCONNU"}]}).get_json()
+            self.assertEqual(applied["applied"], 1)
+            self.assertEqual(len(applied["refused"]), 1)
+            again = self._call("POST", "/api/admin/rh/matricules/apply", uid=1, payload={"items": [
+                {"agent_user_id": fiche["agent_id"], "matricule": "RHZ1"}]}).get_json()
+            self.assertEqual(again["applied"], 0)                                           # déjà renseigné : rien d'écrasé
+            self.assertEqual(self._call("GET", "/api/admin/rh/matricules", uid=2).status_code, 403)
+        conn = db.get_db()
+        self.assertEqual(conn.execute("SELECT matricule FROM users WHERE id=?", (fiche["agent_id"],)).fetchone()["matricule"], "RHZ1")
+        self.assertEqual(conn.execute("SELECT matricule FROM agents WHERE id=?", (fiche["id"],)).fetchone()["matricule"], "RHZ1")
+        conn.close()
+
+    def test_rh_organisation_tree_merges_levels_and_flags_agents_already_in_app(self):
+        fiche = self._call("POST", "/api/agents", uid=1, payload={
+            "nom": "ZZARBRE", "prenom": "UN", "email": "t@example.fr", "year": 2026, "owner_id": 3, "validator_id": 3}).get_json()
+        rh = [self._rh_agent("ARB1", "ZZArbre", "Un", ("T1", "DIRECTION ARBRE"), ("T1S", "SERVICE ARBRE"), ("T1K", "SECTEUR ARBRE")),
+              self._rh_agent("ARB2", "ZZNouveau", "Deux", ("T1", "DIRECTION ARBRE"), ("T1S", "SERVICE ARBRE"), ("T1S", "SERVICE ARBRE")),
+              self._rh_agent("ARB3", "ZZSolo", "Trois", ("T2", "DIRECTION SOLO"), ("T2", "DIRECTION SOLO"), ("T2", "DIRECTION SOLO"))]
+        p = self._rh_patches(rh)
+        with p[0], p[1], p[2]:
+            tree = self._call("GET", "/api/admin/rh/organisation", uid=1).get_json()
+            self.assertEqual(self._call("GET", "/api/admin/rh/organisation", uid=4).status_code, 403)
+        d1 = [n for n in tree["tree"] if n["code"] == "T1"][0]
+        s1 = d1["children"][0]
+        self.assertEqual((d1["level"], s1["level"], s1["code"]), ("direction", "service", "T1S"))
+        self.assertEqual((d1["total"], d1["missing"]), (2, 1))
+        k1 = s1["children"][0]
+        self.assertEqual((k1["level"], k1["code"], len(k1["agents"])), ("secteur", "T1K", 1))
+        self.assertTrue(k1["agents"][0]["in_app"])                                           # ZZARBRE UN est dans l'application
+        self.assertEqual(k1["agents"][0]["login"], fiche["agent_login"])
+        self.assertEqual([a["matricule"] for a in s1["agents"]], ["ARB2"])                   # secteur identique au service : fusionné
+        d2 = [n for n in tree["tree"] if n["code"] == "T2"][0]
+        self.assertEqual((len(d2["children"]), [a["matricule"] for a in d2["agents"]]), (0, ["ARB3"]))  # service et secteur fusionnés
+
+    def test_rh_import_creates_accounts_units_and_agents_and_is_idempotent(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (login, nom, mot_de_passe, admin, role, parent_id, actif) "
+                     "VALUES ('SVC-EXIST','SERVICE IMPORT','x',0,'service',3,1) ON CONFLICT (login) DO NOTHING")
+        conn.commit()
+        service_id = conn.execute("SELECT id FROM users WHERE login='SVC-EXIST'").fetchone()["id"]
+        conn.close()
+        rh = [self._rh_agent("IMP1", "ZZImport", "Alice", ("I1", "DIRECTION IMPORT"), ("I1S", "SERVICE IMPORT"), ("I1K", "SECTEUR IMPORT")),
+              self._rh_agent("IMP2", "ZZImport", "Bob", ("I1", "DIRECTION IMPORT"), ("I1S", "SERVICE IMPORT")),
+              self._rh_agent("IMP3", "ZZSeul", "Carl", ("I2", "DIRECTION SEULE"), arrivee="2026-03-02")]
+        ad = {"ZZIMPORT": [{"username": "alice.zzimport", "displayName": "ZZIMPORT Alice", "email": "alice@ville.fr"},
+                           {"username": "bob.zzimport", "displayName": "ZZIMPORT Bob", "email": "bob@ville.fr"}],
+              "ZZSEUL": []}
+        payload = {"matricules": ["IMP1", "IMP2", "IMP3", "NOPE"], "year": 2026, "create_units": True, "use_ad": True}
+        p = self._rh_patches(rh, ad)
+        with p[0], p[1], p[2]:
+            preview = self._call("POST", "/api/admin/rh/import/preview", uid=1, payload=payload).get_json()
+            self.assertEqual(preview["counts"], {"a_creer": 3, "existe": 0, "ignore": 1})
+            self.assertEqual(sorted(u["libelle"] for u in preview["units_new"]),
+                             ["DIRECTION IMPORT", "DIRECTION SEULE", "SECTEUR IMPORT"])   # le service existe déjà
+            conn = db.get_db()
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS c FROM users WHERE matricule IN ('IMP1','IMP2','IMP3')").fetchone()["c"], 0)  # aperçu : rien d'écrit
+            conn.close()
+            done = self._call("POST", "/api/admin/rh/import", uid=1, payload=payload).get_json()
+            self.assertEqual((len(done["created"]), len(done["units_created"])), (3, 3))
+            again = self._call("POST", "/api/admin/rh/import", uid=1, payload=payload).get_json()
+            self.assertEqual((len(again["created"]), len(again["units_created"])), (0, 0))   # idempotent : déjà présents
+            self.assertEqual(self._call("POST", "/api/admin/rh/import", uid=2, payload=payload).status_code, 403)
+        conn = db.get_db()
+        users = {r["matricule"]: r for r in conn.execute(
+            "SELECT id, login, nom, email, ad_login, matricule, role, parent_id FROM users WHERE matricule IN ('IMP1','IMP2','IMP3')").fetchall()}
+        units = {r["nom"]: r for r in conn.execute(
+            "SELECT id, login, nom, role, parent_id FROM users WHERE nom IN ('DIRECTION IMPORT','SECTEUR IMPORT','DIRECTION SEULE')").fetchall()}
+        self.assertEqual(units["DIRECTION IMPORT"]["role"], "direction")
+        self.assertEqual((units["SECTEUR IMPORT"]["role"], units["SECTEUR IMPORT"]["parent_id"]), ("secteur", service_id))  # sous le service existant
+        self.assertTrue(units["DIRECTION IMPORT"]["login"].startswith("DIR-"))
+        self.assertEqual(users["IMP1"]["parent_id"], units["SECTEUR IMPORT"]["id"])      # propriétaire = niveau le plus bas
+        self.assertEqual(users["IMP2"]["parent_id"], service_id)                          # compte de service existant réutilisé
+        self.assertEqual(users["IMP3"]["parent_id"], units["DIRECTION SEULE"]["id"])
+        self.assertEqual((users["IMP1"]["email"], users["IMP1"]["ad_login"], users["IMP1"]["role"]), ("alice@ville.fr", "alice.zzimport", "agent"))
+        self.assertEqual(users["IMP3"]["email"], "")                                      # AD sans résultat : e-mail à renseigner
+        fiche = conn.execute("SELECT year, params, matricule FROM agents WHERE matricule='IMP3'").fetchone()
+        self.assertEqual(fiche["year"], 2026)
+        self.assertEqual(json.loads(fiche["params"])["date_arrivee"], "2026-03-02")      # date d'arrivée dans l'année de la fiche
+        self.assertNotIn("date_arrivee", {k for k, v in json.loads(conn.execute("SELECT params FROM agents WHERE matricule='IMP1'").fetchone()["params"]).items() if v})
+        audit = conn.execute("SELECT actor_login FROM user_audit WHERE comment='Création depuis Sedit RH' LIMIT 1").fetchone()
+        conn.close()
+        self.assertEqual(audit["actor_login"], "admin")
+
+    def test_rh_import_needs_an_owner_and_reports_sedit_errors(self):
+        rh = [self._rh_agent("OWN1", "ZZOwner", "Un", ("O1", "DIRECTION OWNER"))]
+        p = self._rh_patches(rh)
+        with p[0], p[1], p[2]:
+            base = {"matricules": ["OWN1"], "year": 2026, "use_ad": False}
+            none = self._call("POST", "/api/admin/rh/import/preview", uid=1, payload={**base, "create_units": False}).get_json()
+            self.assertEqual(none["counts"]["ignore"], 1)                                 # ni compte d'unité ni propriétaire
+            self.assertIn("propriétaire", none["items"][0]["reason"])
+            ok = self._call("POST", "/api/admin/rh/import", uid=1, payload={**base, "create_units": False, "default_owner_id": 3}).get_json()
+            self.assertEqual(len(ok["created"]), 1)
+            self.assertEqual(self._call("POST", "/api/admin/rh/import", uid=1, payload={"year": 2026, "matricules": []}).status_code, 400)
+            self.assertEqual(self._call("POST", "/api/admin/rh/import", uid=1, payload={"year": 1800, "matricules": ["X"]}).status_code, 400)
+        with mock.patch.object(sedit_rh, "all_agents", side_effect=sedit_rh.SeditError("API Sedit RH injoignable")):
+            resp = self._call("GET", "/api/admin/rh/organisation", uid=1)
+            self.assertEqual(resp.status_code, 502)
+            self.assertIn("injoignable", resp.get_json()["error"])
 
 
 if __name__ == "__main__":
