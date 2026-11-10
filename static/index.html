@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suivi des congés</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ============================ Écran de connexion ============================ -->
+<div id="view-login" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <h1>Suivi des congés</h1>
+    <p class="login-sub">Connectez-vous pour accéder à votre espace</p>
+    <label>Identifiant
+      <input type="text" id="login-user" autocomplete="username" required>
+    </label>
+    <label>Mot de passe
+      <input type="password" id="login-pass" autocomplete="current-password" required>
+    </label>
+    <div id="login-error" class="form-error hidden"></div>
+    <button type="submit" class="btn btn-primary btn-block">Se connecter</button>
+  </form>
+</div>
+
+<!-- ============================ Application ============================ -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand">📅 Suivi des congés</div>
+    <nav id="main-nav">
+      <a href="#/dashboard" data-nav="dashboard"><span id="nav-dashboard-label">Tableau de bord</span></a>
+      <a href="#/hr" data-nav="hr" id="nav-hr">Tableau de bord RH</a>
+      <a href="#/agents" data-nav="agents">Mes fiches</a>
+      <a href="#/requests" data-nav="requests"><span id="nav-requests-label">Demandes</span> <span id="req-badge" class="req-badge hidden"></span></a>
+      <a href="#/planning" data-nav="planning">Planning</a>
+      <a href="#/settings" data-nav="settings" id="nav-settings">Paramétrage</a>
+      <a href="#/users" data-nav="users" id="nav-users">Utilisateurs</a>
+    </nav>
+    <div class="topbar-right">
+      <select id="year-select" class="year-select" title="Année de travail"></select>
+      <span id="user-badge"></span>
+      <button id="btn-password" class="btn btn-ghost" title="Changer mon mot de passe">Mot de passe</button>
+      <button id="btn-logout" class="btn btn-ghost">Déconnexion</button>
+    </div>
+  </header>
+
+  <div id="tabbar" class="tabbar hidden"></div>
+  <div id="reminder-banner" class="reminder-banner hidden"></div>
+
+  <main id="content"></main>
+</div>
+
+<!-- Pop-up de choix de code -->
+<div id="code-picker" class="code-picker hidden">
+  <div class="code-picker-title" id="code-picker-title"></div>
+  <div id="code-picker-list" class="code-picker-list"></div>
+  <button id="code-picker-clear" class="btn btn-ghost btn-small">Effacer</button>
+</div>
+
+<!-- Modale de demande : commentaire et pièce jointe -->
+<div id="request-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Demande de congé</h3>
+    <p id="request-modal-summary" class="muted"></p>
+    <div id="request-error" class="form-error hidden"></div>
+    <label>Commentaire (facultatif)
+      <textarea id="request-comment" rows="3"></textarea>
+    </label>
+    <label>Pièce jointe (facultatif, 5 Mo maximum)
+      <input type="file" id="request-file" accept=".pdf,.png,.jpg,.jpeg,.gif,.doc,.docx,.xls,.xlsx,.odt,.ods,.txt">
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="request-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="request-submit">Envoyer la demande</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de validation / refus d'une demande -->
+<div id="decision-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3 id="decision-title">Valider la demande</h3>
+    <div id="decision-summary" class="decision-summary"></div>
+    <div id="decision-error" class="form-error hidden"></div>
+    <label id="decision-comment-label">Commentaire (facultatif)
+      <textarea id="decision-comment" rows="3"></textarea>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="decision-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="decision-submit">Valider</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de cassage d'un CA / RTT en heures -->
+<div id="cassage-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Casser un jour en heures</h3>
+    <p class="muted">Un jour cassé est retiré du solde CA ou RTT et crédite 7 heures sur le compteur correspondant.</p>
+    <div id="cassage-error" class="form-error hidden"></div>
+    <label>Jour à casser
+      <select id="cassage-code"></select>
+    </label>
+    <p id="cassage-info" class="muted"></p>
+    <label>Commentaire (facultatif)
+      <textarea id="cassage-comment" rows="2"></textarea>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="cassage-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="cassage-submit">Envoyer la demande</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de pose d'heures CAH / RTTH -->
+<div id="heures-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Poser des heures</h3>
+    <p class="muted">Les heures sont déduites du compteur CAH ou RTTH. Aucun maximum journalier n'est appliqué.</p>
+    <div id="heures-error" class="form-error hidden"></div>
+    <label>Compteur
+      <select id="heures-code"></select>
+    </label>
+    <div class="params-grid">
+      <label>Date
+        <input type="date" id="heures-date"></label>
+      <label>Heure de début
+        <input type="time" id="heures-start" step="900"></label>
+      <label>Heure de fin
+        <input type="time" id="heures-end" step="900"></label>
+    </div>
+    <p id="heures-duration" class="muted">Durée : —</p>
+    <label>Commentaire (facultatif)
+      <textarea id="heures-comment" rows="2"></textarea>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="heures-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="heures-submit">Envoyer la demande</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de déclaration d'heures de récupération -->
+<div id="recup-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Déclarer des heures de récupération</h3>
+    <p class="muted">Les heures validées seront disponibles 6 mois à compter de la date de réalisation.</p>
+    <div id="recup-error" class="form-error hidden"></div>
+    <div class="params-grid">
+      <label>Date de réalisation
+        <input type="date" id="recup-date"></label>
+      <label>Nombre d'heures
+        <input type="number" id="recup-hours" step="0.5" min="0.5"></label>
+    </div>
+    <label>Commentaire (facultatif)
+      <textarea id="recup-comment" rows="2"></textarea>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="recup-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="recup-submit">Envoyer la demande</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale du solde d'heures -->
+<div id="hours-detail-modal" class="modal hidden">
+  <div class="modal-card hours-detail-card">
+    <h3>Mon solde d'heures</h3>
+    <p class="muted">Déclarations, cassages et heures prises. Les dates d'échéance concernent les crédits d'heures.</p>
+    <div id="hours-detail-summary" class="hours-detail-summary"></div>
+    <div class="hours-detail-wrap">
+      <table class="data hours-detail-table">
+        <thead><tr><th>Date</th><th>Compteur</th><th>Type</th><th class="num">Heures</th><th>Échéance</th></tr></thead>
+        <tbody id="hours-detail-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="hours-detail-close">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de modification des heures posées -->
+<div id="hourly-edit-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Modifier les heures posées</h3>
+    <p class="muted">Seules les heures validées de la fiche peuvent être modifiées.</p>
+    <div id="hourly-edit-error" class="form-error hidden"></div>
+    <div class="params-grid">
+      <label>Compteur
+        <select id="hourly-edit-code">
+          <option value="CAH">CAH — Congés annuels en heures</option>
+          <option value="RTTH">RTTH — RTT en heures</option>
+          <option value="RCH">RCH — Récupération en heures</option>
+        </select></label>
+      <label>Date
+        <input type="date" id="hourly-edit-date"></label>
+      <label>Heure de début
+        <input type="time" id="hourly-edit-start" step="900"></label>
+      <label>Heure de fin
+        <input type="time" id="hourly-edit-end" step="900"></label>
+    </div>
+    <p id="hourly-edit-duration" class="muted">Durée : —</p>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="hourly-edit-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="hourly-edit-submit">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale du journal d'audit des comptes -->
+<div id="user-audit-modal" class="modal hidden">
+  <div class="modal-card user-audit-card">
+    <h3>Journal d'audit des comptes</h3>
+    <p class="muted">Dernières modifications de comptes : identifiant, rôle, responsable, mot de passe et activation.</p>
+    <div id="user-audit-error" class="form-error hidden"></div>
+    <div class="hours-detail-wrap">
+      <table class="data user-audit-table">
+        <thead><tr>
+          <th>Date</th><th>Compte</th><th>Action</th><th>Champ</th>
+          <th>Ancienne valeur</th><th>Nouvelle valeur</th><th>Par</th><th>Commentaire</th>
+        </tr></thead>
+        <tbody id="user-audit-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="user-audit-close">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de changement de propriétaire -->
+<div id="owner-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Changer le propriétaire</h3>
+    <p class="muted">Fiche de <b id="owner-fiche-name"></b></p>
+    <div id="owner-error" class="form-error hidden"></div>
+    <label>Nouveau propriétaire
+      <select id="owner-select"></select></label>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="owner-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="owner-submit">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de changement de mot de passe -->
+<div id="password-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Changer mon mot de passe</h3>
+    <p class="muted">Compte : <b id="password-login"></b></p>
+    <div id="password-error" class="form-error hidden"></div>
+    <label>Mot de passe actuel
+      <input type="password" id="password-current" autocomplete="current-password"></label>
+    <label>Nouveau mot de passe
+      <input type="password" id="password-new" autocomplete="new-password"></label>
+    <label>Confirmer le nouveau mot de passe
+      <input type="password" id="password-confirm" autocomplete="new-password"></label>
+    <p class="muted">8 caractères minimum.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="password-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="password-submit">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale de création d'une fiche + compte agent -->
+<div id="new-fiche-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>Nouvelle fiche agent</h3>
+    <p id="new-fiche-year" class="muted"></p>
+    <div id="new-fiche-error" class="form-error hidden"></div>
+    <div id="new-fiche-form">
+      <label>Nom <span class="req">*</span>
+        <input type="text" id="nf-nom" autocomplete="off"></label>
+      <label>Prénom <span class="req">*</span>
+        <input type="text" id="nf-prenom" autocomplete="off"></label>
+      <label>E-mail <span class="req">*</span>
+        <input type="email" id="nf-email"></label>
+      <label>Propriétaire de la fiche <span class="req">*</span>
+        <select id="nf-owner"></select></label>
+      <label>Compte valideur <span class="req">*</span>
+        <select id="nf-validator"></select></label>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="nf-cancel">Annuler</button>
+        <button type="button" class="btn btn-primary" id="nf-submit">Créer la fiche et le compte</button>
+      </div>
+    </div>
+    <div id="new-fiche-success" class="hidden">
+      <p>La fiche et le compte agent ont été créés.</p>
+      <p>Identifiant : <b id="nf-login"></b><br>Mot de passe : <b id="nf-password"></b></p>
+      <p class="muted">Communiquez ces informations à l'agent. Le valideur peut réinitialiser le mot de passe dans Utilisateurs.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="nf-open">Ouvrir la fiche</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

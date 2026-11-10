@@ -1,0 +1,32 @@
+# Bases de données et sauvegardes
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.bak
+*.bak-*
+backups/
+
+# Secrets et configuration locale
+.secret_key
+mail.json
+mail.log
+
+# Données sensibles
+migration-comptes-agents.csv
+comptes-utilisateurs.xlsx
+
+# Journaux
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Fichiers uploadés
+uploads/
+
+# Classeur source
+source/
+*.xlsx
