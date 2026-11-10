@@ -1,9 +1,6 @@
-.git
 .venv
-.pgtest
 .env
 .env.*
-!.env.example
 *.db
 *.db-*
 *.log
@@ -14,5 +11,3 @@ tests/
 __pycache__/
 *.pyc
 *.xlsx
-maquette-*.html
-GUIDE_NOUVELLE_APP_VILLE.md

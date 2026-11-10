@@ -1,0 +1,22 @@
+# Suivi des congés — frontend de la DMZ (port 8112).
+#
+# À déployer sur l'hôte de la DMZ, SANS le backend ni la base : seul ce conteneur nginx y vit.
+# Il relaie les appels /api vers le backend interne (BACKEND_URL, port 8110), qu'il faut ouvrir par
+# pare-feu à cette seule machine (et publier côté interne : BACK_BIND=0.0.0.0 ou l'adresse interne).
+#
+#   BACKEND_URL=http://<adresse interne du backend>:8110 docker-compose -f docker-compose.dmz.yml up -d --build
+#
+# Routes bloquées depuis la DMZ : voir frontend/nginx.dmz.conf.template.
+# Le HTTPS est assuré par le reverse-proxy de la Ville devant ce conteneur ; le backend doit être
+# lancé avec CONGES_PROXY_HOPS=2 (nginx DMZ + proxy de la Ville), ou 3 si le frontend interne s'ajoute.
+services:
+  frontend-dmz:
+    build:
+      context: ./frontend
+      args:
+        NGINX_TEMPLATE: nginx.dmz.conf.template
+    restart: always
+    environment:
+      - BACKEND_URL=${BACKEND_URL:?Définir BACKEND_URL (adresse interne du backend, port 8110)}
+    ports:
+      - "${DMZ_FRONT_PORT:-8112}:80"

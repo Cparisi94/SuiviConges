@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Application Flask — Suivi des congés 2027.
 
-API JSON + service du frontend SPA (static/).
+API JSON + service du frontend SPA (frontend/public/, développement seulement).
 """
 import datetime as dt
 import json
@@ -38,7 +38,7 @@ ALLOWED_ATTACHMENT_EXT = {
     ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".txt",
 }
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__, static_folder=config.FRONTEND_DIR, static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 # Paramètres par défaut (avant tout import Excel)
@@ -3458,6 +3458,8 @@ def validators_list():
 # --------------------------------------------------------------------------- #
 @app.route("/")
 def index():
+    if not os.path.isfile(os.path.join(app.static_folder, "index.html")):
+        return jsonify({"error": "Frontend non servi par ce conteneur (voir le conteneur frontend)"}), 404
     return send_from_directory(app.static_folder, "index.html")
 
 

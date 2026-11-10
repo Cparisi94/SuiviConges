@@ -3,15 +3,14 @@
 #   cp .env.example .env     # puis renseigner CONGES_SECRET_KEY, POSTGRES_*, APM_API_KEY…
 #   docker-compose up -d --build
 #
-# Ports : backend 8110, frontend (réseau interne) 8111, futur frontend DMZ 8112.
+# Ports : backend 8110, frontend (réseau interne) 8111, frontend DMZ 8112 (docker-compose.dmz.yml).
 # Le backend est publié sur 8110 pour que le futur frontend de la DMZ puisse le joindre : à limiter par
 # pare-feu à l'adresse du frontend DMZ (BACK_BIND=127.0.0.1 tant qu'il n'y a pas de frontend distant).
 # Le HTTPS est assuré par le reverse-proxy de la Ville devant les frontends.
 services:
   backend:
     build:
-      context: .
-      dockerfile: docker/backend.Dockerfile
+      context: ./backend
     restart: always
     env_file: .env
     environment:
@@ -26,8 +25,7 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: docker/frontend.Dockerfile
+      context: ./frontend
     restart: always
     environment:
       - BACKEND_URL=${BACKEND_URL:-http://backend:8110}
@@ -36,17 +34,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-
-  # Futur frontend de la DMZ (port 8112) : même image, à déployer sur l'hôte de la DMZ avec
-  # BACKEND_URL=http://<adresse interne du backend>:8110 (et non sur ce docker-compose).
-  #
-  # frontend-dmz:
-  #   build: {context: ., dockerfile: docker/frontend.Dockerfile}
-  #   restart: always
-  #   environment:
-  #     - BACKEND_URL=http://<adresse-interne-backend>:8110
-  #   ports:
-  #     - "${DMZ_FRONT_PORT:-8112}:80"
 
 volumes:
   conges_data:

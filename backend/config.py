@@ -8,7 +8,8 @@ Voir `.env.example` pour la liste documentée.
 """
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))        # backend/
+ROOT_DIR = os.path.dirname(BASE_DIR)                          # racine du dépôt
 
 
 def _load_dotenv(path):
@@ -31,6 +32,8 @@ def _load_dotenv(path):
         os.environ.setdefault(key.strip(), value)
 
 
+# .env à la racine du dépôt (partagé avec docker-compose) ; un .env dans backend/ reste accepté.
+_load_dotenv(os.path.join(ROOT_DIR, ".env"))
 _load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 
@@ -63,7 +66,9 @@ AUTH_MODE = os.environ.get("CONGES_AUTH_MODE", "local").strip().lower()
 
 # --- Stockage ------------------------------------------------------------- #
 # Ancienne base SQLite : lue uniquement par le script de transfert (migrate_sqlite_to_pg.py).
-SQLITE_PATH = _path("CONGES_SQLITE_PATH", "suivi-conges.db")
+SQLITE_PATH = _path("CONGES_SQLITE_PATH", os.path.join(ROOT_DIR, "suivi-conges.db"))
+# Frontend servi par Flask en développement seulement (en Docker, c'est nginx qui le sert).
+FRONTEND_DIR = _path("CONGES_FRONTEND_DIR", os.path.join(ROOT_DIR, "frontend", "public"))
 UPLOAD_DIR = _path("CONGES_UPLOAD_DIR", os.path.join("uploads", "requests"))
 SECRET_FILE = _path("CONGES_SECRET_FILE", ".secret_key")
 

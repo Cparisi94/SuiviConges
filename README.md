@@ -15,20 +15,32 @@ cp .env.example .env        # renseigner CONGES_SECRET_KEY, POSTGRES_*, APM_API_
 docker-compose up -d --build
 ```
 
-L'application est servie par le frontend (nginx) sur `FRONT_PORT` (8111 par défaut ; futur frontend DMZ : 8112) ; le backend
-(gunicorn, port 8110) n'est publié que sur la machine locale tant qu'aucun frontend DMZ ne doit le joindre. Le HTTPS est assuré par le reverse-proxy de la Ville devant le frontend.
-Vérification : `GET /api/status`. Documentation de l'API : `/api-docs`.
+Ports : **backend 8110**, **frontend interne 8111**, **frontend DMZ 8112**. L'application est servie
+par le frontend (nginx, `FRONT_PORT`) ; le backend (gunicorn) n'est publié que sur la machine locale
+(`BACK_BIND`) tant qu'aucun frontend DMZ ne doit le joindre. Le HTTPS est assuré par le reverse-proxy
+de la Ville devant les frontends. Vérification : `GET /api/status`. Documentation de l'API : `/api-docs`.
+
+**Frontend de la DMZ** (hôte de la DMZ, sans backend ni base) :
+
+```bash
+BACKEND_URL=http://<adresse interne du backend>:8110 docker-compose -f docker-compose.dmz.yml up -d --build
+```
+
+Il relaie vers le backend interne uniquement les routes utiles aux agents ; l'API `/api/v1`, la
+documentation Swagger, l'état détaillé et « se connecter en tant que » restent réservés au réseau
+interne (`frontend/nginx.dmz.conf.template`).
 
 **Poste de développement** (Python 3.12+) :
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt     # Linux : .venv/bin/pip
-.venv/Scripts/python app.py                       # http://127.0.0.1:8110
+.venv/Scripts/pip install -r backend/requirements.txt     # Linux : .venv/bin/pip
+cd backend
+../.venv/Scripts/python app.py                            # http://127.0.0.1:8110 (sert aussi le frontend)
 ```
 
-Les données sont dans le PostgreSQL de la Ville, schéma `conges` (accès dans `.env`, voir
-`.env.example`). Les migrations de `migrations/` sont appliquées au démarrage. Au tout premier
+Les données sont dans le PostgreSQL de la Ville, schéma `conges` (accès dans `.env` à la racine, voir
+`.env.example`). Les migrations de `backend/migrations/` sont appliquées au démarrage. Au tout premier
 démarrage sur un schéma vide, un compte `admin` est créé avec le mot de passe de
 `CONGES_INITIAL_ADMIN_PASSWORD`, ou un mot de passe aléatoire affiché une seule fois dans la
 console. `CONGES_AUTH_MODE=ad` active la connexion par l'Active Directory (via l'API centrale APM).
@@ -113,7 +125,8 @@ Chaque fiche agent contient :
 ## Tests
 
 ```bash
-.venv/Scripts/python -m unittest discover -s tests
+cd backend
+../.venv/Scripts/python -m unittest discover -s tests
 ```
 
 Les tests utilisent un schéma PostgreSQL temporaire (créé puis supprimé) : les données réelles ne
@@ -123,21 +136,27 @@ les mails (APM simulée), les clés API et le « se connecter en tant que ».
 ## Architecture
 
 ```
-app.py              Application Flask (API interne JSON + service du frontend en développement)
-wsgi.py             Point d'entrée gunicorn (migrations, compte initial, tâches de fond)
-config.py           Configuration : variables d'environnement / .env
-pg_db.py, db.py     Accès PostgreSQL (pool, schéma dédié, migrations) et helpers
-migrations/         Migrations SQL numérotées (0001_…)
-rules.py            Moteur de calcul — formules du classeur Excel (droits, prorata, déductions…)
-apm.py              Client unique de l'API centrale APM (AD, mail)
-mailer.py           Notifications aux valideurs (via l'APM)  ·  reminders.py : relances
-api_v1.py           API publique /api/v1 (lecture seule) + /api/status
-api_keys.py         Clés API (périmètres, IP, expiration, journal) + administration
-act_as.py           « Se connecter en tant que » (administrateurs)
-openapi_spec.py     Description OpenAPI + Swagger UI (/api-docs)
-static/             Frontend (HTML/CSS/JS sans dépendance) — servi par nginx en Docker
-docker/             Dockerfiles backend et frontend, configuration nginx
-docker-compose.yml  Déploiement (backend + frontend)
+backend/                    API Flask (Python), image Docker `backend/Dockerfile`
+  app.py                    Application Flask (API interne JSON ; sert le frontend en développement)
+  wsgi.py                   Point d'entrée gunicorn (migrations, compte initial, tâches de fond)
+  config.py                 Configuration : variables d'environnement / .env
+  pg_db.py, db.py           Accès PostgreSQL (pool, schéma dédié, migrations) et helpers
+  migrations/               Migrations SQL numérotées (0001_…)
+  rules.py                  Moteur de calcul — formules du classeur Excel (droits, prorata, déductions…)
+  apm.py                    Client unique de l'API centrale APM (AD, mail)
+  mailer.py, reminders.py   Notifications aux valideurs (via l'APM) et relances
+  api_v1.py                 API publique /api/v1 (lecture seule) + /api/status
+  api_keys.py               Clés API (périmètres, IP, expiration, journal) + administration
+  act_as.py                 « Se connecter en tant que » (administrateurs)
+  openapi_spec.py           Description OpenAPI + Swagger UI (/api-docs)
+  tests/                    Tests automatiques
+frontend/                   Interface (HTML/CSS/JS sans dépendance) + nginx, image `frontend/Dockerfile`
+  public/                   Fichiers servis aux navigateurs
+  nginx.conf.template       Configuration du frontend interne (port 8111)
+  nginx.dmz.conf.template   Configuration du frontend DMZ (port 8112), routes internes bloquées
+docker-compose.yml          Déploiement interne (backend 8110 + frontend 8111)
+docker-compose.dmz.yml      Déploiement du frontend DMZ (8112)
+.env / .env.example         Configuration (à la racine, lue par docker-compose et par l'application)
 ```
 
 ## Écarts documentés par rapport au classeur

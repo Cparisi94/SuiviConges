@@ -272,7 +272,29 @@ nécessaire (surtout le relais nginx, les cookies derrière HTTPS et l'adresse r
 **Points d'attention restants**
 - Les anciens lanceurs `serve.py` et `demarrer-prototype.vbs` (serveur de développement ouvert sur tout le
   réseau) sont obsolètes et ne doivent plus être utilisés ; ils pourront être supprimés.
-- La séparation en dossiers `backend/` et `frontend/` du guide n'a pas été faite (le code reste à plat,
-  les Dockerfiles sont dans `docker/`) pour ne pas déplacer tous les fichiers.
 - Le guide demande Node/Express et React/TypeScript : le backend reste en Python/Flask et le frontend en
   JavaScript simple. Cette réécriture n'a pas été entreprise (voir le plan initial, option 2).
+
+## Complément — Arborescence `backend/` / `frontend/` et frontend DMZ (fait)
+
+**Ce qui a changé**
+- Le dépôt suit désormais l'organisation du guide : un dossier **`backend/`** (l'application Python, ses
+  migrations, ses tests et son Dockerfile) et un dossier **`frontend/`** (les écrans, la configuration nginx et
+  son Dockerfile). Les fichiers ont été déplacés avec Git (l'historique est conservé) et le code lui-même
+  n'a pas été modifié ; le fichier de configuration `.env` reste à la racine.
+- **Frontend DMZ (port 8112)** : même application, déployable seule sur l'hôte de la DMZ
+  (`docker-compose.dmz.yml`), qui relaie vers le backend interne (port 8110). Sa configuration nginx est
+  plus restrictive : 5 tentatives de connexion par minute et par adresse, et les routes réservées à l'interne
+  sont **invisibles depuis la DMZ** : API `/api/v1` (dont l'administration des clés), documentation Swagger,
+  état détaillé, et « se connecter en tant que ».
+- Le conteneur backend ne contient plus les écrans : seul le frontend les sert.
+
+**Pourquoi**
+Respecter l'organisation du guide, et pouvoir déployer le frontend seul en DMZ sans y exposer ni le code
+du backend ni les fonctions d'administration sensibles.
+
+**À valider**
+La liste des routes bloquées depuis la DMZ est une proposition prudente : la DRH et la DSI peuvent décider
+d'en ouvrir certaines. Le backend devra être joignable depuis l'hôte de la DMZ (port 8110, par pare-feu) et
+démarré avec `CONGES_PROXY_HOPS=2` pour connaître la vraie adresse des clients.
+**Non vérifié** : comme pour l'étape 6, aucune image n'a pu être construite (Docker absent de ce poste).

@@ -1,4 +1,4 @@
-# Backend : API Flask servie par gunicorn. Contexte de build : la racine du dépôt.
+# Backend : API Flask servie par gunicorn. Contexte de build : backend/.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt "gunicorn>=22,<24"
 
 COPY *.py ./
 COPY migrations ./migrations
-COPY static ./static
 
 # Compte non privilégié ; les pièces jointes vivent dans un volume dédié (/data), hors du code.
 RUN useradd --system --uid 10001 conges \
