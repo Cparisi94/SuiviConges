@@ -5479,8 +5479,12 @@ async function viewMyAgents() {
       <div class="ma-cards">${g.members.map((m) => cardHtml(m, false, g.label)).join("")}</div>
     </div>`;
   };
+  // Le report ne propose que l'année suivant l'année en cours (2027 en 2026) et seulement pour les personnes qui n'ont pas encore cette fiche :
+  // sur une autre année affichée (ex. 2027), rien n'est proposé (pas de 2028).
   const dupIds = [];
-  Object.values(people).forEach((n) => { if (n.fiche && n.fiche.complete && !n.fiche.next_exists) dupIds.push(n.fiche.id); });
+  if (state.year === new Date().getFullYear()) {
+    Object.values(people).forEach((n) => { if (n.fiche && n.fiche.complete && !n.fiche.next_exists) dupIds.push(n.fiche.id); });
+  }
 
   c.innerHTML = `
     <div class="page-head"><h1>Mon équipe</h1>

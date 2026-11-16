@@ -845,3 +845,9 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **API Ville (APM) : routes d'agenda ajoutées** (projet `C:\dev\APM`, `backend/routes/proxy.js`) : `POST /api/v1/o365/calendar/events` et `DELETE /api/v1/o365/calendar/events/{id}?mailbox=…`, avec une nouvelle permission **« Agenda O365 (événements) »** (`o365_calendar`) à cocher sur l'application « Suivi des congés ». La boîte (`mailbox`) est obligatoire (on n'écrit jamais dans la boîte de collecte par défaut) et seuls les champs titre, horaires, disponibilité, confidentialité, rappel et catégories sont transmis à Microsoft. Elles utilisent l'application Microsoft déjà configurée dans l'APM ; **elle doit avoir le droit d'application `Calendars.ReadWrite`** (AppDSI ne lit que les agendas). 4 tests dans `backend/tests/o365-calendar.test.js` avec Microsoft simulé. **À faire** : déployer l'APM (reconstruire son image), puis cocher la permission sur l'application dans l'APM ; le module Exchange détecte la route et active la carte « Agenda Outlook ».
 
 **Vérifications** : 110 tests pour Suivi des congés (cache en base simulée et réelle, recalcul en arrière-plan, panne de Sedit RH, redémarrage) et 4 pour l'APM ; **jamais essayé avec un vrai agenda Outlook ni sur l'APM déployée**.
+
+## Version 0.17.4 — Report des périodes : seulement l'année suivante
+
+**Ce qui a changé** : en affichant l'année 2027, Mon équipe proposait « Reporter les périodes en 2028 (12) ». Le bouton n'est plus proposé que pour **l'année qui suit l'année en cours** (2027 en 2026) et **uniquement pour les personnes qui n'ont pas encore cette fiche** ; quand une autre année est affichée, il disparaît. En janvier 2027, il proposera 2028.
+
+**Vérifications** : syntaxe de l'interface contrôlée ; non essayé à l'écran (aucun test automatique : c'est de l'affichage).

@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.4 — 2026-11-17 — Report des périodes : seulement l'année suivante
+
+- Mon équipe : le bouton « Reporter les périodes en … » ne propose plus que l'année qui suit l'année en cours (2027 en 2026), et seulement pour les personnes qui n'ont pas encore cette fiche ; quand une autre année est affichée (par exemple 2027), il disparaît au lieu de proposer 2028.
+
 ## 0.17.3 — 2026-11-16 — Solde de CET en cache, agenda Outlook via l'API Ville
 
 - Solde de CET : chaque solde lu dans Sedit RH est conservé en base (il survit aux redémarrages) ; la page le reçoit tout de suite et, s'il a plus de 10 minutes, il est recalculé en arrière-plan sans faire attendre ni échouer si Sedit RH est en panne.

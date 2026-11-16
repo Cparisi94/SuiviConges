@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.3"
+VERSION = "0.17.4"
 
 VERSIONS = [
+    {
+        "version": "0.17.4",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Report des périodes : seulement l'année suivante",
+        "items": [
+            "Mon équipe : le bouton « Reporter les périodes en … » ne propose plus que l'année qui suit l'année en cours (2027 en 2026), et seulement pour les personnes qui n'ont pas encore cette fiche ; quand une autre année est affichée (par exemple 2027), il disparaît au lieu de proposer 2028.",
+        ],
+    },
     {
         "version": "0.17.3",
         "date": "2026-11-16",
