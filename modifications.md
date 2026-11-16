@@ -817,3 +817,9 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Choix à confirmer** : titre « Télétravail » pour les jours de télétravail (vous aviez demandé uniquement le mode « Travaille ailleurs ») ; horaires des demi-journées ; événements marqués « privés » ; les absences retenues sont celles du taux d'absence (y compris temps partiel TP et récupération d'heures RCH).
 
 **Vérifications** : 105 tests automatiques (calcul des événements, journée, demi-journée, télétravail, création, mise à jour, suppression, panne, désactivation, jeton et nouvelles tentatives, routes) avec un Microsoft Graph **simulé**. **Non essayé avec un vrai agenda Outlook** : aucun identifiant Graph n'est disponible ici.
+
+## Version 0.17.1 — Ma synthèse pour tous
+
+**Ce qui a changé** : seuls les agents avaient « Ma synthèse ». Les **valideurs et les administrateurs** ont maintenant, eux aussi, l'entrée **« Ma synthèse »** dans le menu : leurs propres soldes (CA, RTT, CET…), leurs demandes récentes, leurs heures et la carte « Agenda Outlook ». Leur « Tableau de bord » reste celui de leur équipe. Si la personne n'a pas de fiche de congés pour l'année, la page l'indique.
+
+**Vérifications** : test des routes inchangé (105 tests passent) ; vérification à l'écran : voir ci-dessous.

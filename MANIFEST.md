@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.17.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.17.1 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -771,6 +771,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.17.1** | 2026-11-16 | Ma synthèse pour tous (valideurs et administrateurs : entrée « Ma synthèse », route `#/synthese`). |
 | **0.17.0** | 2026-11-16 | Module exchange : absences dans l'agenda Outlook. |
 | **0.16.0** | 2026-11-16 | Mon équipe : valideur, unité entière, progression ; identifiants AD ; directeur rattaché à sa direction ; connexion par l'identifiant AD. |
 | **0.15.0** | 2026-11-16 | Utilisateurs : tableau compact (case Admin en colonne, pas de mot de passe en mode AD) et suppression multiple. |

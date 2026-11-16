@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.17.0.
+> Dernière mise à jour : version 0.17.1.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -116,7 +116,7 @@
 
 ## 8. Tableaux de bord et planning
 
-- **Agent** : sa synthèse et l'accès à sa fiche. **Valideur** : une ligne par fiche du périmètre, regroupée par responsable. **RH** (tableau de bord **réservé aux comptes administrateurs** : ni les valideurs ni les agents ne le voient, et l'API le refuse) : taux d'absence (jours d'absence ÷ capacité de travail) global, par direction / service et en arbre ; demandes en retard (plus de 3 jours) ; RCH proches de l'expiration.
+- **Agent** : sa synthèse et l'accès à sa fiche. **Tous les profils** (valideur, administrateur comme agent) disposent de « **Ma synthèse** » : leurs propres soldes, demandes et heures (la synthèse de l'équipe reste le « Tableau de bord »). **Valideur** : une ligne par fiche du périmètre, regroupée par responsable. **RH** (tableau de bord **réservé aux comptes administrateurs** : ni les valideurs ni les agents ne le voient, et l'API le refuse) : taux d'absence (jours d'absence ÷ capacité de travail) global, par direction / service et en arbre ; demandes en retard (plus de 3 jours) ; RCH proches de l'expiration.
 - Dans l'arbre du tableau de bord RH, chaque groupe porte le **nom de l'entité** (et non celui du valideur) ; le **responsable** de l'entité est en premier, les entités de même nom sont regroupées.
 - **Planning mensuel** : absences jour par jour (les jours **non validés**, d'une demande en attente, en couleur éclaircie et **pointillé**, comme dans la fiche), week-ends, jours fériés, vacances scolaires, totaux par agent ; limité au périmètre ; les agents voient leur équipe avec les **motifs masqués** (présence / absence seulement) ; un encadrant voit la **raison** pour son équipe et sa propre fiche, et la **disponibilité** (présence / absence) de ses encadrants, regroupés en tête.
 

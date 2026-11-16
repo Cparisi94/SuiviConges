@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.1 — 2026-11-16 — Ma synthèse pour tous
+
+- Les valideurs et les administrateurs ont maintenant, eux aussi, l'entrée « Ma synthèse » dans le menu : leurs propres soldes, demandes récentes et heures, avec la carte « Agenda Outlook » ; leur « Tableau de bord » reste celui de leur équipe.
+
 ## 0.17.0 — 2026-11-16 — Module exchange : absences dans l'agenda Outlook
 
 - Nouveau module « exchange » : dans « Ma synthèse », une case permet de synchroniser automatiquement vos absences avec votre agenda Outlook (via Microsoft Graph). Chaque jour d'absence est indiqué « ABSENT » dans l'agenda, sans autre texte ; une demi-journée donne un événement sur le matin ou l'après-midi.

@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.0"
+VERSION = "0.17.1"
 
 VERSIONS = [
+    {
+        "version": "0.17.1",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Ma synthèse pour tous",
+        "items": [
+            "Les valideurs et les administrateurs ont maintenant, eux aussi, l'entrée « Ma synthèse » dans le menu : leurs propres soldes, demandes récentes et heures, avec la carte « Agenda Outlook » ; leur « Tableau de bord » reste celui de leur équipe.",
+        ],
+    },
     {
         "version": "0.17.0",
         "date": "2026-11-16",

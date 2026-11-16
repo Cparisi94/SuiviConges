@@ -374,6 +374,8 @@ function showApp() {
   if (requestsLabel) requestsLabel.textContent = isAgent ? "Mes demandes" : "Demandes";
   const agentsNav = document.querySelector('#main-nav a[data-nav="agents"]');
   if (agentsNav) { agentsNav.textContent = "Mes fiches"; agentsNav.classList.toggle("hidden", isAgent); }   // l'agent passe par « Mes congés »
+  const syntheseNav = $("#nav-synthese");
+  if (syntheseNav) syntheseNav.classList.toggle("hidden", isAgent);          // l'agent l'a déjà : c'est son « Tableau de bord »
   const hrNav = $("#nav-hr");
   if (hrNav) hrNav.classList.toggle("hidden", !isAdmin);                 // tableau de bord RH : comptes administrateurs uniquement
   if (isAgent) state.planningFilter = "all";
@@ -680,6 +682,7 @@ async function route() {
   persistTabs();
   renderTabs();
   if (hash.startsWith("#/my-leave")) return viewMyLeave();
+  if (hash.startsWith("#/synthese")) return viewAgentDashboard();          // « Ma synthèse » pour tous : agent, valideur ou administrateur
   if (hash.startsWith("#/delegation")) return viewDelegation();
   if (hash.startsWith("#/my-agents")) return viewMyAgents();
   if (hash.startsWith("#/agents")) { location.hash = "#/my-agents"; return; }   // « Mes fiches » est fusionné dans « Mon équipe »
@@ -706,8 +709,16 @@ async function viewAgentDashboard() {
   const c = $("#content");
   c.innerHTML = `<h1>Ma synthèse ${state.year || ""}</h1><p>Chargement.</p>`;
   try {
-    const agents = await api("/api/agents?year=" + state.year);
-    if (!agents || !agents.length) {
+    // Un agent a sa fiche dans la liste de ses fiches ; un valideur ou un administrateur y trouve celles de son équipe : sa propre fiche vient de « Mes congés ».
+    let ficheId = null;
+    if (userRole(state.user) === "agent") {
+      const agents = await api("/api/agents?year=" + state.year);
+      ficheId = agents && agents.length ? agents[0].id : null;
+    } else {
+      const mine = await api("/api/my-leave?year=" + encodeURIComponent(state.year));
+      ficheId = mine && mine.fiche_id ? mine.fiche_id : null;
+    }
+    if (!ficheId) {
       c.innerHTML = `
         <h1>Ma synthèse ${state.year || ""}</h1>
         <div class="card">
@@ -716,7 +727,7 @@ async function viewAgentDashboard() {
         </div>`;
       return;
     }
-    const f = await api("/api/agents/" + agents[0].id);
+    const f = await api("/api/agents/" + ficheId);
     const [calc, requests, validators] = await Promise.all([
       api("/api/compute", {
         method: "POST",
