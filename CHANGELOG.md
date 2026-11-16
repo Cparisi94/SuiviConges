@@ -13,6 +13,11 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.15.0 — 2026-11-16 — Utilisateurs : tableau compact et suppression multiple
+
+- Utilisateurs : le tableau est plus compact (lignes moins hautes) ; la case « Admin » devient une colonne à part ; la colonne « Mot de passe » disparaît quand la connexion se fait par l'Active Directory.
+- Utilisateurs : sélection multiple (une case par ligne, « tout sélectionner » pour la page affichée) et bouton « Supprimer la sélection », avec une confirmation qui liste les personnes ; chaque suppression suit les mêmes règles que la suppression à l'unité (périmètre, jamais son propre compte).
+
 ## 0.14.4 — 2026-11-16 — Tableau de bord RH réservé aux administrateurs
 
 - Le Tableau de bord RH n'est plus accessible qu'aux comptes administrateurs : l'entrée de menu est masquée pour les valideurs et les agents, et l'accès direct par l'adresse (#/hr) ou par l'API est refusé.

@@ -4753,20 +4753,21 @@ async function viewUsers() {
     const self = u.id === state.user.id;
     const lockRole = !isAdmin || self;
     const group = role !== lastRole
-      ? `<tr class="role-group" data-role="${role}"><td colspan="11">${esc(PROFIL_LABELS[role] || role)}</td></tr>`
+      ? `<tr class="role-group" data-role="${role}"><td colspan="${adMode ? 12 : 13}">${esc(PROFIL_LABELS[role] || role)}</td></tr>`
       : "";
     lastRole = role;
     const unitTitle = u.validator_unit_code ? `Validé par : ${unitLabel(u.validator_unit_code)}` : "";
     return group + `
       <tr data-id="${u.id}" data-role="${role}" data-admin="${u.admin ? 1 : 0}" data-level="${esc(level)}" data-login="${esc(u.login)}" data-nom="${esc(u.nom)}" data-email="${esc(u.email || "")}" data-actif="${u.actif ? 1 : 0}">
+        <td class="col-sel">${canManageUsers() && !self ? '<input type="checkbox" data-f="sel" aria-label="Sélectionner cet utilisateur">' : ""}</td>
         <td>${isAdmin ? `<input data-f="login" value="${esc(u.login)}">` : esc(u.login)}</td>
         <td><input data-f="ad_login" value="${esc(u.ad_login || "")}" placeholder="(identique)"></td>
         <td><input data-f="matricule" value="${esc(u.matricule || "")}" maxlength="20"></td>
         <td><input data-f="nom" value="${esc(u.nom)}"></td>
         <td><input data-f="email" type="email" value="${esc(u.email || "")}"></td>
-        <td>${adMode && role !== "administrateur" ? '<span class="muted" title="Mot de passe de l\'Active Directory">AD</span>' : '<input data-f="password" type="password" placeholder="(inchangé)">'}</td>
-        <td><select data-f="role" ${lockRole ? "disabled" : ""}>${roleOptions(role)}</select>
-          <label class="admin-flag" title="Droit d'administration, en plus du rôle"><input type="checkbox" data-f="admin" ${u.admin ? "checked" : ""} ${lockRole ? "disabled" : ""}> Admin</label></td>
+        ${adMode ? "" : '<td><input data-f="password" type="password" placeholder="(inchangé)"></td>'}
+        <td><select data-f="role" ${lockRole ? "disabled" : ""}>${roleOptions(role)}</select></td>
+        <td class="col-admin" title="Droit d'administration, en plus du rôle"><input type="checkbox" data-f="admin" ${u.admin ? "checked" : ""} ${lockRole ? "disabled" : ""}></td>
         <td class="muted" title="${esc(unitTitle)}">${esc(u.unit_code ? unitLabel(u.unit_code) : "—")}</td>
         <td><select data-f="parent_id" ${lockRole || level === "administrateur" ? "disabled" : ""}>${parentOptions(level, u.parent_id, u.id, true)}</select></td>
         <td><input type="checkbox" data-f="actif" ${u.actif ? "checked" : ""} ${self ? "disabled" : ""}></td>
@@ -4840,14 +4841,19 @@ async function viewUsers() {
         <option value="100">100 par page</option>
       </select>
     </div>
+    <div id="users-bulk" class="users-bulk hidden">
+      <span id="users-bulk-count"></span>
+      <button type="button" class="btn btn-small btn-danger" id="users-bulk-del">Supprimer la sélection</button>
+      <button type="button" class="btn btn-small" id="users-bulk-clear">Désélectionner</button>
+    </div>
     <table class="data users-table">
       <colgroup>
-        <col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:10%"><col style="width:11%"><col style="width:6%">
-        <col style="width:9%"><col style="width:13%"><col style="width:13%"><col style="width:4%"><col style="width:13%">
+        <col style="width:3%"><col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:11%"><col style="width:12%">${adMode ? "" : '<col style="width:6%">'}
+        <col style="width:8%"><col style="width:4%"><col style="width:12%"><col style="width:12%"><col style="width:4%"><col style="width:12%">
       </colgroup>
       <thead><tr>
-        <th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Matricule</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
-        <th>Rôle</th><th title="Unité d'affectation (Sedit RH)">Unité</th><th>Responsable</th><th>Actif</th><th>Actions</th>
+        <th class="col-sel">${canManageUsers() ? '<input type="checkbox" id="users-sel-all" title="Tout sélectionner (page affichée)" aria-label="Tout sélectionner">' : ""}</th><th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Matricule</th><th>Nom</th><th>E-mail</th>${adMode ? "" : "<th>Mot de passe</th>"}
+        <th>Rôle</th><th title="Droit d'administration, en plus du rôle">Admin</th><th title="Unité d'affectation (Sedit RH)">Unité</th><th>Responsable</th><th>Actif</th><th>Actions</th>
       </tr></thead>
       <tbody id="users-table-body">
         ${rowsHtml}
@@ -4862,6 +4868,17 @@ async function viewUsers() {
       </div>
     </div>`;
 
+  // Sélection multiple : seules les lignes affichées (page courante) peuvent être sélectionnées
+  const selectableRows = () => [...document.querySelectorAll("#users-table-body tr[data-id]")].filter((r) => r.style.display !== "none" && r.querySelector('[data-f="sel"]'));
+  const selectedRows = () => selectableRows().filter((r) => r.querySelector('[data-f="sel"]').checked);
+  const updateBulk = () => {
+    const n = selectedRows().length, bar = $("#users-bulk");
+    if (!bar) return;
+    bar.classList.toggle("hidden", n === 0);
+    $("#users-bulk-count").textContent = `${n} utilisateur(s) sélectionné(s)`;
+    const all = $("#users-sel-all"), total = selectableRows().length;
+    if (all) { all.checked = total > 0 && n === total; all.indeterminate = n > 0 && n < total; }
+  };
   let usersPage = 1;
   const applyUsersFilter = () => {
     const q = ($("#users-search").value || "").trim().toLowerCase();
@@ -4895,6 +4912,8 @@ async function viewUsers() {
     $("#users-page-label").textContent = `${usersPage}/${maxPage}`;
     $("#users-prev").disabled = usersPage <= 1;
     $("#users-next").disabled = usersPage >= maxPage;
+    rows.forEach((row) => { const box = row.querySelector('[data-f="sel"]'); if (box && row.style.display === "none") box.checked = false; });   // une ligne masquée n'est plus sélectionnée
+    updateBulk();
   };
   const resetUsersPage = () => { usersPage = 1; applyUsersFilter(); };
   $("#users-search").addEventListener("input", resetUsersPage);
@@ -4904,6 +4923,25 @@ async function viewUsers() {
   $("#users-prev").addEventListener("click", () => { if (usersPage > 1) { usersPage--; applyUsersFilter(); } });
   $("#users-next").addEventListener("click", () => { usersPage++; applyUsersFilter(); });
   applyUsersFilter();
+  $("#users-table-body").addEventListener("change", (e) => { if (e.target.matches('[data-f="sel"]')) updateBulk(); });
+  const selAll = $("#users-sel-all");
+  if (selAll) selAll.addEventListener("change", () => { selectableRows().forEach((r) => { r.querySelector('[data-f="sel"]').checked = selAll.checked; }); updateBulk(); });
+  $("#users-bulk-clear").addEventListener("click", () => { selectableRows().forEach((r) => { r.querySelector('[data-f="sel"]').checked = false; }); updateBulk(); });
+  $("#users-bulk-del").addEventListener("click", async () => {
+    const rows = selectedRows();
+    if (!rows.length) return;
+    const noms = rows.slice(0, 10).map((r) => "• " + (r.dataset.nom || r.dataset.login) + " (" + r.dataset.login + ")").join("\n") + (rows.length > 10 ? "\n… et " + (rows.length - 10) + " autre(s)" : "");
+    if (!confirm(`Supprimer ${rows.length} utilisateur(s) et toutes leurs fiches ?\n\n${noms}\n\nCette action est définitive.`)) return;
+    const failed = [];
+    let done = 0;
+    for (const r of rows) {
+      try { await api("/api/users/" + r.dataset.id, { method: "DELETE" }); done++; }
+      catch (err) { failed.push(`${r.dataset.login} : ${err.message}`); }
+    }
+    if (done) toast(`${done} utilisateur(s) supprimé(s)`);
+    await viewUsers();
+    if (failed.length) $("#users-msg").innerHTML = `<div class="form-error">${failed.length} suppression(s) refusée(s) :<br>${failed.map(esc).join("<br>")}</div>`;
+  });
 
   if (canManageUsers()) {
     const auditBtn = $("#btn-user-audit");

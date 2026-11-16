@@ -13,9 +13,19 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.14.4"
+VERSION = "0.15.0"
 
 VERSIONS = [
+    {
+        "version": "0.15.0",
+        "date": "2026-11-16",
+        "type": "minor",
+        "titre": "Utilisateurs : tableau compact et suppression multiple",
+        "items": [
+            "Utilisateurs : le tableau est plus compact (lignes moins hautes) ; la case « Admin » devient une colonne à part ; la colonne « Mot de passe » disparaît quand la connexion se fait par l'Active Directory.",
+            "Utilisateurs : sélection multiple (une case par ligne, « tout sélectionner » pour la page affichée) et bouton « Supprimer la sélection », avec une confirmation qui liste les personnes ; chaque suppression suit les mêmes règles que la suppression à l'unité (périmètre, jamais son propre compte).",
+        ],
+    },
     {
         "version": "0.14.4",
         "date": "2026-11-16",

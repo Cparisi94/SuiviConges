@@ -763,3 +763,12 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Impact** : les valideurs qui consultaient ce tableau ne le voient plus ; ils gardent « Tableau de bord », « Mon équipe » et le planning de leur périmètre.
 
 **Vérifications** : 73 tests passent, dont un nouveau (administrateur accepté, valideur et agent refusés) ; menu et redirection non essayés à l'écran.
+
+
+## Version 0.15.0 — Utilisateurs : tableau compact et suppression multiple
+
+**Ce qui a changé** : dans Paramétrage > Utilisateurs, les lignes sont moins hautes (la case « Admin » n'est plus sous le rôle : elle a sa propre colonne) et la colonne « Mot de passe » n'est plus affichée quand la connexion se fait par l'Active Directory. Une case à cocher par ligne (et « tout sélectionner » pour la page affichée) permet de **supprimer plusieurs utilisateurs d'un coup** : une confirmation liste les personnes, puis chaque compte est supprimé avec les mêmes règles qu'à l'unité (périmètre du valideur, jamais son propre compte) ; les refus éventuels sont affichés.
+
+**Impact** : un compte administrateur ne peut plus changer le mot de passe local de secours d'un administrateur depuis ce tableau en mode AD (le mot de passe se fixe à la création).
+
+**Vérifications** : 73 tests passent ; essai dans un navigateur sur une instance jetable (schéma temporaire, ensuite supprimé) : colonnes sans mot de passe en mode AD, case Admin en colonne, lignes compactes, sélection de deux comptes, confirmation listant les personnes puis suppression des deux ; l'affichage avec connexion locale (colonne « Mot de passe » conservée) n'a pas été essayé à l'écran.

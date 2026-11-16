@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.14.4 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.15.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -593,6 +593,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **DON-01** — **Migrations** SQL numérotées (`backend/migrations/`), exécutées chacune dans une transaction ; une migration déjà appliquée ne doit jamais être modifiée (somme de contrôle).
 - **DON-02** — Les **dates** sont du texte `AAAA-MM-JJ[ HH:MM:SS]` (heure de Paris) pour l'instant (D3) ; fuseau de la session de base : `Europe/Paris`.
 - **DON-03** — **Suppression** d'un compte : supprime ses fiches (cascade) ; l'archivage à la place est noté au backlog.
+- **DON-04** — **Suppression multiple** (Paramétrage > Utilisateurs) : cases à cocher par ligne (page affichée), confirmation listant les personnes, puis une suppression par compte avec les **mêmes règles que DON-03** (périmètre du valideur, jamais son propre compte) ; les refus sont listés après l'opération.
 - **DON-04** — **Pièces jointes** : stockées hors base, dans un volume (`/data/uploads`), sous un nom aléatoire.
 
 ---
@@ -761,6 +762,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.15.0** | 2026-11-16 | Utilisateurs : tableau compact (case Admin en colonne, pas de mot de passe en mode AD) et suppression multiple. |
 | **0.14.4** | 2026-11-16 | Tableau de bord RH réservé aux administrateurs. |
 | **0.14.3** | 2026-11-16 | Mon équipe : les entités d'abord, puis leurs membres. |
 | **0.14.2** | 2026-11-16 | Planning : titres de groupe par entité. |

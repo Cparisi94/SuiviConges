@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.14.4.
+> Dernière mise à jour : version 0.15.0.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -12,6 +12,7 @@
 - **Périmètre** : un valideur voit et gère **les personnes qu'il valide et, de proche en proche, celles que ses subordonnés valident** (fiches, planning, demandes, tableaux de bord). **Un administrateur voit lui aussi son équipe par défaut** ; l'interrupteur **« Voir tout »** de la barre du haut lui montre toute la collectivité. Un agent ne voit que sa fiche (et le planning de son équipe, motifs masqués).
 - Un utilisateur ne peut pas être son propre responsable ; un agent doit être rattaché à un valideur ; un niveau intermédiaire peut être sauté.
 - À la suppression d'un compte, ses subordonnés **remontent** au premier ancêtre valide.
+- **Suppression multiple** : les comptes cochés sont supprimés un par un avec les mêmes règles que la suppression à l'unité (périmètre du valideur, jamais son propre compte) ; les refus sont signalés.
 - Un **valideur de niveau Direction est validé par un DGA** (ou un DGS) ; un DGA par un DGS ; le valideur supérieur est toujours d'un niveau plus élevé.
 - Les contrôles sont faits **côté serveur** ; l'interface masque seulement ce qui n'est pas permis.
 
