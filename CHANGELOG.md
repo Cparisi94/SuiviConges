@@ -13,6 +13,16 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.3 — 2026-11-16 — Solde de CET en cache, agenda Outlook via l'API Ville
+
+- Solde de CET : chaque solde lu dans Sedit RH est conservé en base (il survit aux redémarrages) ; la page le reçoit tout de suite et, s'il a plus de 10 minutes, il est recalculé en arrière-plan sans faire attendre ni échouer si Sedit RH est en panne.
+- Solde de CET indisponible : la carte de Mon équipe en donne maintenant la raison (droit cet:read manquant, clé refusée, API Sedit RH non configurée ou à mettre à jour, Sedit RH injoignable) ; l'infobulle indique la date de lecture du solde.
+- Agenda Outlook : l'API Ville propose maintenant les routes d'agenda utilisées par le module Exchange (création et suppression d'événements), avec une permission dédiée « Agenda O365 (événements) ».
+
+## 0.17.2 — 2026-11-16 — Exchange passe par l'API Ville
+
+- Module Exchange : la synchronisation de l'agenda Outlook passe désormais par l'API Ville (api.ivry.local, clé de l'application), et non plus directement par Microsoft. Tant que l'API Ville ne propose pas la route d'agenda, la carte « Agenda Outlook » de Ma synthèse indique que la synchronisation n'est pas encore disponible.
+
 ## 0.17.1 — 2026-11-16 — Ma synthèse pour tous
 
 - Les valideurs et les administrateurs ont maintenant, eux aussi, l'entrée « Ma synthèse » dans le menu : leurs propres soldes, demandes récentes et heures, avec la carte « Agenda Outlook » ; leur « Tableau de bord » reste celui de leur équipe.

@@ -13,9 +13,29 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.1"
+VERSION = "0.17.3"
 
 VERSIONS = [
+    {
+        "version": "0.17.3",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Solde de CET en cache, agenda Outlook via l'API Ville",
+        "items": [
+            "Solde de CET : chaque solde lu dans Sedit RH est conservé en base (il survit aux redémarrages) ; la page le reçoit tout de suite et, s'il a plus de 10 minutes, il est recalculé en arrière-plan sans faire attendre ni échouer si Sedit RH est en panne.",
+            "Solde de CET indisponible : la carte de Mon équipe en donne maintenant la raison (droit cet:read manquant, clé refusée, API Sedit RH non configurée ou à mettre à jour, Sedit RH injoignable) ; l'infobulle indique la date de lecture du solde.",
+            "Agenda Outlook : l'API Ville propose maintenant les routes d'agenda utilisées par le module Exchange (création et suppression d'événements), avec une permission dédiée « Agenda O365 (événements) ».",
+        ],
+    },
+    {
+        "version": "0.17.2",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Exchange passe par l'API Ville",
+        "items": [
+            "Module Exchange : la synchronisation de l'agenda Outlook passe désormais par l'API Ville (api.ivry.local, clé de l'application), et non plus directement par Microsoft. Tant que l'API Ville ne propose pas la route d'agenda, la carte « Agenda Outlook » de Ma synthèse indique que la synchronisation n'est pas encore disponible.",
+        ],
+    },
     {
         "version": "0.17.1",
         "date": "2026-11-16",

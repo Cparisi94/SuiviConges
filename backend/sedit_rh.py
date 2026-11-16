@@ -63,39 +63,130 @@ def _get(path, params=None, timeout=30):
     raise SeditError("Erreur de l'API Sedit RH (HTTP %s)%s" % (resp.status_code, " : " + detail if detail else ""), resp.status_code)
 
 
-_CET_TTL = 600                # un solde est conservé 10 minutes
-_cet_cache = {}               # matricule -> (instant, {"solde", "comptes"} ou None s'il n'a pas de CET)
+_CET_TTL = 600                # un solde est « frais » 10 minutes ; plus ancien, il est servi tel quel et recalculé en arrière-plan
+_cet_cache = {}               # matricule -> (instant, {"solde", "comptes"} ou None s'il n'a pas de CET) : copie en mémoire de la table sedit_cet_cache
+_cet_inflight = set()         # matricules en cours de recalcul en arrière-plan
+_cet_retry_after = [0.0]      # après un échec du recalcul, on attend un peu avant de réessayer (évite de marteler Sedit RH)
+
+
+def _as_of(epoch):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(epoch))
+
+
+def _db_load(matricules):
+    """{matricule: (instant, résultat ou None)} lus dans la table sedit_cet_cache (survit aux redémarrages) ; {} si la base est indisponible."""
+    mats = list(matricules)
+    if not mats:
+        return {}
+    try:
+        from db import get_db
+        db = get_db()
+        try:
+            rows = db.execute("SELECT matricule, solde, comptes, has_cet, fetched_epoch FROM sedit_cet_cache WHERE matricule IN (%s)" % ",".join("?" for _ in mats),
+                              tuple(mats)).fetchall()
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 — le cache est un confort : sans lui, on interroge Sedit RH
+        return {}
+    return {r["matricule"]: (float(r["fetched_epoch"]), {"solde": float(r["solde"]), "comptes": int(r["comptes"])} if r["has_cet"] else None) for r in rows}
+
+
+def _db_store(items):
+    """Enregistre {matricule: (instant, résultat ou None)} dans la table sedit_cet_cache."""
+    if not items:
+        return
+    try:
+        from db import get_db
+        db = get_db()
+        try:
+            for m, (stamp, res) in items.items():
+                db.execute("INSERT INTO sedit_cet_cache (matricule, solde, comptes, has_cet, fetched_epoch) VALUES (?,?,?,?,?) "
+                           "ON CONFLICT (matricule) DO UPDATE SET solde=excluded.solde, comptes=excluded.comptes, has_cet=excluded.has_cet, fetched_epoch=excluded.fetched_epoch",
+                           (m, res["solde"] if res else 0, res["comptes"] if res else 0, 1 if res else 0, stamp))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _fetch_cet(batch):
+    """Interroge l'API Sedit RH pour un lot de matricules : {matricule: {"solde", "comptes"} ou None}. Lève SeditError en cas de refus ou de panne."""
+    data = _get("/api/v1/cet", {"matricules": ",".join(batch), "ouvert": "true", "limit": 500}, timeout=120)
+    found = {}
+    for compte in data.get("data") or []:
+        m = (compte.get("matricule") or "").strip()
+        s = found.setdefault(m, {"solde": 0.0, "comptes": 0})
+        s["solde"] += float(compte.get("solde_calcule") or 0)
+        s["comptes"] += 1
+    return {m: found.get(m) for m in batch}
+
+
+def _remember(found):
+    stamp = time.time()
+    items = {m: (stamp, res) for m, res in found.items()}
+    with _lock:
+        _cet_cache.update(items)
+    _db_store(items)
+    return stamp
+
+
+def _refresh_cet_async(matricules):
+    """Recalcule en arrière-plan des soldes périmés : la page, elle, reçoit tout de suite l'ancienne valeur."""
+    with _lock:
+        mats = [m for m in matricules if m not in _cet_inflight]
+        if not mats or time.time() < _cet_retry_after[0]:
+            return
+        _cet_inflight.update(mats)
+
+    def run():
+        try:
+            for i in range(0, len(mats), 100):
+                _remember(_fetch_cet(mats[i:i + 100]))
+        except Exception as exc:  # noqa: BLE001 — l'ancienne valeur reste servie ; nouvel essai dans une minute
+            _cet_retry_after[0] = time.time() + 60
+            print("[sedit_rh] recalcul du CET impossible : %s" % exc)
+        finally:
+            with _lock:
+                _cet_inflight.difference_update(mats)
+
+    threading.Thread(target=run, name="conges-cet-refresh", daemon=True).start()
 
 
 def cet_balances(matricules):
-    """Soldes de CET (en jours) des matricules donnés : {matricule: {"solde": float, "comptes": int}} ; un agent sans CET est absent.
+    """Soldes de CET (en jours) des matricules donnés : {matricule: {"solde": float, "comptes": int, "as_of": "AAAA-MM-JJ HH:MM"}} ; un agent sans CET est absent.
 
-    Le solde est `solde_calcule` de l'API Sedit RH (solde initial + dépôts - retraits) pour les comptes ouverts. Droit `cet:read` requis
-    sur la clé ; une seule requête par lot de 100 matricules ; résultat conservé 10 minutes."""
+    Le solde est `solde_calcule` de l'API Sedit RH (solde initial + dépôts - retraits) pour les comptes ouverts ; droit `cet:read` requis sur la clé.
+    **Cache** : chaque solde est mémorisé en base (table sedit_cet_cache) et en mémoire. Frais (moins de 10 minutes) : servi directement.
+    Périmé : servi tel quel (avec sa date `as_of`) et recalculé en arrière-plan, sans faire attendre la page ni échouer si Sedit RH est en panne.
+    Jamais lu : lu tout de suite (une requête par lot de 100 matricules ; SeditError si Sedit RH refuse ou est injoignable)."""
     mats = sorted({(m or "").strip() for m in matricules if (m or "").strip()})
-    out, todo, now = {}, [], time.monotonic()
+    with _lock:
+        unknown = [m for m in mats if m not in _cet_cache]
+    if unknown:
+        loaded = _db_load(unknown)
+        with _lock:
+            _cet_cache.update(loaded)
+    now = time.time()
+    out, missing, stale = {}, [], []
     with _lock:
         for m in mats:
             hit = _cet_cache.get(m)
-            if hit and now - hit[0] < _CET_TTL:
-                if hit[1] is not None:
-                    out[m] = hit[1]
-            else:
-                todo.append(m)
-    for i in range(0, len(todo), 100):
-        batch = todo[i:i + 100]
-        data = _get("/api/v1/cet", {"matricules": ",".join(batch), "ouvert": "true", "limit": 500}, timeout=120)
-        found = {}
-        for compte in data.get("data") or []:
-            m = (compte.get("matricule") or "").strip()
-            s = found.setdefault(m, {"solde": 0.0, "comptes": 0})
-            s["solde"] += float(compte.get("solde_calcule") or 0)
-            s["comptes"] += 1
-        with _lock:
-            stamp = time.monotonic()
-            for m in batch:
-                _cet_cache[m] = (stamp, found.get(m))
-        out.update(found)
+            if hit is None:
+                missing.append(m)
+                continue
+            if hit[1] is not None:
+                out[m] = dict(hit[1], as_of=_as_of(hit[0]))
+            if now - hit[0] >= _CET_TTL:
+                stale.append(m)
+    for i in range(0, len(missing), 100):
+        found = _fetch_cet(missing[i:i + 100])
+        stamp = _remember(found)
+        for m, res in found.items():
+            if res is not None:
+                out[m] = dict(res, as_of=_as_of(stamp))
+    if stale:
+        _refresh_cet_async(stale)
     return out
 
 
@@ -175,12 +266,16 @@ def absences(matricule, year):
 
 
 def cet_cached(matricule):
-    """Solde de CET (jours) déjà lu pour ce matricule, sans appel réseau ; None s'il n'est pas en mémoire ou si l'agent n'a pas de CET."""
+    """Solde de CET (jours) déjà connu pour ce matricule, sans appel à Sedit RH, quel que soit son âge ; None s'il est inconnu ou si l'agent n'a pas de CET."""
+    matricule = (matricule or "").strip()
     with _lock:
-        hit = _cet_cache.get((matricule or "").strip())
-    if hit and time.monotonic() - hit[0] < _CET_TTL and hit[1] is not None:
-        return hit[1]["solde"]
-    return None
+        hit = _cet_cache.get(matricule)
+    if hit is None:
+        loaded = _db_load([matricule])
+        with _lock:
+            _cet_cache.update(loaded)
+        hit = loaded.get(matricule)
+    return hit[1]["solde"] if hit and hit[1] is not None else None
 
 
 def headcount():

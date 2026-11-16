@@ -3998,8 +3998,9 @@ def exchange_set():
     db = get_db()
     try:
         if enabled:
-            if not exchange.configured():
-                return jsonify({"error": "Le module Exchange n'est pas configuré par l'administrateur"}), 503
+            available, message = exchange.availability()
+            if not available:
+                return jsonify({"error": message or "Le module Exchange n'est pas disponible"}), 503
             if not (request.user.get("email") or "").strip():
                 return jsonify({"error": "Aucune adresse e-mail sur votre compte : l'agenda Outlook ne peut pas être joint"}), 400
             db.execute("UPDATE users SET exchange_sync=1, exchange_error='' WHERE id=?", (uid,))

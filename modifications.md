@@ -823,3 +823,25 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Ce qui a changé** : seuls les agents avaient « Ma synthèse ». Les **valideurs et les administrateurs** ont maintenant, eux aussi, l'entrée **« Ma synthèse »** dans le menu : leurs propres soldes (CA, RTT, CET…), leurs demandes récentes, leurs heures et la carte « Agenda Outlook ». Leur « Tableau de bord » reste celui de leur équipe. Si la personne n'a pas de fiche de congés pour l'année, la page l'indique.
 
 **Vérifications** : test des routes inchangé (105 tests passent) ; vérification à l'écran : voir ci-dessous.
+
+## Version 0.17.2 — Exchange passe par l'API Ville
+
+**Ce qui a changé** : la synchronisation de l'agenda Outlook (module Exchange, 0.17.0) ne s'adresse plus à Microsoft Graph : elle passe par l'**API Ville** (`https://api.ivry.local`), avec la clé de l'application déjà présente dans le `.env` (`APM_API_URL` et `APM_API_KEY`). Les variables `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID` et `GRAPH_CLIENT_SECRET` ne servent plus et n'existent plus : plus d'application Entra ID à créer de notre côté.
+
+**Point bloquant** : la documentation actuelle de l'API Ville (`/swagger.json`) propose la lecture des messages Office 365 mais **aucune route d'agenda**. Le module le détecte : la carte « Agenda Outlook » de Ma synthèse affiche « La synchronisation n'est pas encore disponible » avec la raison, et rien n'est envoyé. Elle fonctionnera dès que l'API Ville aura la route suivante (chemin réglable par `EXCHANGE_APM_EVENTS_PATH`) :
+
+- `POST /api/v1/o365/calendar/events` avec `{mailbox, subject, start, end, isAllDay, showAs, isReminderOn, sensitivity}` (même forme qu'un événement Microsoft Graph, plus l'adresse de la boîte) ; réponse `{id}`.
+- `DELETE /api/v1/o365/calendar/events/{id}?mailbox=<adresse>` ; réponse 204.
+- Droit Microsoft côté APM : `Calendars.ReadWrite` (droit d'application), limité si possible aux boîtes des agents.
+
+**Vérifications** : 106 tests automatiques (détection de la route, route absente, API Ville injoignable, clé jamais affichée, nouvelles tentatives, synchronisation complète avec une API Ville **simulée**). Vérifié sur l'API Ville réelle : la route d'agenda est absente, le module se déclare indisponible. **Jamais essayé avec un vrai agenda** : la route n'existe pas.
+
+## Version 0.17.3 — Solde de CET en cache, agenda Outlook via l'API Ville
+
+**Solde de CET en cache** : chaque solde lu dans Sedit RH est conservé en base (table `sedit_cet_cache`) et en mémoire. La page reçoit tout de suite la dernière valeur connue ; si elle a plus de 10 minutes, elle est **recalculée en arrière-plan**, sans faire attendre l'écran. Si Sedit RH est en panne, l'ancienne valeur reste affichée (l'infobulle donne sa date de lecture). Un agent qui n'a pas de CET est mémorisé aussi. Seul un solde jamais lu est demandé tout de suite à Sedit RH.
+
+**CET « indisponible » sur le serveur Docker** : la carte indique désormais la raison. Les causes habituelles : (1) la clé de l'application dans l'administration de l'**API Sedit RH du serveur** n'a pas le droit `cet:read` (ni `absences:read`) ; (2) l'API Sedit RH du serveur n'a pas été reconstruite avec les routes `/cet` (`git pull && docker compose up -d --build` dans API-Nova) ; (3) `SEDITRH_API_URL` du `.env` Docker de Suivi des congés pointe vers `localhost` au lieu de l'adresse du serveur (`http://<serveur>:3440`) ; (4) `SEDITRH_API_KEY` est celle de votre poste local et non une clé créée sur le serveur.
+
+**API Ville (APM) : routes d'agenda ajoutées** (projet `C:\dev\APM`, `backend/routes/proxy.js`) : `POST /api/v1/o365/calendar/events` et `DELETE /api/v1/o365/calendar/events/{id}?mailbox=…`, avec une nouvelle permission **« Agenda O365 (événements) »** (`o365_calendar`) à cocher sur l'application « Suivi des congés ». La boîte (`mailbox`) est obligatoire (on n'écrit jamais dans la boîte de collecte par défaut) et seuls les champs titre, horaires, disponibilité, confidentialité, rappel et catégories sont transmis à Microsoft. Elles utilisent l'application Microsoft déjà configurée dans l'APM ; **elle doit avoir le droit d'application `Calendars.ReadWrite`** (AppDSI ne lit que les agendas). 4 tests dans `backend/tests/o365-calendar.test.js` avec Microsoft simulé. **À faire** : déployer l'APM (reconstruire son image), puis cocher la permission sur l'application dans l'APM ; le module Exchange détecte la route et active la carte « Agenda Outlook ».
+
+**Vérifications** : 110 tests pour Suivi des congés (cache en base simulée et réelle, recalcul en arrière-plan, panne de Sedit RH, redémarrage) et 4 pour l'APM ; **jamais essayé avec un vrai agenda Outlook ni sur l'APM déployée**.

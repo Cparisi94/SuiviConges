@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Soldes de CET lus dans l'API Sedit RH : regroupement par matricule, somme des comptes ouverts, lots et cache."""
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -11,14 +13,34 @@ def _compte(matricule, solde):
 
 
 class CetBalancesTest(unittest.TestCase):
+    """Soldes de CET : regroupement par matricule, cache en base (simulée ici) et recalcul en arrière-plan."""
+
     def setUp(self):
         sedit_rh._cet_cache.clear()
+        sedit_rh._cet_inflight.clear()
+        sedit_rh._cet_retry_after[0] = 0.0
+        self.db = {}                                                    # simule la table sedit_cet_cache
+        self._patches = [
+            mock.patch.object(sedit_rh, "_db_load", lambda mats: {m: self.db[m] for m in mats if m in self.db}),
+            mock.patch.object(sedit_rh, "_db_store", lambda items: self.db.update(items)),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+
+    @staticmethod
+    def _solde(out):
+        return {m: (v["solde"], v["comptes"]) for m, v in out.items()}
 
     def test_somme_des_comptes_et_matricule_sans_cet_absent(self):
         data = {"data": [_compte("0000001", 60.0), _compte("0000002", 10.0), _compte("0000002", 2.5)]}
         with mock.patch.object(sedit_rh, "_get", return_value=data) as get:
             out = sedit_rh.cet_balances(["0000001", "0000002", "0000003", " ", None])
-        self.assertEqual(out, {"0000001": {"solde": 60.0, "comptes": 1}, "0000002": {"solde": 12.5, "comptes": 2}})
+        self.assertEqual(self._solde(out), {"0000001": (60.0, 1), "0000002": (12.5, 2)})
+        self.assertRegex(out["0000001"]["as_of"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
         self.assertEqual(get.call_count, 1)
         self.assertEqual(get.call_args[0][1]["matricules"], "0000001,0000002,0000003")     # une requête, matricules triés et dédoublonnés
         self.assertEqual(get.call_args[0][1]["ouvert"], "true")
@@ -31,7 +53,60 @@ class CetBalancesTest(unittest.TestCase):
             sedit_rh.cet_balances(mats)
             self.assertEqual(get.call_count, 3)                                              # le second appel vient du cache (même les absents)
 
-    def test_erreur_de_l_api_est_propagee(self):
+    def test_le_cache_survit_a_un_redemarrage(self):
+        with mock.patch.object(sedit_rh, "_get", return_value={"data": [_compte("0000001", 60.0)]}):
+            sedit_rh.cet_balances(["0000001"])
+        self.assertIn("0000001", self.db)                                                    # enregistré en base
+        sedit_rh._cet_cache.clear()                                                          # « redémarrage » : la mémoire est vide
+        with mock.patch.object(sedit_rh, "_get", side_effect=AssertionError("pas d'appel : le cache de la base suffit")):
+            self.assertEqual(self._solde(sedit_rh.cet_balances(["0000001"])), {"0000001": (60.0, 1)})
+            self.assertEqual(sedit_rh.cet_cached("0000001"), 60.0)
+
+    def test_solde_perime_servi_tout_de_suite_et_recalcule_en_arriere_plan(self):
+        old = time.time() - 3 * sedit_rh._CET_TTL
+        sedit_rh._cet_cache["0000001"] = (old, {"solde": 10.0, "comptes": 1})
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_get(path, params=None, timeout=30):
+            started.set()
+            release.wait(5)
+            return {"data": [_compte("0000001", 42.0)]}
+
+        with mock.patch.object(sedit_rh, "_get", slow_get):
+            t0 = time.time()
+            out = sedit_rh.cet_balances(["0000001"])
+            self.assertLess(time.time() - t0, 1.0)                                           # la page n'attend pas Sedit RH
+            self.assertEqual(self._solde(out), {"0000001": (10.0, 1)})                       # ancienne valeur, tout de suite
+            self.assertTrue(started.wait(3))                                                 # le recalcul a démarré en arrière-plan
+            release.set()
+            for _ in range(50):
+                if sedit_rh.cet_cached("0000001") == 42.0:
+                    break
+                time.sleep(0.05)
+        self.assertEqual(sedit_rh.cet_cached("0000001"), 42.0)                               # valeur recalculée
+        self.assertEqual(self.db["0000001"][1]["solde"], 42.0)                               # et enregistrée en base
+        self.assertEqual(sedit_rh._cet_inflight, set())
+
+    def test_panne_de_sedit_rh_ancienne_valeur_conservee_et_pas_de_boucle(self):
+        sedit_rh._cet_cache["0000001"] = (time.time() - 3 * sedit_rh._CET_TTL, {"solde": 10.0, "comptes": 1})
+        calls = []
+
+        def failing(path, params=None, timeout=30):
+            calls.append(1)
+            raise sedit_rh.SeditError("Sedit RH injoignable")
+
+        with mock.patch.object(sedit_rh, "_get", failing):
+            self.assertEqual(self._solde(sedit_rh.cet_balances(["0000001"])), {"0000001": (10.0, 1)})   # pas d'erreur : la valeur connue reste servie
+            for _ in range(60):
+                if sedit_rh._cet_retry_after[0] > time.time():
+                    break
+                time.sleep(0.05)
+            self.assertEqual(self._solde(sedit_rh.cet_balances(["0000001"])), {"0000001": (10.0, 1)})
+            time.sleep(0.2)
+        self.assertEqual(len(calls), 1)                                                      # pas de nouvel essai avant une minute
+
+    def test_jamais_lu_et_api_en_panne_erreur_propagee(self):
         with mock.patch.object(sedit_rh, "_get", side_effect=sedit_rh.SeditError("Accès refusé", 403)):
             with self.assertRaises(sedit_rh.SeditError):
                 sedit_rh.cet_balances(["0000001"])

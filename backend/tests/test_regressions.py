@@ -1297,16 +1297,17 @@ class PrototypeRegressionTests(unittest.TestCase):
         conn.commit()
         calls = []
 
-        def fake_graph(method, path, body=None):
-            calls.append((method, path, body))
+        def fake_call(method, path, body=None, params=None):
+            calls.append((method, path, body or params))
             return {"id": "EV%d" % len(calls)} if method == "POST" else {}
 
         try:
-            with mock.patch.object(exchange, "_graph", fake_graph):
+            with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", fake_call):
                 s = exchange.sync_user(conn, 2150, today)
                 self.assertEqual((s["created"], s["deleted"], s["kept"], s["error"]), (3, 0, 0, ""))
                 posts = [c for c in calls if c[0] == "POST"]
-                self.assertEqual({c[1] for c in posts}, {"/users/ex@ville.fr/events"})
+                self.assertEqual({c[1] for c in posts}, {"/api/v1/o365/calendar/events"})
+                self.assertEqual({c[2]["mailbox"] for c in posts}, {"ex@ville.fr"})
                 self.assertEqual(sorted((c[2]["subject"], c[2]["showAs"], c[2]["isAllDay"]) for c in posts),
                                  [("ABSENT", "oof", False), ("ABSENT", "oof", True), ("Télétravail", "workingElsewhere", True)])
                 self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2150").fetchone()["n"], 3)
@@ -1324,13 +1325,13 @@ class PrototypeRegressionTests(unittest.TestCase):
                 # Microsoft Graph refuse : l'erreur est mémorisée, les événements déjà suivis ne sont pas oubliés.
                 conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2150, 11200, 'CA'), (2150, 11201, 'CA')")
                 conn.commit()
-            with mock.patch.object(exchange, "_graph", side_effect=exchange.ExchangeError("Microsoft Graph : HTTP 403", 403)):
+            with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", side_effect=exchange.ExchangeError("API Ville : HTTP 403", 403)):
                 s = exchange.sync_user(conn, 2150, today)
                 self.assertIn("HTTP 403", s["error"])
                 self.assertIn("HTTP 403", conn.execute("SELECT exchange_error FROM users WHERE id=2150").fetchone()["exchange_error"])
                 self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2150").fetchone()["n"], 2)
             calls.clear()
-            with mock.patch.object(exchange, "_graph", fake_graph):
+            with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", fake_call):
                 self.assertEqual(exchange.disable_user(conn, 2150), 2)                      # la désactivation retire les événements
             self.assertEqual(sorted(c[0] for c in calls), ["DELETE", "DELETE"])
             row = conn.execute("SELECT exchange_sync FROM users WHERE id=2150").fetchone()
@@ -1357,7 +1358,7 @@ class PrototypeRegressionTests(unittest.TestCase):
                 self.assertEqual(self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True}).status_code, 503)    # module non configuré
                 st = self._call("GET", "/api/exchange", uid=2151).get_json()
                 self.assertEqual((st["configured"], st["enabled"]), (False, False))
-            with mock.patch.object(exchange, "configured", return_value=True), mock.patch.object(exchange, "sync_user_async", return_value=True) as sync, \
+            with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "sync_user_async", return_value=True) as sync, \
                     mock.patch.object(exchange, "disable_user_async", return_value=True) as off:
                 self.assertEqual(self._call("PUT", "/api/exchange", uid=2152, payload={"enabled": True}).status_code, 400)    # pas d'adresse e-mail
                 r = self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True})
@@ -1371,6 +1372,29 @@ class PrototypeRegressionTests(unittest.TestCase):
         finally:
             conn = db.get_db()
             conn.execute("DELETE FROM users WHERE id IN (2151, 2152)")
+            conn.commit()
+            conn.close()
+
+    def test_cet_cache_table_keeps_balances_across_restarts(self):
+        import time as _t
+        import sedit_rh
+        sedit_rh._cet_cache.clear()
+        stamp = _t.time()
+        try:
+            sedit_rh._db_store({"CACHE01": (stamp, {"solde": 59.5, "comptes": 1}), "CACHE02": (stamp, None)})
+            sedit_rh._db_store({"CACHE01": (stamp + 5, {"solde": 54.5, "comptes": 2})})        # mise à jour, pas de doublon
+            sedit_rh._cet_cache.clear()                                                         # « redémarrage »
+            got = sedit_rh._db_load(["CACHE01", "CACHE02", "CACHE03"])
+            self.assertEqual(sorted(got), ["CACHE01", "CACHE02"])
+            self.assertEqual(got["CACHE01"][1], {"solde": 54.5, "comptes": 2})
+            self.assertIsNone(got["CACHE02"][1])                                                # « pas de CET » est mémorisé aussi
+            with mock.patch.object(sedit_rh, "_get", side_effect=AssertionError("la base suffit")):
+                self.assertEqual(sedit_rh.cet_balances(["CACHE01"])["CACHE01"]["solde"], 54.5)
+                self.assertEqual(sedit_rh.cet_cached("CACHE01"), 54.5)
+        finally:
+            sedit_rh._cet_cache.clear()
+            conn = db.get_db()
+            conn.execute("DELETE FROM sedit_cet_cache WHERE matricule LIKE 'CACHE%'")
             conn.commit()
             conn.close()
 

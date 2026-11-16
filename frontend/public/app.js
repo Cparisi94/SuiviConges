@@ -874,6 +874,17 @@ async function viewAgentDashboard() {
   }
 }
 
+/* Raison lisible d'une indisponibilité du solde de CET (message renvoyé par l'API Sedit RH) */
+function cetReason(w) {
+  const s = String(w || "");
+  if (/cet:read|Scope manquant/i.test(s)) return "droit cet:read manquant sur la clé Sedit RH";
+  if (/401|Clé refusée/i.test(s)) return "clé Sedit RH refusée";
+  if (/n'est pas configurée|SEDITRH_API/i.test(s)) return "API Sedit RH non configurée";
+  if (/HTTP 404/i.test(s)) return "API Sedit RH à mettre à jour (route /cet absente)";
+  if (/injoignable|HTTP 5|timeout/i.test(s)) return "Sedit RH injoignable";
+  return "voir l'infobulle";
+}
+
 /* Module « exchange » : carte de « Ma synthèse » pour synchroniser les absences avec l'agenda Outlook (Microsoft Graph) */
 async function setupExchangeCard(c) {
   const anchor = c.querySelector(".agent-account-card");
@@ -887,7 +898,7 @@ async function setupExchangeCard(c) {
   const draw = (s) => {
     st = s;
     if (!s.configured) {
-      card.innerHTML = `<h3>Agenda Outlook</h3><p class="muted">La synchronisation avec Outlook n'est pas encore activée par l'administrateur de l'application.</p>`;
+      card.innerHTML = `<h3>Agenda Outlook</h3><p class="muted">La synchronisation avec votre agenda Outlook n'est pas encore disponible.</p>${s.message ? `<p class="muted exchange-help">${esc(s.message)}</p>` : ""}`;
       return;
     }
     const line = s.error ? `<div class="form-error">${esc(s.error)}</div>`
@@ -2544,10 +2555,10 @@ function renderFiche() {
     if (!el || !f.id) return;
     try {
       const r = await api(`/api/agents/${f.id}/cet`);
-      if (!r.cet) { if (r.warning) el.title = "Solde Sedit RH indisponible : " + r.warning; return; }
+      if (!r.cet) { if (r.warning) el.title = "Solde Sedit RH indisponible (" + cetReason(r.warning) + ") : " + r.warning; return; }
       const v = Number(r.cet.solde);
       el.placeholder = v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
-      el.title = `Solde initial du CET, en jours. Vide = solde de Sedit RH (${el.placeholder} j).`;
+      el.title = `Solde initial du CET, en jours. Vide = solde de Sedit RH (${el.placeholder} j${r.cet.as_of ? ", lu le " + r.cet.as_of : ""}).`;
       if (el.value === "" && state.fiche === f) runCompute();       // la synthèse tient maintenant compte du solde Sedit RH
     } catch (e) { el.title = "Solde Sedit RH indisponible : " + e.message; }
   })();
@@ -5625,11 +5636,11 @@ async function viewMyAgents() {
       const r = await api("/api/my-agents/cet?uids=" + ids.join(","));
       cells.forEach((el) => {
         const it = (r.items || {})[el.dataset.cet];
-        if (r.warning) { el.textContent = "CET : indisponible"; el.title = r.warning; }
-        else if (it) { el.innerHTML = `CET : <strong>${esc(fmt(it.solde))} j</strong>`; el.title = "Solde du compte épargne temps (initial + dépôts − retraits), en jours"; }
+        if (r.warning) { el.textContent = "CET : indisponible — " + cetReason(r.warning); el.title = r.warning; }
+        else if (it) { el.innerHTML = `CET : <strong>${esc(fmt(it.solde))} j</strong>`; el.title = `Solde du compte épargne temps (initial + dépôts − retraits), en jours${it.as_of ? " — lu dans Sedit RH le " + it.as_of : ""}`; }
         else { el.textContent = "CET : —"; el.title = "Pas de compte épargne temps ouvert"; }
       });
-    } catch (e) { cells.forEach((el) => { el.textContent = "CET : indisponible"; el.title = e.message; }); }
+    } catch (e) { cells.forEach((el) => { el.textContent = "CET : indisponible — " + cetReason(e.message); el.title = e.message; }); }
   })();
 
   /* Dépôts sur l'arbre */

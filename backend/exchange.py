@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Module « exchange » : synchronisation des absences avec l'agenda Outlook de l'agent (Microsoft Graph).
+"""Module « exchange » : synchronisation des absences avec l'agenda Outlook de l'agent, via l'API Ville (APM).
 
 Pour un agent qui l'a demandé (users.exchange_sync = 1) :
 - chaque jour d'absence (codes de ABSENCE_CODES) devient un événement **« ABSENT »**, affiché « Absent du bureau » (showAs = oof) ;
@@ -9,9 +9,12 @@ Rien d'autre n'est écrit (ni motif, ni code, ni détail : l'événement est en 
 d'aujourd'hui à la fin de l'année suivante ; la table `exchange_events` retient les événements créés pour les mettre à jour
 ou les supprimer quand la fiche change ou que l'agent désactive la synchronisation.
 
-Authentification : flux « client credentials » d'une application Entra ID (droit d'application Calendars.ReadWrite) ; les
-identifiants viennent de .env (GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET) et ne sont jamais affichés ni journalisés.
-La boîte aux lettres visée est l'adresse e-mail du compte de l'agent.
+Les appels passent par l'**API Ville** (APM, https://api.ivry.local, clé X-API-KEY de l'application : APM_API_URL / APM_API_KEY),
+jamais directement par l'API Ville. Contrat attendu de l'APM (route d'agenda, EXCHANGE_APM_EVENTS_PATH) :
+  POST   {chemin}            corps : {"mailbox": "<e-mail>", "subject", "start", "end", "isAllDay", "showAs", "isReminderOn", "sensitivity"}  ->  {"id": "<événement>"}
+  DELETE {chemin}/{id}?mailbox=<e-mail>                                                                                                  ->  204
+La route n'existe pas encore dans la documentation actuelle de l'APM (seuls les messages /api/v1/o365/messages y figurent) : tant qu'elle
+est absente, le module se déclare indisponible et rien n'est envoyé.
 """
 import datetime as dt
 import threading
@@ -19,20 +22,21 @@ import time
 
 import requests
 
+import apm
 import config
 from db import get_db
 
 ABSENT_SUBJECT = "ABSENT"
 TT_SUBJECT = "Télétravail"
 _TIMEOUT = 30
-_token_cache = {"value": "", "until": 0.0}
-_token_lock = threading.Lock()
 _running = set()                     # utilisateurs dont une synchronisation est en cours (évite les doublons)
 _running_lock = threading.Lock()
+_avail = {"at": 0.0, "ok": False, "message": ""}
+_AVAIL_TTL = 600
 
 
 class ExchangeError(Exception):
-    """Microsoft Graph est injoignable ou refuse la requête ; `status` = code HTTP éventuel."""
+    """L'API Ville est injoignable ou refuse la requête ; `status` = code HTTP éventuel."""
 
     def __init__(self, message, status=None):
         super().__init__(message)
@@ -40,7 +44,8 @@ class ExchangeError(Exception):
 
 
 def configured():
-    return bool(config.GRAPH_TENANT_ID and config.GRAPH_CLIENT_ID and config.GRAPH_CLIENT_SECRET)
+    """L'API Ville est configurée (adresse et clé) : condition nécessaire, pas suffisante (voir `availability`)."""
+    return apm.configured()
 
 
 def _verify():
@@ -49,38 +54,36 @@ def _verify():
     return not config.VILLE_ALLOW_SELF_SIGNED_CERTS
 
 
-def _token():
-    """Jeton d'accès de l'application (conservé jusqu'à son expiration)."""
-    if not configured():
-        raise ExchangeError("Le module Exchange n'est pas configuré (GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET)")
-    with _token_lock:
-        if _token_cache["value"] and time.monotonic() < _token_cache["until"]:
-            return _token_cache["value"]
-        try:
-            resp = requests.post(
-                "%s/%s/oauth2/v2.0/token" % (config.GRAPH_LOGIN_URL, config.GRAPH_TENANT_ID),
-                data={"grant_type": "client_credentials", "client_id": config.GRAPH_CLIENT_ID,
-                      "client_secret": config.GRAPH_CLIENT_SECRET, "scope": "https://graph.microsoft.com/.default"},
-                timeout=_TIMEOUT, verify=_verify())
-        except requests.RequestException as exc:
-            raise ExchangeError("Authentification Microsoft impossible (%s)" % exc.__class__.__name__) from exc
-        if resp.status_code != 200:
-            raise ExchangeError("Authentification Microsoft refusée (HTTP %s) : vérifier l'application Entra ID" % resp.status_code, resp.status_code)
-        data = resp.json()
-        _token_cache["value"] = data.get("access_token", "")
-        _token_cache["until"] = time.monotonic() + max(60, int(data.get("expires_in", 3600)) - 120)
-        return _token_cache["value"]
+def availability(force=False):
+    """(disponible, message) : la route d'agenda existe-t-elle dans la documentation de l'API Ville ? Résultat conservé 10 minutes."""
+    if not apm.configured():
+        return False, "L'API Ville n'est pas configurée (APM_API_URL et APM_API_KEY dans .env)"
+    if not force and time.monotonic() - _avail["at"] < _AVAIL_TTL:
+        return _avail["ok"], _avail["message"]
+    ok, message = False, ""
+    try:
+        resp = requests.get(config.APM_API_URL.rstrip("/") + "/swagger.json", headers={"X-API-KEY": config.APM_API_KEY}, timeout=_TIMEOUT, verify=_verify())
+        paths = (resp.json() or {}).get("paths") or {} if resp.status_code == 200 else {}
+        ok = any(p == config.EXCHANGE_APM_EVENTS_PATH or p.startswith(config.EXCHANGE_APM_EVENTS_PATH + "/") for p in paths)
+        if not ok:
+            message = ("L'API Ville ne propose pas encore la route d'agenda Outlook (%s) : la synchronisation n'est pas disponible" % config.EXCHANGE_APM_EVENTS_PATH
+                       if resp.status_code == 200 else "Documentation de l'API Ville illisible (HTTP %s)" % resp.status_code)
+    except (requests.RequestException, ValueError) as exc:
+        message = "API Ville injoignable (%s)" % exc.__class__.__name__
+    _avail.update(at=time.monotonic(), ok=ok, message=message)
+    return ok, message
 
 
-def _graph(method, path, body=None):
-    """Appel de l'API Graph ; réessaie quelques fois si Microsoft demande de patienter (429, 503). Retourne le JSON (ou {})."""
+def _call(method, path, body=None, params=None):
+    """Appel de l'API Ville ; réessaie quelques fois si elle demande de patienter (429, 503). Retourne le JSON (ou {})."""
+    if not apm.configured():
+        raise ExchangeError("L'API Ville n'est pas configurée (APM_API_URL et APM_API_KEY dans .env)")
     for attempt in range(4):
         try:
-            resp = requests.request(
-                method, config.GRAPH_API_URL + path, json=body, timeout=_TIMEOUT, verify=_verify(),
-                headers={"Authorization": "Bearer " + _token(), "Prefer": 'outlook.timezone="%s"' % config.EXCHANGE_TIMEZONE})
+            resp = requests.request(method, config.APM_API_URL.rstrip("/") + path, json=body, params=params, timeout=_TIMEOUT,
+                                    verify=_verify(), headers={"X-API-KEY": config.APM_API_KEY})
         except requests.RequestException as exc:
-            raise ExchangeError("Microsoft Graph injoignable (%s)" % exc.__class__.__name__) from exc
+            raise ExchangeError("API Ville injoignable (%s)" % exc.__class__.__name__) from exc
         if resp.status_code in (429, 503) and attempt < 3:
             try:
                 wait = float(resp.headers.get("Retry-After", "2"))
@@ -93,11 +96,13 @@ def _graph(method, path, body=None):
         if resp.status_code == 204:
             return {}
         try:
-            detail = ((resp.json() or {}).get("error") or {}).get("message") or ""
+            data = resp.json() or {}
+            detail = data.get("error") or data.get("message") or data.get("detail") or ""
+            detail = detail.get("message", "") if isinstance(detail, dict) else str(detail)
         except ValueError:
             detail = ""
-        raise ExchangeError("Microsoft Graph : HTTP %s%s" % (resp.status_code, " — " + detail[:200] if detail else ""), resp.status_code)
-    raise ExchangeError("Microsoft Graph : trop de tentatives")
+        raise ExchangeError("API Ville : HTTP %s%s" % (resp.status_code, " — " + detail[:200] if detail else ""), resp.status_code)
+    raise ExchangeError("API Ville : trop de tentatives")
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +169,7 @@ def _hours(spec):
 
 
 def event_payload(day_iso, part, kind):
-    """Corps de la requête Graph : uniquement le titre, les horaires et l'état de disponibilité."""
+    """Corps de la requête d'agenda : uniquement le titre, les horaires et l'état de disponibilité."""
     day = dt.date.fromisoformat(day_iso)
     tz = config.EXCHANGE_TIMEZONE
     body = {
@@ -195,7 +200,7 @@ def _user_cells(db, user_id, today):
 
 def _delete_event(mailbox, event_id):
     try:
-        _graph("DELETE", "/users/%s/events/%s" % (mailbox, event_id))
+        _call("DELETE", "%s/%s" % (config.EXCHANGE_APM_EVENTS_PATH, event_id), params={"mailbox": mailbox})
     except ExchangeError as exc:
         if exc.status != 404:                  # déjà supprimé dans Outlook : rien à faire
             raise
@@ -212,6 +217,9 @@ def sync_user(db, user_id, today=None):
     try:
         if not mailbox:
             raise ExchangeError("Aucune adresse e-mail sur votre compte : l'agenda Outlook ne peut pas être joint")
+        ok, message = availability()
+        if not ok:
+            raise ExchangeError(message)
         want = desired_events(_user_cells(db, user_id, today), today)
         have = {(r["day"], r["part"]): r for r in db.execute(
             "SELECT day, part, kind, event_id FROM exchange_events WHERE user_id=?", (user_id,)).fetchall()}
@@ -232,7 +240,7 @@ def sync_user(db, user_id, today=None):
             row = have.get(key)
             if row and row["kind"] == kind:
                 continue
-            created = _graph("POST", "/users/%s/events" % mailbox, event_payload(key[0], key[1], kind))
+            created = _call("POST", config.EXCHANGE_APM_EVENTS_PATH, dict(event_payload(key[0], key[1], kind), mailbox=mailbox))
             db.execute("INSERT INTO exchange_events (user_id, day, part, kind, event_id) VALUES (?,?,?,?,?) "
                        "ON CONFLICT (user_id, day, part) DO UPDATE SET kind=excluded.kind, event_id=excluded.event_id",
                        (user_id, key[0], key[1], kind, created.get("id", "")))
@@ -299,7 +307,8 @@ def status(db, user_id):
     n = db.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=?", (user_id,)).fetchone()["n"]
     with _running_lock:
         busy = user_id in _running
-    return {"configured": configured(), "enabled": bool(row and row["exchange_sync"]), "email": (row["email"] if row else "") or "",
+    available, message = availability()
+    return {"configured": available, "message": message, "enabled": bool(row and row["exchange_sync"]), "email": (row["email"] if row else "") or "",
             "synced_at": (row["exchange_synced_at"] if row else "") or "", "error": (row["exchange_error"] if row else "") or "",
             "events": int(n), "running": busy, "morning": config.EXCHANGE_MORNING, "afternoon": config.EXCHANGE_AFTERNOON}
 
@@ -343,9 +352,10 @@ def start_exchange_scheduler():
                     ids = [r["id"] for r in db.execute("SELECT id FROM users WHERE exchange_sync=1 AND actif=1").fetchall()]
                 finally:
                     db.close()
-                for uid in ids:
-                    sync_user_async(uid)
-                    time.sleep(1)
+                if ids and availability()[0]:
+                    for uid in ids:
+                        sync_user_async(uid)
+                        time.sleep(1)
             except Exception as exc:  # noqa: BLE001
                 print("[exchange] synchronisation automatique impossible : %s" % exc)
             time.sleep(max(120, config.EXCHANGE_INTERVAL_MIN * 60))
