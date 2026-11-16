@@ -46,6 +46,54 @@ def _format_days(days):
     return ("%g" % float(days)).replace(".", ",")
 
 
+def _half_pos(key, year):
+    key = int(key)
+    return dt.date(int(year), key // 1000, (key % 1000) // 10), key % 10
+
+
+def _follows(last, new):
+    """`new` (date, demi) suit-il `last` ? Même jour matin → après-midi, ou jour ouvré suivant (week-ends sautés)."""
+    (d1, h1), (d2, h2) = last, new
+    if d2 == d1:
+        return h1 == 0 and h2 == 1
+    if h1 != 1 or h2 != 0 or d2 <= d1:
+        return False
+    day = d1 + dt.timedelta(days=1)
+    while day < d2:
+        if day.isoweekday() < 6:      # un jour ouvré manque entre les deux : ce sont deux plages distinctes
+            return False
+        day += dt.timedelta(days=1)
+    return True
+
+
+def _fmt_day(d):
+    return "%d %s %d" % (d.day, MOIS[d.month - 1], d.year)
+
+
+def format_ranges(cells, year):
+    """Demi-journées (clés mois*1000 + jour*10 + 0/1) -> plages lisibles : « du 20 avril 2026 au 24 avril 2026 »."""
+    try:
+        points = sorted(_half_pos(k, year) for k in cells)
+    except (TypeError, ValueError):
+        return [str(k) for k in cells]
+    blocks = []
+    for pt in points:
+        if blocks and _follows(blocks[-1][1], pt):
+            blocks[-1][1] = pt
+        else:
+            blocks.append([pt, pt])
+    out = []
+    for (d1, h1), (d2, h2) in blocks:
+        if d1 == d2:
+            part = "" if (h1, h2) == (0, 1) else " (%s)" % ("matin" if h1 == 0 else "après-midi")
+            out.append("le %s%s" % (_fmt_day(d1), part))
+        else:
+            left = "du %s%s" % (_fmt_day(d1), " (après-midi)" if h1 == 1 else "")
+            right = "au %s%s" % (_fmt_day(d2), " (matin)" if h2 == 0 else "")
+            out.append("%s %s" % (left, right))
+    return out
+
+
 def cell_label(key, year):
     """Libellé d'une demi-journée à partir de la clé (mois*1000 + jour*10 + 0/1)."""
     try:
@@ -118,8 +166,9 @@ def send_mail(to, subject, body, template="", request_id=None):
 
 
 def notify_validator(validator_email, validator_name, agent_name, code, code_label,
-                     cells, year, days, comment, fiche_id, request_id):
-    """Prévient le valideur d'une nouvelle demande (en arrière-plan)."""
+                     cells, year, days, comment, fiche_id, request_id, extra=None):
+    """Prévient le valideur d'une nouvelle demande (en arrière-plan). `extra` : variables supplémentaires
+    (liens Valider / Refuser / calendrier d'équipe propres au destinataire)."""
     cfg = load_config()
     if not cfg:
         return
@@ -132,11 +181,12 @@ def notify_validator(validator_email, validator_name, agent_name, code, code_lab
     base = (cfg.get("base_url") or "").rstrip("/")
     values = {
         "agent": agent_name, "code": code, "code_libelle": code_label,
-        "dates": "\n".join("  - %s" % cell_label(key, year) for key in sorted(cells)),
+        "dates": "\n".join("  - %s" % line for line in format_ranges(cells, year)),
         "jours": _format_days(days), "commentaire": comment or "—", "annee": str(year),
         "lien_fiche": "%s/#/agent/%s" % (base, fiche_id) if base else "",
         "lien_demandes": "%s/#/requests" % base if base else "",
     }
+    values.update(extra or {})
     threading.Thread(
         target=send_template, args=("nouvelle_demande", to, values, request_id), daemon=True
     ).start()

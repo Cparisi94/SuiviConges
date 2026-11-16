@@ -456,3 +456,260 @@ La liste des agents de Sedit RH n'est lue qu'à la demande de l'administrateur, 
 
 **Vérifications**
 49 tests automatiques passent (rapprochement certain / ambigu / introuvable, application sans écrasement, arbre avec niveaux fusionnés, création des comptes d'unité et des agents, réutilisation des comptes existants, idempotence, droits administrateur, erreurs de Sedit RH). Les trois écrans ont été essayés dans un navigateur contre l'API Sedit RH réelle, sur une base de test jetable (3 rapprochements, aperçu et création de 16 agents d'une direction avec ses 4 comptes d'unité), puis supprimée.
+
+## Version 0.5.0 — Trois rôles et création d'une personne depuis Sedit RH et l'Active Directory
+
+**Ce qui a changé**
+- **Deux rôles, plus un droit** : Valideur et Agent ; **Administrateur** n'est plus un rôle mais une case à cocher qui s'ajoute à celui d'un agent ou d'un valideur (une même personne peut être valideur *et* administrateur). Les anciens niveaux (DGS, DGA, Direction, Service, Secteur, Unité, Équipe) deviennent tous « Valideur » à l'écran ; leur niveau reste connu en interne, donc **rien ne change** pour les droits, les périmètres et les validations existants.
+- **Formulaire « Nouvelle personne »** (Paramétrage > Utilisateurs) : on tape un nom, un prénom ou un matricule, l'application propose les agents de Sedit RH ; en cliquant, nom, prénom, matricule et unité sont repris. L'Active Directory est ensuite interrogé pour trouver l'**e-mail** et l'**identifiant** (exemple : Christophe PARISI → cparisi) ; s'il y a plusieurs comptes possibles, on choisit.
+- **Agent** : on choisit son **unité** (direction, service, secteur ou équipe de Sedit RH) ; il est rattaché automatiquement au valideur de cette unité (ou de l'unité supérieure la plus proche) et sa fiche est créée.
+- **Valideur** : on choisit son unité **et l'unité qui le valide** (forcément supérieure à la sienne). Pour un valideur de niveau **Direction**, c'est un **DGA** qui valide : le formulaire liste les DGA/DGS existants ; un DGA ou un DGS se crée avec le « niveau de validation » correspondant (sans unité).
+
+**Pourquoi**
+Ne plus ressaisir les agents, partir de la source RH (Sedit RH) et de l'annuaire (AD), et rattacher chacun à l'organisation officielle plutôt qu'à des comptes saisis à la main.
+
+**À savoir / à décider**
+- Il faut qu'un valideur existe pour l'unité (ou une unité supérieure) avant de créer des agents dedans : sinon l'application le dit et propose de créer d'abord le valideur. Les comptes d'unité créés avant cette version (DIR-…, SRV-…) sont reconnus par leur nom ; faut-il les remplacer par de vraies personnes ? (Q17 du manifeste.)
+- Les unités sont lues dans Sedit RH à la première utilisation, puis sur demande de l'administrateur ; elles ne contiennent aucune donnée personnelle.
+
+**Vérifications**
+54 tests automatiques passent (recherche Sedit RH à plusieurs mots, rapprochement AD unique / plusieurs / aucun, création d'agent et de valideur, unité validatrice non supérieure refusée, droits, profil à trois valeurs). Vérifié dans un navigateur sur une instance jetable : recherche « christophe parisi », e-mail et identifiant trouvés dans l'AD, unité reprise, création d'un valideur puis d'un agent rattaché automatiquement. **Non fait** : migration des comptes d'unité hérités vers des personnes ; essai avec un valideur non administrateur dans le navigateur (couvert par les tests).
+
+## Version 0.6.0 — Mes agents (glisser-déposer) et règles métier consultables
+
+**Ce qui a changé**
+- **Menu « Mes agents »** : à gauche, l'arbre des personnes que je valide, puis de celles que mes subordonnés valident, etc. À droite, la liste des agents de **Sedit RH de mon niveau ou en dessous** qui ne sont pas encore dans l'application. On **glisse un agent sur une personne** : il est créé dans l'application sous elle (compte, fiche, matricule, e-mail et identifiant cherchés dans l'AD) et on confirme son **unité**.
+- **Exemple** : on glisse Isabelle ABBAS sous Marc CHEVALIER (et on définit son unité), puis Florian BRUN sous Isabelle ABBAS : Isabelle devient automatiquement **valideur** de Florian et de l'unité de Florian (si elle n'avait pas d'unité, elle prend la sienne).
+- On peut aussi glisser une personne déjà présente sur un autre valideur pour la **déplacer** (sa fiche suit).
+- **Règles métier** : toutes les règles de l'application sont rassemblées dans un document, lisible dans *Paramétrage > Documentation > Règles métier*. Il est mis à jour à chaque version (règle inscrite dans les instructions du projet).
+
+**Pourquoi**
+Construire l'organisation « à la souris » à partir de la source RH, sans formulaire, et garder une référence unique et lisible des règles.
+
+**À savoir / à décider**
+- Si la personne qui reçoit un agent est un simple agent, elle devient valideur : son niveau interne est celui de son unité, mais jamais au niveau de son propre valideur (il est abaissé d'un cran si besoin).
+- Un agent peut être glissé sous une personne dont l'unité ne le couvre pas ; faut-il l'interdire ? (Q18 du manifeste.)
+
+**Vérifications**
+58 tests automatiques passent (arbre, liste Sedit RH limitée au périmètre, création par glisser-déposer avec promotion en valideur, refus hors périmètre / doublon, déplacement et refus des cycles, document de règles servi). Vérifié dans un navigateur sur une instance jetable : Isabelle ABBAS déposée sous Marc CHEVALIER puis Florian BRUN sous Isabelle (devenue « Valideur »), e-mails trouvés dans l'AD, écran des règles métier. **Non fait** : glisser-déposer à la souris réelle (les événements ont été simulés par script) ; essai avec un valideur non administrateur dans le navigateur (couvert par les tests).
+
+## Version 0.6.1 — Connexion : identifiant insensible à la casse
+
+**Ce qui a changé** : « machevalier » et « MCHEVALIER » désignent désormais le même compte à la connexion.
+
+**Pourquoi** : le compte recréé depuis Sedit RH s'appelle `MCHEVALIER` (majuscules), alors que l'identifiant de l'annuaire est `machevalier` ; la connexion répondait « identifiant incorrect » alors que le mot de passe AD était bon.
+
+**Vérifications** : test automatique (saisie en minuscules, en majuscules, identifiant inconnu). Le compte `machevalier` d'origine avait été supprimé et recréé sous `MCHEVALIER` (visible au journal d'audit) ; aucune autre donnée n'a été modifiée.
+
+## Version 0.6.2 — Mes agents : sélection multiple
+
+**Ce qui a changé** : dans « Mes agents », on peut cocher plusieurs agents de Sedit RH (ou « Tout sélectionner ») et les glisser **en une seule fois** sur une personne. Ils sont tous créés sous elle, chacun dans son unité Sedit RH (ou dans une unité commune si on en choisit une). La sélection survit aux recherches.
+
+**Pourquoi** : créer une équipe entière sans répéter le glisser-déposer agent par agent.
+
+**Vérifications** : essai dans un navigateur sur une instance jetable : trois agents cochés (Isabelle ABBAS, Florian BRUN, Thibault CONTAMINE), glissés d'un coup sous Marc CHEVALIER, les trois créés (e-mails trouvés dans l'AD). Le geste de souris réel n'a pas pu être rejoué (événements simulés par script).
+
+## Version 0.7.0 — Fiche congés = première période, agents hors unité, jours hors période grisés
+
+**Ce qui a changé**
+- **La fiche naît avec la première période de paramètres.** Dans « Mes agents », un agent glissé est d'abord une personne (compte). Le bouton **« Définir la période »** (pénibilité, durée, quotité, jours/semaine, comme dans la fiche) crée sa fiche congés de l'année, puis un lien « Fiche 2026 » l'ouvre. « Mes fiches » ne montre donc que les agents sous ma responsabilité qui ont au moins une période.
+- **Agents hors de mon unité** : une case « Inclure les agents hors de mon unité (toute la collectivité) » complète la liste de droite (par défaut, seulement mon unité et en dessous).
+- **Calendrier** : les jours qui ne sont couverts par aucune période (avant l'arrivée, après le départ — par exemple après un départ au 31/08) sont **grisés et non sélectionnables**, et une demande d'absence sur ces jours est refusée.
+
+**Pourquoi**
+Ne créer une fiche que lorsqu'elle est exploitable (droits calculables), et empêcher de poser des congés en dehors de la présence de l'agent.
+
+**À savoir / à décider**
+- Les fiches déjà existantes sans période (par exemple importées) restent visibles ; leur ligne de « Mes agents » propose « Compléter la période ».
+- Un agent d'une autre direction peut être placé sous une personne de mon périmètre : il apparaît alors dans mon arbre, mes fiches et mon planning (Q18 du manifeste : faut-il le restreindre ?).
+- Les jours déjà saisis hors période restent affichés mais ne sont plus sélectionnables.
+
+**Vérifications**
+60 tests automatiques passent (création sans fiche, première période validée contre les listes, refus d'une période en double, agents hors unité, couverture du calendrier). Vérifié dans un navigateur sur une instance jetable : glisser, « Définir la période », fiche créée, départ au 31/08 → 244 demi-journées grisées et clic refusé, case « toute la collectivité » (2 428 agents). **Non fait** : geste de souris réel (glisser simulé par script) ; essai avec un valideur non administrateur dans le navigateur.
+
+## Version 0.8.0 — Jours travaillés par période, entités dans « Mes fiches », noms corrigés
+
+**Ce qui a changé**
+- **Jours travaillés** : chaque période de paramètres comporte désormais les jours travaillés (cases L M M J V S D ; lundi-vendredi par défaut) et une case « fériés travaillés ». Le nombre de jours par semaine suit les cases cochées. La même saisie est proposée à la création de la première période (Mes agents > Définir la période).
+- **Calendrier** : les jours non travaillés sont **grisés et non sélectionnables** ; une absence posée sur une période longue ne les compte donc pas. Le serveur refuse aussi toute demande qui les contient. Le tableau des périodes est resserré pour tenir sans défilement.
+- **Mes fiches** : les groupes portent le **nom de l'entité** (et non celui du valideur) ; le **responsable valideur** est affiché en premier dans le groupe de son entité.
+- **Correction de noms** : le nom et le prénom étaient restés collés dans deux fiches créées depuis Sedit RH (« BOUATOU FAROUK », « CHEVALIER MARC ») ; ils sont séparés et le défaut est corrigé pour les prochaines fiches. Données corrigées sur la base actuelle : 2 fiches et 3 comptes.
+
+**Pourquoi**
+Calculer correctement les jours posés pour un agent qui ne travaille pas tous les jours, et présenter les fiches par entité plutôt que par personne.
+
+**À savoir / à décider**
+- Par défaut, toutes les fiches existantes sont considérées comme travaillant du lundi au vendredi, jours fériés non travaillés : leurs samedis, dimanches et jours fériés sont donc désormais grisés. Les absences déjà saisies sur ces jours restent affichées.
+- Les moteurs de calcul des droits (CA, RTT…) ne changent pas : les jours travaillés servent à la sélection et au décompte des demandes.
+
+**Vérifications**
+60 tests automatiques passent (jours travaillés, fériés, effectif des cases cochées, nom et prénom repris de Sedit RH). Vérifié dans un navigateur sur une instance jetable : agent à 4 jours (lundi-jeudi, fériés travaillés) → vendredi, samedi et 1er mai grisés ; tableau des périodes sans défilement ; « Mes fiches » avec l'entité en titre et la responsable en premier. **Non fait** : décompte d'une période longue à la souris (couvert par la sélection qui ignore les jours grisés).
+
+## Version 0.8.1 — Fiches : « Valideur » et noms Prénom NOM
+
+**Ce qui a changé** : le mot « Propriétaire » est remplacé par « Valideur » sur les fiches (cartes, en-tête de fiche, tableau de bord, changement de valideur), et la personne est affichée par son **prénom et son nom** (Marc CHEVALIER) au lieu de son identifiant de connexion (MACHEVALIER).
+
+**Pourquoi** : le « propriétaire » d'une fiche est en réalité son valideur, et l'identifiant AD n'est pas parlant pour les utilisateurs.
+
+**À savoir** : les comptes d'unité anciens (Direction RH…) gardent leur nom d'unité faute de prénom ; l'écran d'import RH de l'administration garde son vocabulaire d'origine. La clé « proprietaire » de l'API externe /api/v1 n'est pas modifiée.
+
+**Vérifications** : 60 tests automatiques passent ; libellés vérifiés dans le code des écrans concernés. Non revu à l'écran dans le navigateur.
+
+## Version 0.9.0 — Menu « Mes congés » et « Mon équipe »
+
+**Ce qui a changé**
+- Nouveau menu **« Mes congés »** : chacun y voit sa propre fiche de congés (calendrier, soldes, demandes) sans le bloc « Paramètres et périodes », qui reste du ressort du valideur. Sans fiche, un message explique qu'elle est créée quand le valideur définit la période.
+- Le menu **« Mes agents »** devient **« Mon équipe »** (écran, documentation, règles métier).
+- Pour un agent, le menu « Mes fiches » (qui ne montrait que sa fiche) est remplacé par « Mes congés ».
+
+**Pourquoi** : donner à chacun un accès direct et simple à ses propres congés, et séparer ce qui relève de l'agent (ses congés) de ce qui relève du valideur (les paramètres et l'équipe).
+
+**Vérifications** : tests automatiques (60) et essai dans un navigateur sur une instance jetable (voir ci-dessous).
+
+## Version 0.9.1 — E-mails des valideurs
+
+**Ce qui s'est passé** : une demande faite « en tant que » Farouk BOUATOU n'a pas prévenu son valideur Marc CHEVALIER. Le journal des e-mails l'explique : « Le valideur CHEVALIER MARC n'a pas d'adresse e-mail ». Son compte avait été créé avec l'annuaire, qui contient deux comptes MARC CHEVALIER (un compte de test sans messagerie et le vrai) : l'application n'avait pas osé choisir.
+
+**Ce qui a changé**
+- L'adresse de Marc CHEVALIER (`machevalier@ivry94.fr`) et son identifiant AD ont été renseignés sur son compte.
+- Désormais, à nom égal, la création d'une personne retient le compte de l'annuaire qui a une adresse e-mail.
+- Dans « Mon équipe », une pastille « ⚠ e-mail » signale les personnes sans adresse.
+
+**À décider** : 15 comptes actifs non agents n'ont pas d'e-mail, notamment des comptes d'unité anciens (CONG-BC « Direction RH », CONG-BE…) : leurs agents ne préviennent donc personne. Faut-il les rattacher à de vraies personnes, ou faire remonter la notification au premier valideur de la chaîne qui a une adresse ? (Q17 du manifeste.)
+
+**Vérifications** : 60 tests automatiques passent (choix du compte avec messagerie) ; l'envoi lui-même n'a pas été rejoué.
+
+## Version 0.10.0 — Mon équipe par défaut, « Voir tout » pour les administrateurs, recherche AD
+
+**Ce qui a changé**
+- **Périmètre** : dans Mes fiches, Mon équipe, Demandes, Planning et les tableaux de bord, **tout le monde voit son équipe**, administrateurs compris. Les administrateurs ont un interrupteur **« Voir tout »** dans la barre du haut (mémorisé dans le navigateur) pour voir toute la collectivité.
+- **Agents** : sans droit d'administration, ils ne voient ni « Mes fiches » ni « Mon équipe » ; ils utilisent « Mes congés », « Mes demandes » et le planning.
+- **Recherche AD** : un bouton sur les personnes sans e-mail dans « Mon équipe » cherche leur compte dans l'Active Directory (par le nom, ou en tapant autre chose) et reprend l'adresse e-mail et l'identifiant.
+
+**Pourquoi** : un administrateur qui valide une équipe veut d'abord voir cette équipe ; et les valideurs doivent pouvoir réparer eux-mêmes une adresse e-mail manquante, qui bloque les notifications.
+
+**À savoir** : un administrateur qui n'a personne sous sa responsabilité ne voit rien tant que « Voir tout » n'est pas coché. L'accès direct à une fiche par son lien, et l'écran Utilisateurs de l'administration, ne changent pas.
+
+**Vérifications** : 61 tests automatiques passent (périmètre par défaut et « Voir tout », refus de l'élargissement par un non-administrateur, recherche AD et rattachement). Non essayé à l'écran dans le navigateur.
+
+## Version 0.10.1 — Mes congés : sa propre fiche même pour un valideur
+
+**Ce qui s'est passé** : en agissant en tant que Farouk BOUATOU (valideur de son service, avec une fiche de congés), « Mes congés » annonçait qu'il n'avait pas de fiche. La liste des fiches d'un valideur ne contient que celles de son équipe, or sa propre fiche appartient à son propre valideur.
+
+**Correction** : « Mes congés » demande désormais directement sa propre fiche à l'application, sans passer par la liste de l'équipe.
+
+**Vérifications** : test automatique (valideur dont la fiche est hors de son équipe) ; 62 tests passent. Non rejoué à l'écran avec « en tant que ».
+
+## Version 0.10.2 — Planning : jours non validés en pointillé
+
+**Ce qui a changé** : dans le planning, les jours d'une demande encore en attente de validation s'affichent comme dans la fiche : couleur éclaircie, contour en pointillé et info-bulle. Les jours validés gardent leur couleur pleine.
+
+**Pourquoi** : le planning montrait les demandes en attente avec la même couleur que les congés validés (seul un fin pointillé les distinguait).
+
+**Vérifications** : 62 tests automatiques passent ; syntaxe du script vérifiée. Non vérifié à l'écran (il faut une demande en attente, comme celle de BOUATOU).
+
+## Version 0.11.0 — E-mails avec boutons, délégation des valideurs, Mon équipe en deux niveaux
+
+**Ce qui a changé**
+- **E-mail de demande** : les dates sont données en plages (« du 20 avril 2026 au 24 avril 2026 », sans compter les week-ends manquants ; « (après-midi) » ou « (matin) » aux extrémités si besoin). Trois boutons : **Valider**, **Refuser** et **Voir le calendrier d'équipe**.
+- **Valider / Refuser depuis l'e-mail** : le bouton ouvre une page de confirmation (sans connexion) qui rappelle la demande ; **rien n'est enregistré tant qu'on n'a pas cliqué** sur Valider ou Refuser, et les mêmes contrôles que dans l'application s'appliquent (droits, solde). Le lien est personnel et valable 14 jours.
+- **Délégation** (nouveau menu) : je délègue à mon valideur automatiquement quand je suis absent, et/ou sur des périodes du/au (même sans congés) ; il reçoit alors aussi les mails de demande (avec les boutons) et les relances ; je vois les validations faites à ma place.
+- **Mon équipe** : par défaut, seulement les personnes que je valide directement (et celles de mon délégant le temps d'une délégation) ; le bouton « Voir toute ma ligne hiérarchique » ajoute celles que mes agents valident, et ainsi de suite.
+
+**Pourquoi** : valider en un clic depuis sa messagerie, voir d'un coup d'œil qui est absent dans son équipe, et ne pas bloquer les demandes quand un valideur est absent.
+
+**À savoir / à décider**
+- Quiconque détient le lien d'un e-mail peut décider au nom de son destinataire (comme tout lien à jeton) : il ne faut pas transférer ces e-mails. Faut-il exiger l'authentification AD sur la page de confirmation ? (Q19 du manifeste.)
+- Le délégataire est toujours le responsable direct du valideur ; il pouvait déjà valider (règle hiérarchique) : la délégation le prévient et trace ce qu'il fait.
+- L'adresse des liens vient de `CONGES_BASE_URL` : elle doit être celle du site public (le frontal relaie `/api`) ; sans elle, les boutons n'apparaissent pas.
+- Les e-mails n'ont pas été envoyés réellement ici ; le texte par défaut du message « nouvelle demande » est mis à jour automatiquement s'il n'avait pas été personnalisé.
+- Dans « Mes congés », une demande posée par un administrateur ou un valideur suit la même règle que pour tout agent : elle part à son propre valideur (personne ne valide sa propre demande).
+
+**Vérifications** : 65 tests automatiques passent (plages de dates, boutons, page de confirmation sans effet avant clic, refus pour un compte non habilité, décision tracée, délégation par période et automatique, validations faites à ma place, arbre direct / ligne hiérarchique). Vérifié dans un navigateur sur une instance jetable : écran Délégation (période, case automatique, bandeau « délégation en cours »), Mon équipe direct puis ligne hiérarchique. **Non vérifié** : réception réelle d'un e-mail et clic sur ses boutons, relance d'un délégataire.
+
+## Version 0.11.1 — Onglets de fiches : « + » ouvre des fiches de l'équipe
+
+**Ce qui a changé** : le « + » de la barre d'onglets (au-dessus des fiches) n'ouvrait que la création d'une nouvelle fiche. Il affiche désormais la liste des agents sous ma responsabilité, avec une recherche et des cases à cocher ; les fiches cochées s'ouvrent chacune dans son onglet. Les fiches déjà ouvertes sont grisées.
+
+**Pourquoi** : retrouver rapidement plusieurs fiches de l'équipe sans repasser par la liste. La création d'une fiche reste possible dans « Mes fiches » et « Mon équipe » (« Définir la période »).
+
+**Vérifications** : syntaxe vérifiée, 65 tests automatiques passent. **Non essayé à l'écran** dans le navigateur.
+
+## Version 0.11.2 — Fiche plus compacte ; « Mes congés » en consultation
+
+**Ce qui a changé**
+- L'en-tête de la fiche tient en **une seule ligne de champs** (e-mail, matricule, valideur, responsable d'unité, reliquat, solde CET) avec les boutons d'heures en ligne ; les trois cartes et leurs titres disparaissent.
+- Dans **Mes congés**, les informations ne sont plus modifiables : champs grisés, pas de bouton Supprimer ni « Changer le valideur ». On consulte sa fiche et on pose ses demandes.
+
+**À savoir** : cette protection est celle de l'écran « Mes congés » ; un administrateur qui ouvre sa propre fiche par « Mes fiches » garde ses droits de modification habituels.
+
+**Vérifications** : essai dans un navigateur sur une instance jetable (champs actifs en fiche normale, tous désactivés en mode Mes congés, bloc des périodes masqué) ; 65 tests automatiques passent. Je n'ai pas mesuré la hauteur gagnée sur votre écran.
+
+## Version 0.11.3 — Tableau de bord RH : entités et responsables
+
+**Ce qui a changé** : dans « Absences par direction / service », la DSI est présentée comme la DRH : les groupes portent le **nom de l'entité** (par exemple « DIRECTION DES SYSTEMES D'INFORMATION ») et non celui de la personne (« CHEVALIER MARC »). Le **responsable** de l'entité est la première ligne de sa liste, avec « (Responsable) ». Les entités de même nom (la direction et son service du même nom, ou deux valideurs de la même unité) sont regroupées en une seule ligne. Le tableau « par direction / service » utilise les mêmes noms.
+
+**Vérifications** : test automatique (nom d'entité, responsable en premier) ; 66 tests passent. Non revu à l'écran sur vos données réelles.
+
+## Version 0.11.4 — Mon équipe : Dupliquer pour l'année suivante
+
+**Ce qui a changé** : dans « Mon équipe », chaque personne qui a une fiche affiche, à côté de « Fiche 2026 », un bouton **« Dupliquer pour 2027 »** (année N+1 par rapport à l'année choisie en haut). Il crée la fiche de l'année suivante avec les mêmes paramètres ; les congés posés et les dates d'arrivée / de départ ne sont pas copiés. Une fois la fiche créée, le bouton est remplacé par « ✓ 2027 ».
+
+**À savoir** : j'ai placé ce bouton dans « Mon équipe », sur la ligne de chaque personne, à côté du lien de la fiche. La duplication en série existe toujours dans « Mes fiches ». Dites-moi si vous parliez d'un autre écran.
+
+**Vérifications** : test automatique (bouton proposé, duplication, puis « existe déjà ») ; 66 tests passent. Non essayé à l'écran.
+
+## Version 0.11.5 — Mes congés : demandes pour tous, jamais de validation directe
+
+**Ce qui s'est passé** : pour un administrateur, la fiche « Mes congés » n'offrait pas la pose de demandes (l'administrateur était considéré comme pouvant saisir directement, donc la fiche restait en lecture seule), et ses demandes d'heures et de cassage étaient validées d'office.
+
+**Ce qui a changé** : sur sa propre fiche, **tout le monde — administrateur compris — pose des demandes** (jours, heures, cassage) qui vont à son valideur ; à défaut d'un valideur actif, à un autre administrateur ; sans personne au-dessus, la demande est validée d'office (cas d'un administrateur seul). Personne ne saisit ni ne valide directement ses propres congés. Un autre administrateur ou le valideur peut toujours saisir directement sur la fiche d'un agent.
+
+**Vérifications** : test automatique (administrateur sur sa propre fiche : demande, pas de saisie directe ; un autre administrateur saisit ; son valideur est désigné) ; 67 tests passent. Non essayé à l'écran.
+
+## Version 0.12.0 — Mon équipe remplace Mes fiches
+
+**Ce qui a changé**
+- **Une seule vue** : « Mes fiches » disparaît du menu, « Mon équipe » la remplace.
+- **Par entité** : les personnes sont classées sous le nom de leur entité (unité Sedit RH), le responsable ★ en premier ; les entités de même nom sont regroupées.
+- **Période en images** : chaque carte montre la quotité en camembert (100 %, 80 %…), les jours travaillés (L M M J V S D) en couleur, la durée hebdomadaire et la pénibilité ; « F » si l'agent travaille les jours fériés ; « n périodes » s'il y en a plusieurs (la période en cours est affichée).
+- **Actions conservées** : ouvrir la fiche, « + Nouvelle fiche » et « Dupliquer toutes les fiches pour 2027 » en haut de page, « Dupliquer pour 2027 » par personne, Définir la période, Recherche AD, glisser-déposer pour changer de valideur (sur une carte ou sur le titre d'une entité).
+
+**À savoir** : la sélection par cases à cocher et la duplication « de la sélection » de l'ancien Mes fiches n'existent plus ; la duplication se fait par personne ou pour toute l'équipe. Les anciens liens « Mes fiches » ouvrent Mon équipe.
+
+**Vérifications** : essai dans un navigateur sur une instance jetable (groupes par entité, camemberts 100 % et 80 %, jours travaillés, boutons) ; 67 tests automatiques passent. Non vérifié : glisser à la souris réelle d'une carte, rendu sur de grandes équipes.
+
+## Version 0.12.1 — Fiche : unité modifiable, e-mail et matricule verrouillés
+
+**Ce qui a changé**
+- **E-mail et matricule** : non modifiables dans la fiche (ils viennent de l'annuaire et de Sedit RH), y compris côté serveur une fois renseignés. Pour un e-mail manquant : « Recherche AD » dans Mon équipe.
+- **« Resp. unité »** : la case est retirée. Le responsable d'une entité est son valideur (★, premier de la liste dans Mon équipe). Les anciennes marques « responsable » restent en base mais ne se modifient plus.
+- **Unité** : un champ dans la fiche permet de choisir une autre unité pour l'agent, dans la liste de **toutes les unités de sa direction**. Pour la DSI : la direction (BF), la DSI (BF1), Infrastructure réseaux systèmes (BF6) et son secteur Architecture réseaux (BF62), Bureau des projets (BF8), Déploiement et support (BF9). Changer l'unité ne change pas son valideur.
+- **Mon équipe** : colonne des personnes plus large, liste Sedit RH plus étroite.
+
+**À savoir** : sur les fiches existantes, un matricule ou un e-mail déjà saisi à la main et erroné ne peut plus être corrigé depuis la fiche (la correction passe par la source : Sedit RH, annuaire). La mention « (Responsable) » du planning et du tableau de bord reste liée aux anciennes marques.
+
+**Vérifications** : test automatique (liste des unités de la direction, refus d'une autre direction, verrouillage e-mail / matricule) ; 68 tests passent ; essai navigateur sur instance jetable (champs désactivés, 6 unités de la DSI proposées, colonnes 1099 / 330 px).
+
+## Version 0.13.0 — Années dans la fiche, report des périodes, équipes manquantes
+
+**Ce qui a changé**
+- **Passer à la fiche 2027** : dans la fiche, le sélecteur d'année (à droite du nom) liste les années de la personne ; « + 2027 (reporter la période) » prépare l'année suivante.
+- **On reporte des périodes, pas des fiches** : la fiche 2027 est créée avec la période en vigueur en fin 2026 (quotité, durée, pénibilité, **jours travaillés**, jours fériés) sur toute l'année. Avant, la duplication perdait les jours travaillés ; elle est corrigée et refuse de créer une fiche qui existe déjà. Les boutons de Mon équipe s'appellent désormais « Reporter en 2027 ».
+- **Équipe de la DSI** : vous aviez raison. Sedit RH ne publie pas dans son organisation l'**« Équipe projet éduc. innovation inclusion »** (code BF1112, 2 agents de la DSI) : elle n'apparaissait donc pas dans la liste des unités. La liste est maintenant complétée par les équipes portées par des agents (62 unités ajoutées, dont BF1112 rattachée à la DSI), et déjà actualisée sur la base actuelle (281 → 343 unités). Il n'existe pas d'« équipe numérique éducatif » sous ce nom dans Sedit RH ; si vous pensez à une autre équipe, donnez-moi son nom ou son code.
+
+**À savoir** : le report d'une fiche dont la période change en cours d'année ne reprend que la dernière période ; l'historique des périodes de l'année précédente reste dans la fiche de cette année.
+
+**Vérifications** : tests automatiques (report de la période avec jours travaillés et fériés, refus d'un doublon, liste des années, équipes absentes de l'arbre) ; 70 tests passent ; essai navigateur sur instance jetable : 2026 → « + 2027 » → fiche 2027 créée avec 80 %, 4 jours, fériés travaillés, sélecteur 2026 / 2027 / + 2028.
+
+## Version 0.13.1 — API Sedit RH : toutes les unités publiées
+
+**Ce qui a changé** : j'ai modifié l'API Sedit RH elle-même (projet `C:\devpi-apps\sedit-rh`, fichier `backend/src/rh/rest.js`, route `/api/v1/organisation`). Elle publiait seulement l'organigramme SIIM (`SIIM_ORGANIGRAMME_V2`) ; elle y ajoute maintenant les **unités d'affectation portées par des agents en poste** (colonne `PST_AFFECT`) qui n'y figuraient pas, rattachées à leur service, avec le champ `origine: "agents"` et leur effectif. Pour la DSI : « Équipe projet éduc. innovation inclusion » (BF1112, 2 agents). Au total, 48 unités ajoutées dans l'API. Le schéma OpenAPI mentionne le nouveau champ ; la sauvegarde de l'ancien fichier est dans le répertoire temporaire de la session.
+
+**À savoir**
+- Cette modification est dans un autre projet que l'application : elle n'est **pas commitée** et la version déployée de l'API (autre serveur, Docker) doit être mise à jour pour que la liste soit complète en production.
+- Les unités ajoutées viennent des affectations des agents : une unité sans aucun agent en poste ne peut pas être découverte ainsi (seul l'organigramme SIIM, ou une vue SQL plus complète côté Sedit RH, la donnerait).
+- Pour redémarrer l'API de développement, il a fallu arrêter l'ancien processus et nettoyer un fichier de verrou périmé de sa base embarquée (`.dev-pg/postmaster.pid`) ; aucune donnée n'a été touchée.
+- La liste d'unités de l'application a été actualisée depuis l'API.
+
+**Vérifications** : l'API en développement renvoie BF1112 sous BF1 (« origine : agents ») ; 70 tests de l'application passent. Aucun test automatique n'existe dans le projet de l'API.

@@ -846,5 +846,603 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertIn("injoignable", resp.get_json()["error"])
 
 
+    # ---- Rôles Administrateur / Valideur / Agent, unités SIRH, création d'une personne -----------------------------
+    UNITS = [
+        {"code": "D1", "libelle": "DIRECTION RH", "level": "direction", "parent_code": "", "position": 0},
+        {"code": "S1", "libelle": "SERVICE PAIE", "level": "service", "parent_code": "D1", "position": 1},
+        {"code": "K1", "libelle": "SECTEUR PAIE 1", "level": "secteur", "parent_code": "S1", "position": 2},
+        {"code": "D2", "libelle": "DIRECTION AUTRE", "level": "direction", "parent_code": "", "position": 3},
+    ]
+
+    def _units_patch(self):
+        return mock.patch.object(sedit_rh, "organisation_units", lambda force=False: [dict(u) for u in self.UNITS])
+
+    def _seed_period_settings(self):
+        conn = db.get_db()
+        for key, value in (("penibilites", [{"name": "Modérée"}]), ("penibilites_durees", {"Modérée": ["38 heures"]}),
+                           ("durees", ["38 heures"]), ("quotites", ["100%"]), ("jours_hebdo", [5])):
+            self.app_module.set_setting(conn, key, value)
+        conn.commit()
+        conn.close()
+
+    def test_calendar_coverage_blocks_requests_outside_periods(self):
+        ag = {"year": 2026, "periods": json.dumps([{"start": "2026-01-01", "end": "2026-08-31"}]), "params": "{}"}
+        cov = self.app_module._agent_coverage(ag)
+        self.assertTrue(self.app_module._cell_covered(cov, 2026, 8310))     # 31 août (matin) : clé 8310
+        self.assertFalse(self.app_module._cell_covered(cov, 2026, 9010))
+        self.assertEqual(self.app_module._agent_coverage({"year": 2026, "periods": "[]", "params": json.dumps({"date_arrivee": "2026-03-02"})}),
+                         [{"start": "2026-03-02", "end": "2026-12-31", "days": [1, 2, 3, 4, 5], "ferie": False}])
+        # Jours travaillés : samedi / dimanche non décomptés, férié seulement si l'agent le travaille.
+        self.assertFalse(self.app_module._cell_covered(cov, 2026, 8290))                       # samedi 29 août
+        self.assertTrue(self.app_module._cell_covered(cov, 2026, 8280))                        # vendredi 28 août : travaillé
+        self.assertFalse(self.app_module._cell_covered(cov, 2026, 5010, {"2026-05-01"}))       # 1er mai, vendredi férié, non travaillé
+        self.assertTrue(self.app_module._cell_covered(cov, 2026, 5010))                        # sans calendrier de fériés : travaillé
+        four = {"year": 2026, "periods": json.dumps([{"start": "2026-01-01", "end": "2026-12-31", "jours_travailles": [1, 2, 3, 4, 5, 7], "ferie_travaille": True}]), "params": "{}"}
+        cov4 = self.app_module._agent_coverage(four)
+        self.assertTrue(self.app_module._cell_covered(cov4, 2026, 5010, {"2026-05-01"}))       # férié travaillé
+        self.assertFalse(self.app_module._cell_covered(cov4, 2026, 5020))                      # 2 mai = samedi : non travaillé
+        self.assertTrue(self.app_module._cell_covered(cov4, 2026, 5030))                       # 3 mai = dimanche coché
+        self.assertIsNone(self.app_module._normalize_periods([{"start": "2026-01-01", "end": "2026-12-31", "jours_hebdo": 4, "jours_travailles": [1, 2, 3]}], {}, 2026))  # 3 jours cochés pour 4/sem.
+
+    def test_org_units_sync_and_access(self):
+        with self._units_patch():
+            rows = self._call("GET", "/api/org-units?refresh=1", uid=1).get_json()
+        self.assertEqual([r["code"] for r in rows], ["D1", "S1", "K1", "D2"])
+        self.assertEqual(rows[2]["path"], "DIRECTION RH › SERVICE PAIE › SECTEUR PAIE 1")
+        self.assertEqual(self._call("GET", "/api/org-units", uid=4).status_code, 403)          # un agent n'a pas accès
+
+    def test_sirh_search_filters_every_word(self):
+        data = {"data": [
+            {"matricule": "0001", "nom": "PARISI", "prenom": "Christophe", "affectation": {"code": "K1", "libelle": "SECTEUR PAIE 1"}},
+            {"matricule": "0002", "nom": "PARISI", "prenom": "Alice"},
+            {"matricule": "0003", "nom": "DURAND", "prenom": "Christophe"},
+        ]}
+        calls = []
+        with mock.patch.object(sedit_rh, "_get", lambda path, params=None, timeout=30: calls.append(params) or data):
+            hits = sedit_rh.search_agents("christophe parisi")
+            self.assertEqual([h["matricule"] for h in hits], ["0001"])
+            self.assertEqual(hits[0]["unit_code"], "K1")
+            self.assertEqual(calls[0]["q"], "christophe")                       # l'API reçoit le mot le plus long
+            self.assertEqual(sedit_rh.search_agents("p"), [])                    # trop court : aucun appel
+        self.assertEqual(len(calls), 1)
+
+    def test_ad_match_unique_several_none(self):
+        import people
+
+        def hit(u, n, m=""):
+            return {"username": u, "displayName": n, "email": m}
+
+        with mock.patch.object(apm, "configured", lambda: True):
+            with mock.patch.object(apm, "ad_search", lambda q, limit=15: [hit("cparisi", "PARISI Christophe", "c.parisi@ville.fr")]):
+                r = people.ad_match("PARISI", "Christophe")
+            self.assertEqual((r["status"], r["candidates"][0]["username"]), ("unique", "cparisi"))
+            two = [hit("cparisi", "PARISI Christophe"), hit("cparisi2", "PARISI Christophe (2)")]
+            with mock.patch.object(apm, "ad_search", lambda q, limit=15: two):
+                r = people.ad_match("PARISI", "Christophe")
+                self.assertEqual((r["status"], r["candidates"][0]["username"]), ("unique", "cparisi"))   # identifiant attendu : cparisi
+            # Deux comptes de même nom, un seul avec messagerie : c'est celui-là (compte de test sans e-mail écarté).
+            with mock.patch.object(apm, "ad_search", lambda q, limit=15: [hit("mchevaliertest", "MARC CHEVALIER"), hit("machevalier", "CHEVALIER Marc", "m@ville.fr")]):
+                r = people.ad_match("CHEVALIER", "Marc")
+                self.assertEqual((r["status"], r["candidates"][0]["username"]), ("unique", "machevalier"))
+            with mock.patch.object(apm, "ad_search", lambda q, limit=15: [hit("a", "DUPONT Jean"), hit("b", "DUPONT Jean-Luc")]):
+                self.assertEqual(people.ad_match("DUPONT", "Jean")["status"], "plusieurs")
+            with mock.patch.object(apm, "ad_search", lambda q, limit=15: []):
+                self.assertEqual(people.ad_match("ZZ", "Zed")["status"], "aucun")
+        with mock.patch.object(apm, "configured", lambda: False):
+            self.assertEqual(people.ad_match("A", "B")["status"], "indisponible")
+
+    def test_create_person_agent_valideur_and_rules(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        # Agent affecté au service PAIE : le valideur est le compte « Direction RH » (compte d'unité hérité, unité supérieure).
+        r = self._call("POST", "/api/users/person", uid=1, payload={
+            "profil": "agent", "nom": "Zzparisi", "prenom": "Christophe", "matricule": "P0001", "email": "c.parisi@ville.fr",
+            "ad_login": "cparisi", "unit_code": "S1"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        body = r.get_json()
+        self.assertEqual((body["profil"], body["role"], body["parent_id"], body["unit_code"]), ("agent", "agent", 2, "S1"))
+        # Pas de fiche à la création : elle naît avec la première période de paramètres.
+        self.assertIsNone(body["fiche_id"])
+        self._seed_period_settings()
+        bad = self._call("POST", "/api/my-agents/%d/fiche" % body["id"], uid=1, payload={"year": 2026, "penibilite": "Inconnue", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5})
+        self.assertEqual(bad.status_code, 400)
+        ok = self._call("POST", "/api/my-agents/%d/fiche" % body["id"], uid=1, payload={"year": 2026, "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5})
+        self.assertEqual(ok.status_code, 200, ok.get_json())
+        conn = db.get_db()
+        fiche = conn.execute("SELECT user_id, validator_id, nom, prenom, periods FROM agents WHERE id=?", (ok.get_json()["fiche_id"],)).fetchone()
+        conn.close()
+        self.assertEqual((fiche["user_id"], fiche["validator_id"], fiche["nom"], fiche["prenom"]), (2, 2, "ZZPARISI", "CHRISTOPHE"))
+        self.assertEqual(json.loads(fiche["periods"])[0]["start"], "2026-01-01")
+        self.assertEqual(self._call("POST", "/api/my-agents/%d/fiche" % body["id"], uid=1, payload={"year": 2026, "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5}).status_code, 400)  # déjà une période
+        # Un valideur de service, validé par l'unité Direction RH.
+        with mock.patch.object(config, "AUTH_MODE", "ad"):
+            v = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "nom": "Zzchef", "prenom": "Paul", "unit_code": "S1", "validator_unit_code": "D1"})
+            self.assertEqual(v.status_code, 200, v.get_json())
+            vb = v.get_json()
+            self.assertEqual((vb["profil"], vb["role"], vb["parent_id"], vb["validator_unit_code"]), ("valideur", "service", 2, "D1"))
+            # Un nouvel agent du secteur PAIE 1 est rattaché à ce valideur (unité supérieure la plus proche).
+            a2 = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "agent", "nom": "Zzdeux", "prenom": "Anne", "unit_code": "K1"}).get_json()
+            self.assertEqual(a2["parent_id"], vb["id"])
+            # Unité validatrice qui n'est pas supérieure : refusée ; unité sans valideur : refusée explicitement.
+            bad = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "nom": "Zzbad", "prenom": "X", "unit_code": "S1", "validator_unit_code": "D2"})
+            self.assertEqual(bad.status_code, 400)
+            self.assertIn("supérieure", bad.get_json()["error"])
+            none = self._call("POST", "/api/users/person", uid=1, payload={"profil": "agent", "nom": "Zznone", "prenom": "Y", "unit_code": "D2"})
+            self.assertEqual(none.status_code, 400)
+            self.assertIn("Aucun valideur", none.get_json()["error"])
+        # Garde-fous : matricule déjà pris, unité inconnue, profil invalide, administrateur réservé aux administrateurs.
+        dup = self._call("POST", "/api/users/person", uid=1, payload={"profil": "agent", "nom": "Zzdup", "prenom": "Z", "matricule": "P0001", "unit_code": "S1"})
+        self.assertEqual(dup.status_code, 400)
+        self.assertEqual(self._call("POST", "/api/users/person", uid=1, payload={"profil": "agent", "nom": "Q", "prenom": "Q", "unit_code": "NOPE"}).status_code, 400)
+        self.assertEqual(self._call("POST", "/api/users/person", uid=1, payload={"profil": "dga", "nom": "Q", "prenom": "Q"}).status_code, 400)
+        self.assertEqual(self._call("POST", "/api/users/person", uid=2, payload={"profil": "administrateur", "nom": "Q", "prenom": "Q"}).status_code, 403)
+        self.assertEqual(self._call("POST", "/api/users/person", uid=4, payload={"profil": "agent", "nom": "Q", "prenom": "Q", "unit_code": "S1"}).status_code, 403)
+        listing = {u["login"]: u for u in self._call("GET", "/api/users", uid=1).get_json()}
+        self.assertEqual((listing["admin"]["profil"], listing["admin"]["admin"], listing["DRH"]["profil"], listing["AGENT1"]["profil"]), ("valideur", 1, "valideur", "agent"))
+
+    def test_update_profil_valideur_keeps_internal_level(self):
+        r = self._call("PUT", "/api/users/3", uid=1, payload={"role": "valideur", "parent_id": 2})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual((r.get_json()["role"], r.get_json()["profil"]), ("secteur", "valideur"))
+
+    def test_admin_is_a_right_on_top_of_agent_or_valideur(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        with mock.patch.object(config, "AUTH_MODE", "ad"):
+            # Sans mot de passe local, pas d'administrateur ; seul un administrateur peut accorder le droit.
+            no_pw = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "admin": True, "nom": "Zzadm", "prenom": "Ann", "unit_code": "S1"})
+            self.assertEqual(no_pw.status_code, 400)
+            self.assertEqual(self._call("POST", "/api/users/person", uid=2, payload={
+                "profil": "valideur", "admin": True, "nom": "Zzadm", "prenom": "Ann", "unit_code": "S1",
+                "password": "Secours-123"}).status_code, 403)
+            ok = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "admin": True, "nom": "Zzadm", "prenom": "Ann", "unit_code": "S1", "password": "Secours-123"})
+            self.assertEqual(ok.status_code, 200, ok.get_json())
+            body = ok.get_json()
+            self.assertEqual((body["profil"], body["role"], body["admin"]), ("valideur", "service", 1))
+            # Il garde son niveau interne mais obtient les droits d'administration (accès à tout le périmètre).
+            me = self._call("GET", "/api/me", uid=body["id"]).get_json()["user"]
+            self.assertEqual((me["profil"], me["admin"]), ("valideur", 1))
+            self.assertEqual(self._call("GET", "/api/admin/sedit-rh", uid=body["id"]).status_code, 200)
+            # L'administrateur peut aussi être retiré / accordé à un agent existant, sans changer son rôle.
+            r = self._call("PUT", "/api/users/4", uid=1, payload={"admin": True, "role": "agent"})
+            self.assertEqual((r.get_json()["role"], r.get_json()["admin"]), ("agent", 1))
+            r = self._call("PUT", "/api/users/4", uid=1, payload={"admin": False, "role": "agent"})
+            self.assertEqual((r.get_json()["role"], r.get_json()["admin"]), ("agent", 0))
+            # On ne retire pas ses propres droits.
+            self.assertEqual(self._call("PUT", "/api/users/%d" % body["id"], uid=body["id"], payload={"admin": False}).status_code, 400)
+
+    def test_admin_sees_his_team_unless_view_all(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2010,'ADMTEAM','Admin Equipe','x',1,'direction',NULL,1)")
+        conn.commit()
+        conn.close()
+        try:
+            with self.client.session_transaction() as sess:
+                sess["uid"] = 2010
+            mine = self.client.get("/api/agents?year=2026").get_json()
+            everything = self.client.get("/api/agents?year=2026", headers={"X-Scope": "all"}).get_json()
+            self.assertEqual(len(mine), 0)                                  # sans équipe : rien, même administrateur
+            self.assertGreaterEqual(len(everything), 1)                    # « Voir tout » : toutes les fiches
+            self.assertEqual(self.client.get("/api/requests/counts").get_json()["to_validate"], 0)
+            tree = self.client.get("/api/my-agents", headers={"X-Scope": "all"}).get_json()
+            self.assertTrue(tree.get("all"))
+            # Un non-administrateur ne peut pas élargir son périmètre avec l'en-tête.
+            with self.client.session_transaction() as sess:
+                sess["uid"] = 3
+            self.assertEqual(self.client.get("/api/my-agents", headers={"X-Scope": "all"}).get_json().get("all"), None)
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM users WHERE id=2010")
+            conn.commit()
+            conn.close()
+
+    def test_my_leave_returns_own_fiche_even_for_a_validator(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2020,'MLVAL','Val','x',0,'service',2,1)")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) "
+                     "VALUES (2020, 2, 2020, 'VAL', 'X', '', 2, 2026, '{}', '[]')")
+        conn.commit()
+        conn.close()
+        try:
+            r = self._call("GET", "/api/my-leave?year=2026", uid=2020).get_json()
+            self.assertEqual(r["fiche_id"], 2020)                 # sa fiche est hors de son équipe, elle reste atteignable
+            self.assertIsNone(self._call("GET", "/api/my-leave?year=2025", uid=2020).get_json()["fiche_id"])
+            self.assertEqual(self._call("GET", "/api/agents/2020?year=2026", uid=2020).status_code, 200)
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE id=2020")
+            conn.execute("DELETE FROM users WHERE id=2020")
+            conn.commit()
+            conn.close()
+
+    def test_mail_dates_are_ranges_and_templates_have_buttons(self):
+        import mail_templates
+        import mailer
+        cells = [4000 + d * 10 + h for d in (20, 21, 22, 23, 24) for h in (0, 1)]
+        self.assertEqual(mailer.format_ranges(cells, 2026), ["du 20 avril 2026 au 24 avril 2026"])
+        self.assertEqual(mailer.format_ranges([4241, 4270, 4271], 2026), ["du 24 avril 2026 (après-midi) au 27 avril 2026"])   # week-end sauté
+        self.assertEqual(mailer.format_ranges([4200], 2026), ["le 20 avril 2026 (matin)"])
+        self.assertEqual(mailer.format_ranges([4200, 4201, 4220, 4221], 2026), ["le 20 avril 2026", "le 22 avril 2026"])
+        r = mail_templates.render("nouvelle_demande", mail_templates.TEMPLATES["nouvelle_demande"]["sample"])
+        self.assertIn(">Valider</a>", r["html"])
+        self.assertIn(">Refuser</a>", r["html"])
+        self.assertIn("calendrier d&#x27;équipe</a>", r["html"])
+        self.assertNotIn("[[bouton", r["text"])
+        self.assertIn("Valider : https://", r["text"])
+        # Sans adresse de l'application, les lignes de bouton disparaissent (variables vides).
+        empty = dict(mail_templates.TEMPLATES["nouvelle_demande"]["sample"], lien_valider="", lien_refuser="", lien_calendrier="")
+        self.assertNotIn("Valider", mail_templates.render("nouvelle_demande", empty)["html"].split("validation")[1])
+
+    def test_mail_action_page_needs_a_click_and_checks_rights(self):
+        import mail_actions
+        conn = db.get_db()
+        conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) "
+                     "VALUES (2040, 1, 4, 2026, 'CA', '[5010, 5011]', 1, 'en_attente', 3)")
+        conn.commit()
+        conn.close()
+        secret = self.app_module.app.secret_key
+        good = mail_actions.make_token(secret, 2040, 3)
+        try:
+            page = self.client.get("/api/mail-action/" + good + "?a=validee")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Valider", page.get_data(as_text=True))
+            conn = db.get_db()
+            self.assertEqual(conn.execute("SELECT status FROM leave_requests WHERE id=2040").fetchone()["status"], "en_attente")  # GET sans effet
+            conn.close()
+            self.assertIn("Lien invalide", self.client.get("/api/mail-action/pas-un-jeton").get_data(as_text=True))
+            # Un agent n'est pas habilité à décider, même avec un jeton signé à son nom.
+            denied = self.client.post("/api/mail-action/" + mail_actions.make_token(secret, 2040, 4), data={"decision": "refusee"})
+            self.assertIn("Décision non enregistrée", denied.get_data(as_text=True))
+            done = self.client.post("/api/mail-action/" + good, data={"decision": "refusee", "comment": "Période chargée"})
+            self.assertIn("refusée", done.get_data(as_text=True))
+            conn = db.get_db()
+            row = conn.execute("SELECT status, decision_comment FROM leave_requests WHERE id=2040").fetchone()
+            ev = conn.execute("SELECT actor_id FROM leave_request_events WHERE request_id=2040 AND action='refusee'").fetchone()
+            conn.close()
+            self.assertEqual((row["status"], row["decision_comment"], ev["actor_id"]), ("refusee", "Période chargée", 3))
+            self.assertIn("déjà traitée", self.client.get("/api/mail-action/" + good).get_data(as_text=True))
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM leave_request_events WHERE request_id=2040")
+            conn.execute("DELETE FROM leave_requests WHERE id=2040")
+            conn.commit()
+            conn.close()
+
+    def test_delegation_periods_auto_and_done_list(self):
+        import datetime as dtm
+        import delegation
+        today = dtm.date.today()
+        conn = db.get_db()
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) "
+                     "VALUES (2050, 2, 3, 'SECT', 'UN', '', 2, ?, '{}', '[]')", (today.year,))
+        conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) "
+                     "VALUES (2051, 1, 4, 2026, 'CA', '[5010, 5011]', 1, 'validee', 3)")
+        conn.execute("INSERT INTO leave_request_events (request_id, action, actor_id, comment) VALUES (2051, 'validee', 2, 'Vu en délégation')")
+        conn.commit()
+        conn.close()
+        try:
+            conn = db.get_db()
+            self.assertIsNone(delegation.active_delegate(conn, 3))                       # rien de configuré
+            conn.close()
+            r = self._call("GET", "/api/delegation", uid=3).get_json()
+            self.assertEqual((r["delegate"]["login"], r["auto"], r["periods"], r["active_now"]), ("DRH", False, [], False))
+            self.assertEqual([(x["agent"], x["par"], x["dates"]) for x in r["done"]],
+                             [("AGENT UN", "Direction RH", ["le 1 mai 2026"])])          # validé par le délégataire, pas par moi
+            # Période explicite, même sans congés.
+            period = {"start": (today - dtm.timedelta(days=1)).isoformat(), "end": (today + dtm.timedelta(days=2)).isoformat()}
+            added = self._call("POST", "/api/delegation/periods", uid=3, payload=period)
+            self.assertEqual(added.status_code, 200, added.get_json())
+            conn = db.get_db()
+            self.assertEqual(delegation.active_delegate(conn, 3)["id"], 2)
+            self.assertIn(3, delegation.delegators_of(conn, 2))
+            self.assertIsNone(delegation.active_delegate(conn, 3, today + dtm.timedelta(days=30)))
+            conn.close()
+            self.assertEqual(self._call("DELETE", "/api/delegation/periods/%d" % added.get_json()["id"], uid=3).status_code, 200)
+            # Délégation automatique : seulement quand le valideur est absent (journée complète dans sa propre fiche).
+            self.assertEqual(self._call("PUT", "/api/delegation/auto", uid=3, payload={"auto": True}).status_code, 200)
+            conn = db.get_db()
+            self.assertIsNone(delegation.active_delegate(conn, 3))
+            base = today.month * 1000 + today.day * 10
+            conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2050, ?, 'CA'), (2050, ?, 'CA')", (base, base + 1))
+            conn.commit()
+            self.assertEqual(delegation.active_delegate(conn, 3)["id"], 2)
+            conn.close()
+            # Refus : période passée, dates inversées, valideur sans responsable.
+            self.assertEqual(self._call("POST", "/api/delegation/periods", uid=3, payload={"start": "2020-01-01", "end": "2020-01-05"}).status_code, 400)
+            self.assertEqual(self._call("POST", "/api/delegation/periods", uid=3, payload={"start": "2030-02-01", "end": "2030-01-01"}).status_code, 400)
+            self.assertEqual(self._call("POST", "/api/delegation/periods", uid=1, payload=period).status_code, 400)
+            self.assertEqual(self._call("GET", "/api/delegation", uid=4).status_code, 403)
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM cells WHERE agent_id=2050")
+            conn.execute("DELETE FROM leave_request_events WHERE request_id=2051")
+            conn.execute("DELETE FROM leave_requests WHERE id=2051")
+            conn.execute("DELETE FROM agents WHERE id=2050")
+            conn.execute("DELETE FROM delegations WHERE user_id=3")
+            conn.execute("UPDATE users SET delegate_auto=0 WHERE id=3")
+            conn.commit()
+            conn.close()
+
+    def test_hr_tree_uses_unit_names_with_the_responsible_first(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif, unit_code) VALUES (2060,'HRCHEF','CHEF PAUL','x',0,'service',2,1,'S1')")
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2061,'HRAG','AGENT UN','x',0,'agent',2060,1)")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) VALUES (2060, 2, 2060, 'CHEF', 'PAUL', '', 2, 2026, '{}', '[]')")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) VALUES (2061, 2060, 2061, 'ZAGENT', 'UN', '', 2060, 2026, '{}', '[]')")
+        conn.commit()
+        conn.close()
+        try:
+            data = self._call("GET", "/api/hr-dashboard?year=2026", uid=1).get_json()
+
+            def find(nodes, label):
+                for n in nodes:
+                    if n["label"] == label:
+                        return n
+                    sub = find(n.get("children") or [], label)
+                    if sub:
+                        return sub
+                return None
+
+            unit = find(data["tree"], "SERVICE PAIE")                      # le nom de l'entité, pas « CHEF PAUL »
+            self.assertIsNotNone(unit)
+            self.assertIsNone(find(data["tree"], "CHEF PAUL"))
+            self.assertEqual([(f["label"], bool(f.get("resp"))) for f in unit["fiches"]], [("CHEF PAUL", True), ("ZAGENT UN", False)])
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE id IN (2060, 2061)")
+            conn.execute("DELETE FROM users WHERE id IN (2060, 2061)")
+            conn.commit()
+            conn.close()
+
+    def test_own_fiche_is_a_request_even_for_an_admin(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2070,'ADMOWN','Admin Own','x',1,'direction',2,1)")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) "
+                     "VALUES (2070, 2, 2070, 'OWN', 'ADMIN', 'a@b.fr', 2, 2026, '{}', '[]')")
+        conn.commit()
+        conn.close()
+        try:
+            me = self._call("GET", "/api/agents/2070?year=2026", uid=2070).get_json()
+            self.assertEqual((me["can_edit_cells"], me["can_request"]), (False, True))      # demande, pas de saisie directe
+            other = self._call("GET", "/api/agents/2070?year=2026", uid=1).get_json()      # un autre administrateur saisit directement
+            self.assertTrue(other["can_edit_cells"])
+            conn = db.get_db()
+            admin_row = row = dict(conn.execute("SELECT * FROM users WHERE id=2070").fetchone())
+            self.assertEqual(self.app_module._request_validator(conn, admin_row), 2)       # sa demande va à son valideur
+            conn.close()
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE id=2070")
+            conn.execute("DELETE FROM users WHERE id=2070")
+            conn.commit()
+            conn.close()
+
+    def test_unit_list_is_the_whole_direction_and_email_matricule_are_locked(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        conn = db.get_db()
+        conn.execute("UPDATE users SET unit_code='K1', email='ag1@ville.fr', matricule='LOCK01' WHERE id=4")
+        conn.execute("UPDATE agents SET matricule='LOCK01' WHERE id=1")
+        conn.commit()
+        conn.close()
+        try:
+            r = self._call("GET", "/api/my-agents/4/unit", uid=1).get_json()
+            # K1 (secteur) → toute la direction D1 : la direction, ses services et ses secteurs ; pas D2.
+            self.assertEqual((r["unit_code"], sorted(u["code"] for u in r["units"])), ("K1", ["D1", "K1", "S1"]))
+            ok = self._call("PUT", "/api/my-agents/4/unit", uid=1, payload={"unit_code": "S1"})
+            self.assertEqual(ok.status_code, 200, ok.get_json())
+            self.assertEqual(self._call("PUT", "/api/my-agents/4/unit", uid=1, payload={"unit_code": "D2"}).status_code, 400)   # autre direction
+            self.assertEqual(self._call("GET", "/api/my-agents/4/unit", uid=4).status_code, 403)                                  # un agent n'a pas accès
+            # E-mail et matricule, une fois renseignés, ne se modifient plus depuis la fiche.
+            fiche = self._call("GET", "/api/agents/1?year=2026", uid=1).get_json()
+            body = {"nom": fiche["nom"], "prenom": fiche["prenom"], "email": "pirate@x.fr", "matricule": "AUTRE99",
+                    "validator_id": fiche["validator_id"], "params": fiche["params"], "periods": fiche["periods"], "cells": fiche["cells"]}
+            conn = db.get_db()
+            before = conn.execute("SELECT email, matricule FROM agents WHERE id=1").fetchone()
+            conn.close()
+            upd = self._call("PUT", "/api/agents/1", uid=1, payload=body)
+            self.assertEqual(upd.status_code, 200, upd.get_json())
+            conn = db.get_db()
+            after = conn.execute("SELECT email, matricule FROM agents WHERE id=1").fetchone()
+            conn.close()
+            self.assertEqual((after["email"], after["matricule"]), ("agent@example.fr", "LOCK01"))
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE users SET unit_code='', email='', matricule='' WHERE id=4")
+            conn.execute("UPDATE agents SET matricule='' WHERE id=1")
+            conn.commit()
+            conn.close()
+
+    def test_duplicate_carries_the_period_and_years_are_listed(self):
+        periods = [{"start": "2026-01-01", "end": "2026-06-30", "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5},
+                   {"start": "2026-07-01", "end": "2026-12-31", "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "80%",
+                    "jours_hebdo": 4, "jours_travailles": [1, 2, 3, 4], "ferie_travaille": True}]
+        conn = db.get_db()
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) "
+                     "VALUES (2080, 2, 5, 'PERIODE', 'UN', '', 2, 2026, '{}', ?)", (json.dumps(periods),))
+        conn.commit()
+        conn.close()
+        try:
+            r = self._call("POST", "/api/agents/duplicate", uid=1, payload={"ids": [2080], "year": 2027})
+            self.assertEqual(len(r.get_json()["created"]), 1, r.get_json())
+            conn = db.get_db()
+            new = conn.execute("SELECT periods, params FROM agents WHERE agent_user_id=5 AND year=2027").fetchone()
+            conn.close()
+            per = json.loads(new["periods"])
+            # La période en vigueur en fin d'année (80 %, 4 jours, fériés travaillés) couvre toute l'année suivante.
+            self.assertEqual([(x["start"], x["end"], x["quotite"], x["jours_travailles"], x["ferie_travaille"]) for x in per],
+                             [("2027-01-01", "2027-12-31", "80%", [1, 2, 3, 4], True)])
+            again = self._call("POST", "/api/agents/duplicate", uid=1, payload={"ids": [2080], "year": 2027}).get_json()
+            self.assertEqual((again["created"], "existe déjà" in again["errors"][0]["error"]), ([], True))
+            years = self._call("GET", "/api/my-agents/5/years", uid=1).get_json()
+            self.assertEqual([y["year"] for y in years], [2026, 2027])
+            self.assertEqual(self._call("GET", "/api/my-agents/5/years", uid=4).status_code, 403)       # un autre agent n'y a pas accès
+            self.assertEqual(self._call("GET", "/api/my-agents/4/years", uid=4).status_code, 200)       # on voit ses propres années
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE agent_user_id=5 AND year IN (2026, 2027) AND id>=2080 OR (agent_user_id=5 AND year=2027)")
+            conn.commit()
+            conn.close()
+
+    def test_units_include_teams_carried_by_agents_but_missing_from_the_tree(self):
+        tree = {"data": [{"code": "BF", "libelle": "DSI", "services": [{"code": "BF1", "libelle": "DSI", "secteurs": []}]}]}
+        agents = [{"matricule": "1", "direction": {"code": "BF"}, "service": {"code": "BF1", "libelle": "DSI"},
+                   "secteur": {"code": "BF1112", "libelle": "EQUIPE PROJET EDUC. INNOVATION INCLUSION"}, "affectation": {"code": "BF1", "libelle": "DSI"}}]
+        sedit_rh._ORG.update(at=0.0, units=None)
+        with mock.patch.object(sedit_rh, "_get", lambda path, params=None, timeout=30: tree),                 mock.patch.object(sedit_rh, "all_agents", lambda force=False: agents):
+            units = {u["code"]: u for u in sedit_rh.organisation_units(force=True)}
+        sedit_rh._ORG.update(at=0.0, units=None)
+        self.assertEqual((units["BF1112"]["parent_code"], units["BF1112"]["level"]), ("BF1", "equipe"))   # rattachée à BF1 (préfixe connu)
+        self.assertEqual(sorted(units), ["BF", "BF1", "BF1112"])
+
+    def test_login_is_case_insensitive(self):
+        conn = db.get_db()
+        conn.execute("UPDATE users SET mot_de_passe=? WHERE id=3", (self.app_module.generate_password_hash("Motdepasse-1"),))
+        conn.commit()
+        conn.close()
+        with mock.patch.object(config, "AUTH_MODE", "local"):
+            for name in ("SECT1", "sect1", "Sect1"):
+                r = self.client.post("/api/auth/login", json={"login": name, "password": "Motdepasse-1"})
+                self.assertEqual(r.status_code, 200, name)
+                self.assertEqual(r.get_json()["user"]["login"], "SECT1")
+            self.assertEqual(self.client.post("/api/auth/login", json={"login": "inconnu", "password": "x"}).status_code, 401)
+
+    def test_my_agents_tree_sirh_list_attach_and_move(self):
+        conn = db.get_db()
+        for uid, login, role, parent, unit in ((2003, "MAVAL", "service", 2, "D1"), (2001, "MAAG1", "agent", 2003, "K1"),
+                                                (2002, "MAAG2", "agent", 2003, "K1")):
+            conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif, unit_code) "
+                         "VALUES (?,?,?,?,0,?,?,1,?)", (uid, login, login, "x", role, parent, unit))
+        conn.commit()
+        conn.close()
+
+        def rh(mat, nom, prenom, unit):
+            return {"matricule": mat, "nom": nom, "prenom": prenom, "affectation": {"code": unit, "libelle": unit},
+                    "date_arrivee": "2010-01-01", "en_poste": True}
+
+        agents = [rh("MA100", "ZZALPHA", "Anna", "K1"), rh("MA200", "ZZBETA", "Bob", "D2")]
+        try:
+            with self._units_patch(), mock.patch.object(sedit_rh, "all_agents", lambda force=False: agents):
+                self._call("GET", "/api/org-units?refresh=1", uid=1)
+                tree = self._call("GET", "/api/my-agents", uid=2003).get_json()
+                self.assertEqual((tree["id"], [c["login"] for c in tree["children"]], tree["count"]), (2003, ["MAAG1", "MAAG2"], 2))
+                # Seuls les agents de mon unité ou en dessous (K1 sous D1), pas ceux de D2, ni les accès d'un agent.
+                lst = self._call("GET", "/api/my-agents/sirh", uid=2003).get_json()
+                self.assertEqual([i["matricule"] for i in lst["items"]], ["MA100"])
+                self.assertEqual(self._call("GET", "/api/my-agents", uid=4).status_code, 403)
+                # Déposer Anna sous MAAG1 : elle est créée sous lui, MAAG1 devient valideur (niveau sous celui de MAVAL) et garde son unité.
+                r = self._call("POST", "/api/my-agents/attach", uid=2003, payload={"matricule": "MA100", "parent_id": 2001, "unit_code": "K1"})
+                self.assertEqual(r.status_code, 200, r.get_json())
+                conn = db.get_db()
+                anna = conn.execute("SELECT id, parent_id, unit_code, role FROM users WHERE matricule='MA100'").fetchone()
+                self.assertIsNone(conn.execute("SELECT 1 FROM agents WHERE agent_user_id=?", (anna["id"],)).fetchone())  # pas de fiche sans période
+                boss = conn.execute("SELECT role, unit_code FROM users WHERE id=2001").fetchone()
+                conn.close()
+                self._seed_period_settings()
+                self.assertEqual(self._call("POST", "/api/my-agents/%d/fiche" % anna["id"], uid=2003, payload={
+                    "year": 2026, "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5}).status_code, 200)
+                conn = db.get_db()
+                fiche = conn.execute("SELECT user_id, validator_id FROM agents WHERE agent_user_id=?", (anna["id"],)).fetchone()
+                conn.close()
+                self.assertEqual((anna["parent_id"], anna["unit_code"], anna["role"]), (2001, "K1", "agent"))
+                self.assertEqual((fiche["user_id"], fiche["validator_id"]), (2001, 2001))
+                # Bouton « Dupliquer pour N+1 » : proposé tant que la fiche de l'année suivante n'existe pas.
+                def anna_node():
+                    stack = [self._call("GET", "/api/my-agents?year=2026&depth=all", uid=2003).get_json()]
+                    while stack:
+                        n = stack.pop()
+                        if n["matricule"] == "MA100":
+                            return n
+                        stack.extend(n["children"])
+
+                self.assertEqual(anna_node()["fiche"]["next_exists"], False)
+                dup = self._call("POST", "/api/agents/duplicate", uid=2003, payload={"ids": [anna_node()["fiche"]["id"]], "year": 2027})
+                self.assertEqual(len(dup.get_json()["created"]), 1, dup.get_json())
+                self.assertEqual(anna_node()["fiche"]["next_exists"], True)
+                self.assertEqual((boss["role"], boss["unit_code"]), ("secteur", "K1"))        # niveau de son unité (secteur), sous celui de MAVAL (service)
+                # Anna est maintenant dans l'application : plus proposée. Hors périmètre ou doublon : refusé.
+                self.assertEqual(self._call("GET", "/api/my-agents/sirh", uid=2003).get_json()["total"], 0)
+                # Hors de mon unité : absent de la liste par défaut, proposé avec « toute la collectivité », et rattachable.
+                self.assertEqual(self._call("GET", "/api/my-agents/sirh?scope=all", uid=2003).get_json()["total"], 1)
+                self.assertEqual(self._call("POST", "/api/my-agents/attach", uid=2003, payload={"matricule": "MA200", "parent_id": 2001}).status_code, 200)
+                # Mais jamais sous une personne qui n'est pas dans mon périmètre.
+                self.assertEqual(self._call("POST", "/api/my-agents/attach", uid=2003, payload={"matricule": "MA200", "parent_id": 3}).status_code, 403)
+                self.assertEqual(self._call("POST", "/api/my-agents/attach", uid=2003, payload={"matricule": "MA100", "parent_id": 2001}).status_code, 400)
+                # Déplacement : MAAG2 sous MAAG1 ; interdit sous soi-même / un subordonné ; hors périmètre refusé.
+                self.assertEqual(self._call("POST", "/api/my-agents/move", uid=2003, payload={"user_id": 2002, "parent_id": 2001}).status_code, 200)
+                self.assertEqual(self._call("POST", "/api/my-agents/move", uid=2003, payload={"user_id": 2001, "parent_id": 2002}).status_code, 400)
+                self.assertEqual(self._call("POST", "/api/my-agents/move", uid=2003, payload={"user_id": 3, "parent_id": 2001}).status_code, 403)
+                tree = self._call("GET", "/api/my-agents", uid=2003).get_json()
+                self.assertEqual(tree["count"], 4)
+                # Par défaut : mes personnes directes ; « toute ma ligne hiérarchique » : de proche en proche.
+                self.assertEqual([c["login"] for c in tree["children"]], ["MAAG1"])
+                self.assertEqual((tree["children"][0]["children"], tree["children"][0]["more"], tree["children"][0]["count"]), ([], True, 3))
+                full = self._call("GET", "/api/my-agents?depth=all", uid=2003).get_json()
+                self.assertEqual(len(full["children"][0]["children"]), 3)
+                # Recherche AD : candidats puis rattachement (l'adresse est relue dans l'annuaire, jamais prise du navigateur).
+                hits = [{"username": "ma-zzdeux", "displayName": "ZZDEUX Anne", "email": "anne@ville.fr"}]
+                with mock.patch.object(apm, "configured", lambda: True), mock.patch.object(apm, "ad_search", lambda q, limit=15: hits):
+                    cand = self._call("GET", "/api/my-agents/2002/ad?q=zzdeux", uid=2003).get_json()
+                    self.assertEqual((cand["status"], cand["candidates"][0]["username"]), ("unique", "ma-zzdeux"))
+                    ok = self._call("POST", "/api/my-agents/2002/ad", uid=2003, payload={"username": "ma-zzdeux", "email": "pirate@x.fr"})
+                    self.assertEqual((ok.status_code, ok.get_json()["email"]), (200, "anne@ville.fr"))
+                    self.assertEqual(self._call("POST", "/api/my-agents/2001/ad", uid=2003, payload={"username": "ma-zzdeux"}).status_code, 400)   # déjà pris
+                    self.assertEqual(self._call("POST", "/api/my-agents/3/ad", uid=2003, payload={"username": "ma-zzdeux"}).status_code, 403)       # hors périmètre
+                conn = db.get_db()
+                self.assertEqual(conn.execute("SELECT email, ad_login FROM users WHERE id=2002").fetchone()["email"], "anne@ville.fr")
+                conn.close()
+                # Nom et prénom séparés dans la fiche, même pour un compte créé avant l'enregistrement du prénom (repris de Sedit RH).
+                conn = db.get_db()
+                conn.execute("UPDATE users SET matricule='MA300', nom='ZZGAMMA GINA', nom_famille='', prenom='' WHERE id=2002")
+                conn.commit()
+                conn.close()
+                agents.append(rh("MA300", "ZZGAMMA", "Gina", "K1"))
+                self.assertEqual(self._call("POST", "/api/my-agents/2002/fiche", uid=2003, payload={
+                    "year": 2026, "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5}).status_code, 200)
+                conn = db.get_db()
+                gina = conn.execute("SELECT nom, prenom FROM agents WHERE agent_user_id=2002").fetchone()
+                acct = conn.execute("SELECT nom_famille, prenom FROM users WHERE id=2002").fetchone()
+                conn.close()
+                self.assertEqual((gina["nom"], gina["prenom"], acct["nom_famille"], acct["prenom"]), ("ZZGAMMA", "GINA", "ZZGAMMA", "GINA"))
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE user_id IN (2001, 2002, 2003) OR agent_user_id IN (SELECT id FROM users WHERE matricule IN ('MA100', 'MA200'))")
+            conn.execute("DELETE FROM users WHERE id IN (2001, 2002, 2003) OR matricule IN ('MA100', 'MA200')")
+            conn.commit()
+            conn.close()
+
+    def test_business_rules_document_is_served(self):
+        r = self._call("GET", "/api/docs/regles-metier", uid=4)
+        self.assertEqual(r.status_code, 200)
+        text = r.get_data(as_text=True)
+        self.assertIn("# Règles métier", text)
+        self.assertIn("Mon équipe", text)
+
+    def test_direction_valideur_is_validated_by_a_dga(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        with mock.patch.object(config, "AUTH_MODE", "ad"):
+            dga = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "level": "dga", "nom": "Zzdga", "prenom": "Dora"})
+            self.assertEqual(dga.status_code, 200, dga.get_json())
+            self.assertEqual((dga.get_json()["role"], dga.get_json()["unit_code"]), ("dga", ""))
+            # Une direction n'a pas d'unité supérieure : son valideur est le DGA choisi.
+            d = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "nom": "Zzdir", "prenom": "Marc", "unit_code": "D2", "supervisor_id": dga.get_json()["id"]})
+            self.assertEqual(d.status_code, 200, d.get_json())
+            self.assertEqual((d.get_json()["role"], d.get_json()["parent_id"]), ("direction", dga.get_json()["id"]))
+            # Un DGA ne peut pas être validé par un niveau inférieur.
+            bad = self._call("POST", "/api/users/person", uid=1, payload={
+                "profil": "valideur", "level": "dga", "nom": "Zzbad2", "prenom": "Z", "supervisor_id": d.get_json()["id"]})
+            self.assertEqual(bad.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

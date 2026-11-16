@@ -24,6 +24,9 @@ const state = {
 const TABS_KEY = "suivi_tabs";
 const YEAR_KEY = "suivi_year";
 
+// Les trois profils proposés à l'écran ; ROLE_LABELS ne sert plus qu'aux niveaux internes (regroupements, libellés).
+// Deux rôles ; « Administrateur » est un droit en plus (case à cocher), pour un agent comme pour un valideur.
+const PROFIL_LABELS = { valideur: "Valideur", agent: "Agent" };
 const ROLE_LABELS = {
   administrateur: "Administrateur",
   dgs: "Valideur DGS",
@@ -37,8 +40,20 @@ const ROLE_LABELS = {
 };
 const VALIDATOR_ROLES = ["administrateur", "dgs", "dga", "direction", "service", "secteur", "unite", "equipe"];
 
+/* Jours travaillés d'une période : 1 = lundi … 7 = dimanche ; par défaut du lundi au vendredi, jours fériés non travaillés. */
+const WEEKDAYS = [[1, "L", "Lundi"], [2, "M", "Mardi"], [3, "M", "Mercredi"], [4, "J", "Jeudi"], [5, "V", "Vendredi"], [6, "S", "Samedi"], [7, "D", "Dimanche"]];
+function defaultDays(n) { return [1, 2, 3, 4, 5, 6, 7].slice(0, Math.max(1, Math.min(7, Number(n) || 5))); }
+function periodDays(per) {
+  const d = per && Array.isArray(per.jours_travailles) && per.jours_travailles.length ? per.jours_travailles : defaultDays(per && per.jours_hebdo);
+  return d.map(Number);
+}
+function daysCheckboxes(days, attr, disabled) {
+  return WEEKDAYS.map(([n, l, full]) => `<label class="wd" title="${full}"><input type="checkbox" ${attr}="${n}" ${days.includes(n) ? "checked" : ""}${disabled ? " disabled" : ""}>${l}</label>`).join("");
+}
+
 function userRole(u) {
-  return (u && u.role) || (u && u.admin ? "administrateur" : "secteur");
+  if (u && u.admin) return "administrateur"; // un administrateur a tous les droits, quel que soit son rôle
+  return (u && u.role) || "secteur";
 }
 
 function agentName(a) {
@@ -178,6 +193,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 /* ---------------------------- utilitaires ---------------------------- */
 function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (state.user && state.user.admin && state.viewAll) headers["X-Scope"] = "all";   // administrateur : « Voir tout »
   return fetch(path, { ...opts, headers }).then(async (r) => {
     let data = null;
     try { data = await r.json(); } catch (_) { /* vide */ }
@@ -357,11 +373,27 @@ function showApp() {
   const requestsLabel = $("#nav-requests-label");
   if (requestsLabel) requestsLabel.textContent = isAgent ? "Mes demandes" : "Demandes";
   const agentsNav = document.querySelector('#main-nav a[data-nav="agents"]');
-  if (agentsNav) agentsNav.textContent = isAgent ? "Ma fiche" : "Mes fiches";
+  if (agentsNav) { agentsNav.textContent = "Mes fiches"; agentsNav.classList.toggle("hidden", isAgent); }   // l'agent passe par « Mes congés »
   const hrNav = $("#nav-hr");
   if (hrNav) hrNav.classList.toggle("hidden", isAgent);
   if (isAgent) state.planningFilter = "all";
   $("#nav-settings").classList.toggle("hidden", !isAdmin);
+  const scopeBox = $("#scope-toggle");
+  if (scopeBox) {
+    scopeBox.classList.toggle("hidden", !isAdmin);
+    let saved = false;
+    try { saved = localStorage.getItem("suivi_scope_all") === "1"; } catch (_) { saved = false; }
+    state.viewAll = isAdmin && saved;
+    $("#scope-all").checked = state.viewAll;
+    $("#scope-all").onchange = () => {
+      state.viewAll = $("#scope-all").checked;
+      try { localStorage.setItem("suivi_scope_all", state.viewAll ? "1" : "0"); } catch (_) { /* sans effet */ }
+      route();
+      refreshRequestBadge();
+    };
+  }
+  $("#nav-my-agents").classList.toggle("hidden", !canManageUsers());
+  $("#nav-delegation").classList.toggle("hidden", !canManageUsers());
   $("#nav-users").classList.toggle("hidden", !canManageUsers() || isAdmin);
   $("#btn-password").classList.toggle("hidden", !!state.user.password_by_ad);
   setupActAs();
@@ -497,8 +529,7 @@ function renderTabs() {
     <div class="tab${t.id === state.activeTab ? " active" : ""}" data-tab-id="${t.id}" title="${esc(t.nom)}">
       <span class="tab-label">${esc(t.nom)}</span>
       <button class="tab-close" data-close-id="${t.id}" title="Fermer l'onglet">×</button>
-    </div>`).join("") + (canCreateFiche()
-      ? `<button class="tab tab-new" id="tab-new" title="Nouvelle fiche">+</button>` : "");
+    </div>`).join("") + `<button class="tab tab-new" id="tab-new" title="Ouvrir des fiches de mon équipe">+</button>`;
 
   $$("#tabbar .tab[data-tab-id]").forEach((el) => {
     el.addEventListener("click", (e) => {
@@ -514,7 +545,67 @@ function renderTabs() {
     });
   });
   const nb = $("#tab-new");
-  if (nb) nb.addEventListener("click", openNewFicheModal);
+  if (nb) nb.addEventListener("click", openFichePicker);
+}
+
+/* « + » de la barre d'onglets : choisir, parmi les fiches des agents sous ma responsabilité, celles à ouvrir en onglets. */
+async function openFichePicker() {
+  const ov = document.createElement("div");
+  ov.className = "ma-dialog-overlay";
+  ov.innerHTML = `<div class="ma-dialog card">
+    <h3>Ouvrir des fiches</h3>
+    <p class="muted" style="margin-top:0">Cochez les agents sous votre responsabilité dont vous voulez ouvrir la fiche ${esc(state.year)}.</p>
+    <input type="search" id="fp-q" placeholder="Rechercher un agent…" style="width:100%;margin-bottom:6px">
+    <div class="fp-bar"><button type="button" class="btn btn-small" id="fp-all">Tout cocher</button>
+      <button type="button" class="btn btn-small" id="fp-none">Aucun</button><span id="fp-count" class="muted"></span></div>
+    <div id="fp-list" class="fp-list"><p class="muted">Chargement…</p></div>
+    <div class="ma-dialog-actions"><button class="btn" id="fp-cancel">Annuler</button><button class="btn btn-primary" id="fp-ok" disabled>Ouvrir</button></div>
+    <div id="fp-err"></div></div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $("#fp-cancel").addEventListener("click", close);
+  let fiches = [];
+  const checked = new Set();
+  const draw = () => {
+    const q = ($("#fp-q").value || "").trim().toLowerCase();
+    const open = new Set(state.tabs.map((t) => t.id));
+    const list = fiches.filter((a) => !q || agentName(a).toLowerCase().includes(q) || String(a.proprietaire || "").toLowerCase().includes(q));
+    $("#fp-list").innerHTML = list.length ? list.map((a) => `<label class="fp-item${open.has(a.id) ? " fp-open" : ""}">
+        <input type="checkbox" data-id="${a.id}" ${checked.has(a.id) ? "checked" : ""} ${open.has(a.id) ? "disabled" : ""}>
+        <span><strong>${esc(agentName(a))}</strong> <span class="muted">${a.proprietaire ? "valideur : " + esc(a.proprietaire) : ""}${open.has(a.id) ? " — déjà ouverte" : ""}</span></span></label>`).join("")
+      : `<p class="muted">Aucune fiche à afficher.</p>`;
+    $("#fp-list").querySelectorAll("input[data-id]").forEach((b) => b.addEventListener("change", () => {
+      const id = Number(b.dataset.id);
+      if (b.checked) checked.add(id); else checked.delete(id);
+      upd();
+    }));
+    upd();
+  };
+  const upd = () => {
+    $("#fp-count").textContent = checked.size ? `${checked.size} cochée(s)` : "";
+    $("#fp-ok").disabled = !checked.size;
+  };
+  try {
+    fiches = (await api("/api/agents?year=" + encodeURIComponent(state.year))) || [];
+    fiches.sort((a, b) => agentName(a).localeCompare(agentName(b), "fr"));
+    draw();
+  } catch (e) { $("#fp-list").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+  $("#fp-q").addEventListener("input", draw);
+  $("#fp-all").addEventListener("click", () => {
+    const open = new Set(state.tabs.map((t) => t.id));
+    const q = ($("#fp-q").value || "").trim().toLowerCase();
+    fiches.filter((a) => !open.has(a.id) && (!q || agentName(a).toLowerCase().includes(q))).forEach((a) => checked.add(a.id));
+    draw();
+  });
+  $("#fp-none").addEventListener("click", () => { checked.clear(); draw(); });
+  $("#fp-ok").addEventListener("click", () => {
+    const ids = fiches.filter((a) => checked.has(a.id));
+    if (!ids.length) return;
+    // Les onglets s'ouvrent dans l'ordre de la liste ; la première fiche cochée devient l'onglet actif.
+    [...ids].reverse().forEach((a) => upsertTab(a.id, agentName(a)));
+    close();
+    location.hash = "#/agent/" + ids[0].id;
+  });
 }
 
 function upsertTab(id, nom) {
@@ -549,7 +640,7 @@ async function closeTab(id) {
     const next = state.tabs[Math.min(idx, state.tabs.length - 1)];
     state.activeTab = null;
     if (next) location.hash = "#/agent/" + next.id;
-    else location.hash = "#/agents";
+    else location.hash = "#/my-agents";
   }
   renderTabs();
 }
@@ -571,12 +662,12 @@ async function route() {
   const hash = location.hash || "#/dashboard";
   $$("#main-nav a").forEach((a) => {
     let active = hash.startsWith(a.getAttribute("href"));
-    if (a.dataset.nav === "agents" && userRole(state.user) === "agent" && hash.startsWith("#/agent/")) {
-      active = true;
-    }
+    if (a.dataset.nav === "my-agents" && hash.startsWith("#/agent/") && !hash.endsWith("/conges")) active = true;
+    if (a.dataset.nav === "my-leave") active = hash.startsWith("#/my-leave") || hash.endsWith("/conges");
     a.classList.toggle("active", active);
   });
   const m = hash.match(/^#\/agent\/(\d+)/);
+  state.leaveView = !!m && hash.endsWith("/conges");   // « Mes congés » : fiche sans les paramètres et périodes
   if (m) {
     const id = parseInt(m[1], 10);
     // On change de fiche : sauvegarder les modifications en attente.
@@ -588,7 +679,10 @@ async function route() {
   state.activeTab = null;
   persistTabs();
   renderTabs();
-  if (hash.startsWith("#/agents")) return viewAgents();
+  if (hash.startsWith("#/my-leave")) return viewMyLeave();
+  if (hash.startsWith("#/delegation")) return viewDelegation();
+  if (hash.startsWith("#/my-agents")) return viewMyAgents();
+  if (hash.startsWith("#/agents")) { location.hash = "#/my-agents"; return; }   // « Mes fiches » est fusionné dans « Mon équipe »
   if (hash.startsWith("#/requests")) return viewRequests();
   if (hash.startsWith("#/hr")) return viewHrDashboard();
   if (hash.startsWith("#/planning")) return viewPlanning();
@@ -615,7 +709,7 @@ async function viewAgentDashboard() {
         <h1>Ma synthèse ${state.year || ""}</h1>
         <div class="card">
           <p>Aucune fiche n'est disponible pour cette année.</p>
-          <a class="btn" href="#/agents">Ouvrir ma fiche</a>
+          <a class="btn" href="#/my-agents">Ouvrir ma fiche</a>
         </div>`;
       return;
     }
@@ -857,7 +951,7 @@ async function viewDashboard() {
       <div class="dash-table-wrap">
         <table class="data dashboard">
           <thead><tr>
-            <th>Fiche</th><th>Propriétaire</th><th>Cycle</th>
+            <th>Fiche</th><th>Valideur</th><th>Cycle</th>
             <th class="num">CA pris</th><th class="num">CA restant</th>
             <th class="num">RTT restant</th><th class="num">Sujétion restant</th>
             <th class="num">Bonification restant</th><th class="num">CET restant</th>
@@ -891,7 +985,7 @@ async function viewHrDashboard() {
     const renderTreeLeaf = (f) => `<div class="hr-tree-leaf role-agent">
       <span class="hr-tree-marker"></span>
       <span class="hr-tree-row">
-        <span class="hr-tree-name">${esc(f.label)}</span>
+        <span class="hr-tree-name">${esc(f.label)}${f.resp ? ` <span class="manager-tag">(Responsable)</span>` : ""}</span>
         <span class="num">${fmt(f.agents)}</span>
         <span class="num">${fmt(f.absences)} j</span>
         <span class="num">${fmt(f.rate)} %</span>
@@ -1003,16 +1097,19 @@ async function viewAgents() {
   } else {
     try { scopeUsers = await api("/api/scope-users"); } catch (_) { scopeUsers = []; }
   }
+  // Nom de l'entité (unité Sedit RH) de chaque responsable : c'est lui qui titre le groupe, pas le nom du valideur.
+  let unitNames = {};
+  try { unitNames = Object.fromEntries((await api("/api/org-units?scope=all")).map((x) => [x.code, x.libelle])); } catch (_) { unitNames = {}; }
 
   const cardHtml = (a) => {
     const own = canEditFiche(a) && (a.user_id === state.user.id || state.user.admin);
     const canEdit = canEditFiche(a);
     return `
-      <div class="card agent-card${a.is_manager ? " manager-card" : ""}" data-id="${a.id}" data-year="${a.year}">
+      <div class="card agent-card${a.is_manager || a._resp ? " manager-card" : ""}" data-id="${a.id}" data-year="${a.year}">
         ${own ? `<input type="checkbox" class="agent-select" data-id="${a.id}" title="Sélectionner pour duplication">` : ""}
         <h3>${esc(agentName(a))}</h3>
         <div class="meta">
-          Propriétaire : ${esc(a.proprietaire || "–")}<br>
+          Valideur : ${esc(a.proprietaire || "–")}<br>
           E-mail : ${esc(a.email || "–")}<br>
           Pénibilité : ${esc(a.params.penibilite || "–")} · Quotité : ${esc(a.params.quotite || "–")}<br>
           Modifiée le ${esc((a.modifie_le || "").slice(0, 16).replace("T", " "))}
@@ -1029,7 +1126,22 @@ async function viewAgents() {
   const agentsByUser = {};
   const groupKey = (a) => userRole(state.user) === "agent" ? a.agent_user_id : a.user_id;
   agents.forEach((a) => { (agentsByUser[groupKey(a)] = agentsByUser[groupKey(a)] || []).push(a); });
+  // Le responsable (valideur) d'une entité est affiché en premier dans le groupe de son entité : sa propre fiche
+  // quitte le groupe de son propre valideur pour ouvrir le groupe qu'il valide.
+  if (userRole(state.user) !== "agent") {
+    agents.forEach((a) => {
+      const mine = agentsByUser[a.agent_user_id];
+      if (a.agent_user_id && a.agent_user_id !== a.user_id && mine && mine.length) {
+        const from = agentsByUser[groupKey(a)];
+        const i = from ? from.indexOf(a) : -1;
+        if (i >= 0) { from.splice(i, 1); a._resp = true; mine.push(a); }
+      }
+    });
+  }
   Object.values(agentsByUser).forEach((list) => list.sort((a, b) => {
+    const ra = a._resp ? 1 : 0;
+    const rb = b._resp ? 1 : 0;
+    if (ra !== rb) return rb - ra;
     const ma = a.is_manager ? 1 : 0;
     const mb = b.is_manager ? 1 : 0;
     if (ma !== mb) return mb - ma;
@@ -1062,7 +1174,7 @@ async function viewAgents() {
     const children = sortHierarchyChildren(u, kids[u.id] || []);
     if (!own.length && !children.some((child) => subtreeHasAgents(child))) return;
     const roleLabel = ROLE_LABELS[userRole(u)] || userRole(u);
-    const display = (u.nom && u.nom !== roleLabel) ? u.nom : u.login;
+    const display = unitNames[u.unit_code] || ((u.nom && u.nom !== roleLabel) ? u.nom : u.login);
     const count = own.length;
     sections += `
       <div class="agent-group" style="margin-left:${Math.min(level, 3) * 20}px">
@@ -1124,7 +1236,7 @@ async function viewAgents() {
           .then((res) => {
             const n = (res.created || []).length;
             toast(n ? `Fiche dupliquée en ${target}` : "Duplication impossible");
-            if (n) setYear(target, "#/agents");
+            if (n) setYear(target, "#/my-agents");
           })
           .catch((err) => toast(err.message, true));
       } else if (act === "del") {
@@ -1173,7 +1285,7 @@ async function viewAgents() {
       });
       const n = (res.created || []).length;
       toast(`${n} fiche(s) dupliquée(s) en ${target}`);
-      if (n) setYear(target, "#/agents");
+      if (n) setYear(target, "#/my-agents");
     } catch (err) {
       toast(err.message, true);
     }
@@ -1587,7 +1699,7 @@ function openOwnerModal() {
   const f = state.fiche;
   if (!f || !f.can_change_owner) return;
   const options = (f.owner_options || []).map((u) =>
-    `<option value="${u.id}" ${String(u.id) === String(f.user_id) ? "selected" : ""}>${esc(u.nom || u.login)} (${esc(u.login)}) — ${esc(ROLE_LABELS[u.role] || u.role)}</option>`
+    `<option value="${u.id}" ${String(u.id) === String(f.user_id) ? "selected" : ""}>${esc(u.display || u.nom || u.login)} — ${esc(ROLE_LABELS[u.role] || u.role)}</option>`
   ).join("");
   if (!options) return;
   $("#owner-fiche-name").textContent = agentName(f);
@@ -1617,7 +1729,7 @@ async function submitOwnerChange() {
       body: JSON.stringify({ owner_id: newOwner }),
     });
     $("#owner-modal").classList.add("hidden");
-    toast("Propriétaire de la fiche modifié");
+    toast("Valideur de la fiche modifié");
     viewFiche(f.id);
   } catch (err) {
     const el = $("#owner-error");
@@ -1639,6 +1751,15 @@ const DOW_SHORT = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
 
 async function viewPlanning() {
   if (!state.user) return;
+  // Lien des e-mails : #/planning?equipe=1&mois=4&annee=2026 → calendrier de mon équipe, ce mois-là.
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (q.toString()) {
+    const wantYear = Number(q.get("annee"));
+    if (wantYear && wantYear !== state.year) { setYear(wantYear, location.hash); return; }
+    if (q.get("mois")) state.planningMonth = Math.max(1, Math.min(12, Number(q.get("mois")) || 1));
+    if (q.get("equipe")) state.planningFilter = "all";
+    history.replaceState(null, "", location.pathname + location.search + "#/planning");
+  }
   const year = state.year || defaultYear();
   if (!state.planningMonth) {
     const now = new Date();
@@ -1772,6 +1893,8 @@ function renderPlanning(data) {
     const hex = colors[code] || "F2F2F2";
     return `background:${cssColor(hex)};color:${textColorFor(hex)}`;
   };
+  // Jour non validé (demande en attente) : couleur éclaircie et pointillé, comme dans la fiche.
+  const pendingStyleFor = (code) => `background:${mixColor(colors[code] || "F2F2F2", 0.22)};color:#4a2118`;
   const shadeCls = (d) => {
     const dc = dayCls(d);
     return dc.cls ? "shade-" + dc.cls : "";
@@ -1806,7 +1929,7 @@ function renderPlanning(data) {
       if (c0 && c0 === c1) {
         tds += `<td class="plan-cell"><div class="full" style="${styleFor(c0)}">${esc(c0)}</div></td>`;
       } else if (p0 && p0 === p1) {
-        tds += `<td class="plan-cell"><div class="full pending" style="${styleFor(p0)}">${esc(p0)}</div></td>`;
+        tds += `<td class="plan-cell"><div class="full pending" title="Demande en attente de validation" style="${pendingStyleFor(p0)}">${esc(p0)}</div></td>`;
       } else if (!c0 && !c1 && !p0 && !p1 && !n0 && !n1) {
         tds += `<td class="plan-cell"><div class="full ${shade}"></div></td>`;
       } else if (!c0 && !c1 && !p0 && !p1) {
@@ -1815,10 +1938,10 @@ function renderPlanning(data) {
         tds += `<td class="plan-cell">${h0}${h1}</td>`;
       } else {
         const h0 = c0 ? `<div class="half" style="${styleFor(c0)}">${esc(c0)}</div>`
-          : (p0 ? `<div class="half pending" style="${styleFor(p0)}">${esc(p0)}</div>`
+          : (p0 ? `<div class="half pending" title="Demande en attente de validation" style="${pendingStyleFor(p0)}">${esc(p0)}</div>`
             : (n0 ? `<div class="half">${n0}</div>` : `<div class="half ${shade}"></div>`));
         const h1 = c1 ? `<div class="half" style="${styleFor(c1)}">${esc(c1)}</div>`
-          : (p1 ? `<div class="half pending" style="${styleFor(p1)}">${esc(p1)}</div>`
+          : (p1 ? `<div class="half pending" title="Demande en attente de validation" style="${pendingStyleFor(p1)}">${esc(p1)}</div>`
             : (n1 ? `<div class="half">${n1}</div>` : `<div class="half ${shade}"></div>`));
         tds += `<td class="plan-cell">${h0}${h1}</td>`;
       }
@@ -1932,7 +2055,7 @@ async function viewFiche(id) {
     state.ficheValidators = [];
   }
   upsertTab(id, agentName(state.fiche));
-  state.readOnly = !canEditFiche(state.fiche);
+  state.readOnly = !canEditFiche(state.fiche) || state.leaveView;   // « Mes congés » : on consulte et on demande, on ne modifie pas les informations
   state.requestMode = !!(state.fiche.can_request && !state.fiche.can_edit_cells);
   state.specialRequestMode = !!state.fiche.can_special_request;
   renderFiche();
@@ -1970,7 +2093,7 @@ function renderFiche() {
 
   const validators = state.ficheValidators || [];
   const validatorOptions = validators.map((v) =>
-    `<option value="${v.id}" ${String(v.id) === String(f.validator_id) ? "selected" : ""}>${esc(v.nom || v.login)} (${esc(v.login)}) — ${esc(ROLE_LABELS[v.role] || v.role)}</option>`
+    `<option value="${v.id}" ${String(v.id) === String(f.validator_id) ? "selected" : ""}>${esc(v.display || v.nom || v.login)} — ${esc(ROLE_LABELS[v.role] || v.role)}</option>`
   ).join("");
   const ro = !!state.readOnly;
   const dis = ro ? " disabled" : "";
@@ -1989,6 +2112,8 @@ function renderFiche() {
       duree_hebdo: p.duree_hebdo || "",
       quotite: p.quotite || "",
       jours_hebdo: p.jours_hebdo,
+      jours_travailles: p.jours_travailles,
+      ferie_travaille: p.ferie_travaille,
     }];
   };
   const materializePeriods = () => {
@@ -2000,6 +2125,7 @@ function renderFiche() {
   const renderPeriodsEditor = () => {
     const el = $("#periods-editor");
     if (!el) return;
+    setTimeout(applyCalendarCoverage, 0);   // les jours hors période se grisent dès que les périodes changent
     const periods = displayPeriods();
     const disPeriod = ro ? " disabled" : "";
     const rows = periods.map((per, i) => {
@@ -2011,6 +2137,8 @@ function renderFiche() {
         <td><select data-pf="duree_hebdo"${disPeriod}>${optionList(dureesPer, per.duree_hebdo, true)}</select></td>
         <td><select data-pf="quotite"${disPeriod}>${optionList(s.quotites, per.quotite, true)}</select></td>
         <td><select data-pf="jours_hebdo"${disPeriod}>${optionList(s.jours_hebdo, per.jours_hebdo, true)}</select></td>
+        <td class="wd-cell">${daysCheckboxes(periodDays(per), "data-pd", ro)}</td>
+        <td><label class="wd" title="Jours fériés travaillés"><input type="checkbox" data-pferie ${per.ferie_travaille ? "checked" : ""}${ro ? " disabled" : ""}></label></td>
         <td>${i > 0 && !ro ? `<button class="btn btn-small btn-danger" data-period-del="${i}">Supprimer</button>` : ""}</td>
       </tr>`;
     }).join("");
@@ -2028,7 +2156,7 @@ function renderFiche() {
         <table class="data periods-table">
           <thead><tr>
             <th>Début</th><th>Fin</th><th>Pénibilité</th><th>Durée</th>
-            <th>Quotité</th><th>Jours/sem.</th><th></th>
+            <th>Quotité</th><th>Jours/sem.</th><th title="Jours travaillés : les autres sont grisés dans le calendrier et ne sont pas décomptés">Jours travaillés</th><th title="L'agent travaille les jours fériés">Fériés</th><th></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -2044,6 +2172,7 @@ function renderFiche() {
           let value = input.value;
           if (field === "jours_hebdo") value = value === "" ? null : Number(value);
           list[index][field] = value;
+          if (field === "jours_hebdo" && value) list[index].jours_travailles = defaultDays(value);
           if (field === "penibilite") {
             const options = (s.penibilites_durees && s.penibilites_durees[value]) || s.durees || [];
             if (!options.includes(list[index].duree_hebdo)) {
@@ -2054,6 +2183,27 @@ function renderFiche() {
           scheduleSave();
           scheduleCompute();
         });
+      });
+    });
+
+    $$("#periods-editor tr[data-period-index]").forEach((tr) => {
+      const index = Number(tr.dataset.periodIndex);
+      tr.querySelectorAll("[data-pd]").forEach((box) => box.addEventListener("change", () => {
+        const days = [...tr.querySelectorAll("[data-pd]:checked")].map((b) => Number(b.dataset.pd));
+        if (!days.length) { box.checked = true; toast("Au moins un jour travaillé.", true); return; }
+        const list = materializePeriods();
+        list[index].jours_travailles = days;
+        if ((s.jours_hebdo || []).map(Number).includes(days.length)) list[index].jours_hebdo = days.length;   // jours/sem. = nombre de jours cochés
+        renderPeriodsEditor();
+        scheduleSave();
+        scheduleCompute();
+      }));
+      const fer = tr.querySelector("[data-pferie]");
+      if (fer) fer.addEventListener("change", () => {
+        materializePeriods()[index].ferie_travaille = fer.checked;
+        renderPeriodsEditor();
+        scheduleSave();
+        scheduleCompute();
       });
     });
 
@@ -2098,6 +2248,8 @@ function renderFiche() {
           duree_hebdo: old.duree_hebdo,
           quotite: old.quotite,
           jours_hebdo: old.jours_hebdo,
+          jours_travailles: periodDays(old),
+          ferie_travaille: !!old.ferie_travaille,
         };
         old.end = addDays(value, -1);
         list.splice(index + 1, 0, next);
@@ -2110,56 +2262,46 @@ function renderFiche() {
 
   c.innerHTML = `
     <div class="fiche-header${isAgentView ? " agent-fiche-header" : ""}">
-      <a href="${isAgentView ? "#/dashboard" : "#/agents"}" class="btn btn-ghost">← Retour</a>
+      <a href="${isAgentView || state.leaveView ? "#/dashboard" : "#/my-agents"}" class="btn btn-ghost">← Retour</a>
       <label class="fiche-name-field">Nom
         <input type="text" id="f-nom" value="${esc(f.nom)}"${dis}></label>
       <label class="fiche-name-field">Prénom
         <input type="text" id="f-prenom" value="${esc(f.prenom || "")}"${dis}></label>
-      <span class="fiche-year">${f.year || ""}</span>
-      ${f.user_id !== state.user.id ? `<span class="fiche-owner">Propriétaire : ${esc(f.proprietaire || "—")}</span>` : ""}
+      <span class="fiche-year" id="f-year"><select id="f-year-sel" class="fiche-year-sel" title="Passer à la fiche d'une autre année"><option>${f.year || ""}</option></select></span>
+      ${f.user_id !== state.user.id ? `<span class="fiche-owner">Valideur : ${esc(f.proprietaire || "—")}</span>` : ""}
       <span id="save-ind" style="color:var(--muted);font-size:12px"></span>
       <button class="btn" id="f-print">Imprimer</button>
       ${ro ? "" : `<button class="btn btn-danger" id="f-del">Supprimer</button>`}
-      ${f.can_change_owner && (f.owner_options || []).length ? `<button class="btn btn-ghost btn-small owner-change-btn" id="btn-change-owner" title="Changer le propriétaire de la fiche">Changer le propriétaire</button>` : ""}
+      ${f.can_change_owner && (f.owner_options || []).length && !state.leaveView ? `<button class="btn btn-ghost btn-small owner-change-btn" id="btn-change-owner" title="Changer le valideur de la fiche">Changer le valideur</button>` : ""}
     </div>
-    ${ro && !state.requestMode ? `<div class="readonly-banner">Fiche en lecture seule — propriétaire : <b>${esc(f.proprietaire || "—")}</b></div>` : ""}
+    ${ro && !state.requestMode ? `<div class="readonly-banner">Fiche en lecture seule — valideur : <b>${esc(f.proprietaire || "—")}</b></div>` : ""}
     <div id="f-errors"></div>
     <div id="rch-alert" class="no-print"></div>
 
     <div class="fiche-meta-row no-print${hasRequestActions ? " has-request-actions" : ""}${isAgentView ? " agent-only-actions" : ""}">
-      <div class="card agent-info-card">
-        <h3>Compte agent</h3>
-        ${!f.email ? `<div class="agent-warning">E-mail à renseigner : il est obligatoire pour cette fiche.</div>` : ""}
-        <div class="params-grid">
-          <label>E-mail de l'agent
-            <input type="email" id="p-email" value="${esc(f.email || "")}"${dis}></label>
+      <div class="card agent-info-card reports-card fiche-bar">
+        <div class="fb-grid">
+          <label>E-mail${!f.email ? ` <span class="fb-warn" title="Renseigné par la recherche AD (Mon équipe)">à renseigner</span>` : ""}
+            <input type="email" id="p-email" value="${esc(f.email || "")}" disabled title="Repris de l'annuaire (Active Directory) : non modifiable ici"></label>
           <label>Matricule
-            <input type="text" id="p-matricule" maxlength="20" value="${esc(f.matricule || "")}"${dis}></label>
-          <label>Compte valideur
+            <input type="text" id="p-matricule" maxlength="20" value="${esc(f.matricule || "")}" disabled title="Repris de Sedit RH : non modifiable"></label>
+          <label>Valideur
             <select id="p-validator"${dis}>${validatorOptions}</select></label>
-        </div>
-        <label class="inline manager-check">
-          <input type="checkbox" id="p-manager" ${f.is_manager ? "checked" : ""}${dis}> Responsable de l'unité
-        </label>
-      </div>
-
-      <div class="card reports-card">
-        <h3>Reports annuels</h3>
-        <div class="params-grid">
-          <label><span>Reliquat (jours)</span>
+          <label>Unité
+            <select id="p-unit" ${dis || !f.agent_user_id ? "disabled" : ""}><option value="">…</option></select></label>
+          <label>Reliquat (j)
             <input type="number" step="0.5" min="0" max="100" id="p-rel" value="${esc(p.reliquat)}"${dis}></label>
-          <label><span>Solde CET (jours)</span>
+          <label>Solde CET (j)
             <input type="number" step="0.5" min="0" max="70" id="p-cet" value="${esc(p.solde_cet)}"${dis}></label>
         </div>
       </div>
 
       ${hasRequestActions ? `<div class="card request-actions-card">
-        <h3>Gestion des heures</h3>
         <div class="request-banner-actions hour-actions">
-          <button type="button" class="btn btn-small hour-action hour-action-cassage" id="req-cassage-btn">Casser un CA / RTT en heures</button>
-          <button type="button" class="btn btn-small hour-action hour-action-heures" id="req-heures-btn">Poser des heures (CAH / RTTH / RCH)</button>
-          <button type="button" class="btn btn-small hour-action hour-action-recup" id="req-recup-btn">Déclarer des heures de récupération (RCH)</button>
-          <button type="button" class="btn btn-small btn-ghost hour-action-solde" id="req-hours-detail-btn">Mon solde d'heures</button>
+          <button type="button" class="btn btn-small hour-action hour-action-cassage" id="req-cassage-btn" title="Casser un CA / RTT en heures">Casser CA / RTT</button>
+          <button type="button" class="btn btn-small hour-action hour-action-heures" id="req-heures-btn" title="Poser des heures (CAH / RTTH / RCH)">Poser des heures</button>
+          <button type="button" class="btn btn-small hour-action hour-action-recup" id="req-recup-btn" title="Déclarer des heures de récupération (RCH)">Récupération</button>
+          <button type="button" class="btn btn-small btn-ghost hour-action-solde" id="req-hours-detail-btn" title="Détail de mon solde d'heures">Solde d'heures</button>
         </div>
       </div>` : ""}
     </div>
@@ -2178,7 +2320,7 @@ function renderFiche() {
 
     ${isAgentView ? `<div id="agent-actions-slot" class="agent-actions-slot no-print"></div>` : ""}
 
-    <div class="card periods-card no-print${isAgentView ? " agent-hidden" : ""}">
+    <div class="card periods-card no-print${isAgentView || state.leaveView ? " agent-hidden" : ""}">
       <h3>Paramètres et périodes</h3>
       <div class="periods-layout">
         <div>
@@ -2232,30 +2374,52 @@ function renderFiche() {
     updateTabName();
     scheduleSave();
   });
-  $("#p-email").addEventListener("input", (e) => {
-    f.email = e.target.value.trim();
-    scheduleSave();
-  });
-  $("#p-matricule").addEventListener("input", (e) => {
-    f.matricule = e.target.value.trim();
-    scheduleSave();
-  });
   const ownerBtn = $("#btn-change-owner");
   if (ownerBtn) ownerBtn.addEventListener("click", openOwnerModal);
   $("#p-validator").addEventListener("change", (e) => {
     f.validator_id = e.target.value ? Number(e.target.value) : null;
     scheduleSave();
   });
-  $("#p-manager").addEventListener("change", (e) => {
-    f.is_manager = e.target.checked ? 1 : 0;
-    scheduleSave();
-  });
+  // Années de la personne : passer à la fiche 2027, ou la préparer en reportant la période en vigueur.
+  const yearSel = $("#f-year-sel");
+  if (yearSel && f.agent_user_id) {
+    api(`/api/my-agents/${f.agent_user_id}/years`).then((list) => {
+      const last = list.length ? list[list.length - 1].year : f.year;
+      const canCreate = !ro && !state.leaveView;
+      yearSel.innerHTML = list.map((y) => `<option value="${y.id}" ${y.id === f.id ? "selected" : ""}>${y.year}</option>`).join("")
+        + (canCreate ? `<option value="new">+ ${last + 1} (reporter la période)</option>` : "");
+      yearSel.addEventListener("change", async () => {
+        if (yearSel.value !== "new") { location.hash = "#/agent/" + yearSel.value + (state.leaveView ? "/conges" : ""); return; }
+        yearSel.disabled = true;
+        try {
+          const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: [f.id], year: last + 1 }) });
+          if ((res.created || []).length) { toast(`Fiche ${last + 1} créée : période reportée`); location.hash = "#/agent/" + res.created[0].id; }
+          else { toast(((res.errors || [])[0] || {}).error || "Création impossible", true); yearSel.disabled = false; yearSel.value = String(f.id); }
+        } catch (err) { toast(err.message, true); yearSel.disabled = false; yearSel.value = String(f.id); }
+      });
+    }).catch(() => { /* la navigation entre années est facultative */ });
+  }
+
+  // Unité de la personne : liste des entités de sa direction (toutes celles de la DSI pour un agent de la DSI).
+  const unitSel = $("#p-unit");
+  if (unitSel && f.agent_user_id && !unitSel.disabled) {
+    api(`/api/my-agents/${f.agent_user_id}/unit`).then((r) => {
+      unitSel.innerHTML = (r.unit_code ? "" : `<option value="">— Aucune —</option>`) + r.units.map((u) =>
+        `<option value="${esc(u.code)}" ${u.code === r.unit_code ? "selected" : ""}>${esc(u.path)} (${esc(u.code)})</option>`).join("");
+    }).catch(() => { unitSel.disabled = true; });
+    unitSel.addEventListener("change", async () => {
+      try {
+        await api(`/api/my-agents/${f.agent_user_id}/unit`, { method: "PUT", body: JSON.stringify({ unit_code: unitSel.value }) });
+        toast("Unité modifiée");
+      } catch (err) { toast(err.message, true); }
+    });
+  }
   $("#f-del").addEventListener("click", async () => {
     if (!confirm("Supprimer définitivement cette fiche ?")) return;
     await api("/api/agents/" + f.id, { method: "DELETE" });
     dropTab(f.id);
     toast("Fiche supprimée");
-    location.hash = "#/agents";
+    location.hash = "#/my-agents";
   });
 
   const bind = (sel, key, transform) => {
@@ -2343,7 +2507,7 @@ function renderCalendar() {
       for (let d = 1; d <= nd; d++) {
         const dc = dayClass(m, d);
         const lineCls = (dc.vac && h === 0) ? " vc-line" : "";
-        body += `<td class="cal-cell ${dc.cls}${lineCls}" data-k="${cellKey(m, d, h)}"${dc.vac ? ` title="${esc(dc.vac)}"` : ""}></td>`;
+        body += `<td class="cal-cell ${dc.cls}${lineCls}" data-k="${cellKey(m, d, h)}" data-iso="${year}-${pad2(m)}-${pad2(d)}"${dc.vac ? ` title="${esc(dc.vac)}"` : ""}></td>`;
       }
       // Case-fantôme (sans bordure ni fond) uniquement sur la ligne Matin :
       // elle permet à la ligne de séparation de se prolonger jusqu'au 31
@@ -2362,6 +2526,36 @@ function renderCalendar() {
   cal.addEventListener("mousedown", onCellMouseDown);
   cal.addEventListener("mouseover", onCellMouseOver);
   paintCalendar();
+  applyCalendarCoverage();
+}
+
+/* Jours sélectionnables : couverts par une période de paramètres ET travaillés (jours cochés de la période ; jours fériés
+   seulement si la période les déclare travaillés). Les autres sont grisés et ne sont ni sélectionnés ni décomptés. */
+function ficheWorkRules() {
+  const f = state.fiche;
+  const p = f.params || {};
+  const year = f.year || (state.settings.general ? state.settings.general.year : new Date().getFullYear());
+  const list = (f.periods && f.periods.length) ? f.periods
+    : [{ start: p.date_arrivee || `${year}-01-01`, end: p.date_depart || `${year}-12-31`, jours_hebdo: p.jours_hebdo,
+      jours_travailles: p.jours_travailles, ferie_travaille: p.ferie_travaille }];
+  return list.map((x) => ({ start: x.start, end: x.end, days: periodDays(x), ferie: !!x.ferie_travaille }));
+}
+
+function applyCalendarCoverage() {
+  if (!state.fiche || !$("#calendar")) return;
+  const rules = ficheWorkRules();
+  const feries = new Set(((state.settings || {}).jours_feries || []).map((x) => String(x[0])));
+  $$("#calendar .cal-cell").forEach((el) => {
+    const iso = el.dataset.iso;
+    const wd = new Date(iso + "T00:00:00").getDay() || 7;
+    const covered = rules.find((r) => iso >= r.start && iso <= r.end);
+    const off = !covered || !covered.days.includes(wd) || (feries.has(iso) && !covered.ferie);
+    el.classList.toggle("cal-off", off);
+    if (off) {
+      el.setAttribute("title", covered ? "Jour non travaillé : non sélectionnable" : "Hors période de paramètres : non sélectionnable");
+      el.classList.remove("selected");
+    }
+  });
 }
 
 function paintCalendar() {
@@ -2392,6 +2586,7 @@ function paintCalendar() {
     }
   });
   paintHourlyAnnotations();
+  applyCalendarCoverage();
 }
 
 function timeToMinutes(value) {
@@ -2549,7 +2744,7 @@ function cellsBetween(a, b) {
   return $$("#calendar .cal-cell")
     .filter((el) => {
       const k = Number(el.dataset.k);
-      return k >= lo && k <= hi;
+      return k >= lo && k <= hi && !el.classList.contains("cal-off");
     })
     .sort((x, y) => Number(x.dataset.k) - Number(y.dataset.k));
 }
@@ -2558,6 +2753,10 @@ function onCellMouseDown(e) {
   if ((state.readOnly && !state.requestMode) || e.button !== 0) return;
   const el = e.target.closest(".cal-cell");
   if (!el) return;
+  if (el.classList.contains("cal-off")) {
+    toast("Ce jour n'est pas travaillé ou n'est couvert par aucune période de paramètres.", true);
+    return;
+  }
   if (state.requestMode && (el.textContent || el.classList.contains("pending"))) return;
   if (!state.requestMode && el.querySelector(".cal-hour-note")) {
     toast("Cette demi-journée contient une absence en heures.", true);
@@ -3125,7 +3324,7 @@ async function openNewFicheModal() {
     String(a.nom || a.login || "").localeCompare(String(b.nom || b.login || ""), "fr")
   );
   $("#nf-owner").innerHTML = owners.map((u) =>
-    `<option value="${u.id}">${esc(u.nom || u.login)} (${esc(u.login)}) — ${esc(ROLE_LABELS[userRole(u)] || userRole(u))}</option>`
+    `<option value="${u.id}">${esc(u.nom || u.login)} — ${esc(ROLE_LABELS[userRole(u)] || userRole(u))}</option>`
   ).join("");
   const defaultOwner = owners.some((u) => u.id === state.user.id)
     ? state.user.id
@@ -3139,7 +3338,7 @@ async function openNewFicheModal() {
     } catch (_) { validators = []; }
     state.validators = validators;
     $("#nf-validator").innerHTML = validators.map((v) =>
-      `<option value="${v.id}" ${v.id === state.user.id ? "selected" : ""}>${esc(v.nom || v.login)} (${esc(v.login)}) — ${esc(ROLE_LABELS[v.role] || v.role)}</option>`
+      `<option value="${v.id}" ${v.id === state.user.id ? "selected" : ""}>${esc(v.display || v.nom || v.login)} — ${esc(ROLE_LABELS[v.role] || v.role)}</option>`
     ).join("");
     if (!validators.some((v) => v.id === state.user.id) && validators.length) {
       $("#nf-validator").value = String(validators[0].id);
@@ -3180,7 +3379,7 @@ $("#nf-submit").addEventListener("click", async () => {
     return;
   }
   if (!ownerId) {
-    errEl.textContent = "Le propriétaire de la fiche est obligatoire.";
+    errEl.textContent = "Le valideur de la fiche est obligatoire.";
     errEl.classList.remove("hidden");
     return;
   }
@@ -3771,6 +3970,7 @@ const ADMIN_MENU = [
   { group: "Accès", items: [["users", "Utilisateurs"], ["apikeys", "Clés API"], ["connexions", "Journal des connexions"]] },
   { group: "E-mails", items: [["emails", "Expéditeur et pied de page"], ["messages", "Messages automatiques"], ["journal-emails", "Journal des e-mails"]] },
   { group: "Intégrations", items: [["sedit-rh", "API Sedit RH"], ["organisation-rh", "Organisation RH"], ["matricules", "Matricules"]] },
+  { group: "Documentation", items: [["regles", "Règles métier"]] },
 ];
 
 /* Conteneur du contenu : la zone de la section en cours dans le Paramétrage, sinon la page entière. */
@@ -3794,7 +3994,7 @@ function viewAdmin(hash) {
     </div>`;
   const run = {
     calcul: () => viewSettings(), users: () => viewUsers(), apikeys: () => viewApiKeys(),
-    connexions: viewLoginLogs, emails: viewMailLayout, messages: () => viewMailMessages(arg), "journal-emails": viewMailLogs, "sedit-rh": viewSeditRh, "organisation-rh": viewOrgRh, matricules: viewMatricules,
+    connexions: viewLoginLogs, emails: viewMailLayout, messages: () => viewMailMessages(arg), "journal-emails": viewMailLogs, "sedit-rh": viewSeditRh, "organisation-rh": viewOrgRh, matricules: viewMatricules, regles: viewBusinessRules,
   }[section];
   Promise.resolve(run()).catch((e) => { $("#admin-body").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; });
 }
@@ -4521,8 +4721,15 @@ async function viewUsers() {
   const adMode = state.user.auth_mode === "ad";
   c.innerHTML = `<${H}>Utilisateurs</${H}><p>Chargement…</p>`;
   const users = await api("/api/users");
+  let orgUnits = [];
+  try { orgUnits = await api("/api/org-units"); } catch (e) { orgUnits = []; }
+  const unitByCode = Object.fromEntries(orgUnits.map((x) => [x.code, x]));
+  const profilOf = (u) => u.profil || (u.role === "agent" ? "agent" : "valideur");
+  // Trois profils seulement ; le niveau interne (direction, service…) reste déduit de l'unité.
+  const internalRole = (profil, current) => (profil === "valideur"
+    ? (current && !["administrateur", "agent"].includes(current) ? current : "secteur") : profil);
 
-  const roleOptions = (current) => Object.entries(ROLE_LABELS).map(([value, label]) =>
+  const roleOptions = (current) => Object.entries(PROFIL_LABELS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("");
   const parentRolesFor = (role) => ({
     dgs: ["administrateur"],
@@ -4544,40 +4751,32 @@ async function viewUsers() {
       .map((u) => `<option value="${u.id}" ${String(u.id) === String(current) ? "selected" : ""}>${esc(u.nom || u.login)} (${esc(u.login)})</option>`);
     return `<option value="">—</option>` + opts.join("");
   };
-  const creatableRoles = state.user.admin
-    ? Object.keys(ROLE_LABELS)
-    : ({
-      dgs: ["dga", "direction", "service", "secteur", "unite", "equipe", "agent"],
-      dga: ["direction", "service", "secteur", "unite", "equipe", "agent"],
-      direction: ["service", "secteur", "unite", "equipe", "agent"],
-      service: ["secteur", "unite", "equipe", "agent"],
-      secteur: ["unite", "equipe", "agent"],
-      unite: ["equipe", "agent"],
-      equipe: ["agent"],
-    }[userRole(state.user)] || []);
-  const createRoleOptions = creatableRoles.map((value) =>
-    `<option value="${value}">${ROLE_LABELS[value]}</option>`).join("");
-  const defaultCreateRole = creatableRoles[0] || "";
+  const creatableProfils = ["agent", "valideur"];
+  const unitLabel = (code) => (unitByCode[code] ? unitByCode[code].libelle : (code || "—"));
 
   let lastRole = null;
   const rowsHtml = users.map((u) => {
-    const role = userRole(u);
+    const role = profilOf(u);
+    const level = u.role || userRole(u);
     const self = u.id === state.user.id;
     const lockRole = !isAdmin || self;
     const group = role !== lastRole
-      ? `<tr class="role-group" data-role="${role}"><td colspan="10">${esc(ROLE_LABELS[role] || role)}</td></tr>`
+      ? `<tr class="role-group" data-role="${role}"><td colspan="11">${esc(PROFIL_LABELS[role] || role)}</td></tr>`
       : "";
     lastRole = role;
+    const unitTitle = u.validator_unit_code ? `Validé par : ${unitLabel(u.validator_unit_code)}` : "";
     return group + `
-      <tr data-id="${u.id}" data-role="${role}" data-login="${esc(u.login)}" data-nom="${esc(u.nom)}" data-email="${esc(u.email || "")}" data-actif="${u.actif ? 1 : 0}">
+      <tr data-id="${u.id}" data-role="${role}" data-admin="${u.admin ? 1 : 0}" data-level="${esc(level)}" data-login="${esc(u.login)}" data-nom="${esc(u.nom)}" data-email="${esc(u.email || "")}" data-actif="${u.actif ? 1 : 0}">
         <td>${isAdmin ? `<input data-f="login" value="${esc(u.login)}">` : esc(u.login)}</td>
         <td><input data-f="ad_login" value="${esc(u.ad_login || "")}" placeholder="(identique)"></td>
         <td><input data-f="matricule" value="${esc(u.matricule || "")}" maxlength="20"></td>
         <td><input data-f="nom" value="${esc(u.nom)}"></td>
         <td><input data-f="email" type="email" value="${esc(u.email || "")}"></td>
         <td>${adMode && role !== "administrateur" ? '<span class="muted" title="Mot de passe de l\'Active Directory">AD</span>' : '<input data-f="password" type="password" placeholder="(inchangé)">'}</td>
-        <td><select data-f="role" ${lockRole ? "disabled" : ""}>${roleOptions(role)}</select></td>
-        <td><select data-f="parent_id" ${lockRole || role === "administrateur" ? "disabled" : ""}>${parentOptions(role, u.parent_id, u.id, true)}</select></td>
+        <td><select data-f="role" ${lockRole ? "disabled" : ""}>${roleOptions(role)}</select>
+          <label class="admin-flag" title="Droit d'administration, en plus du rôle"><input type="checkbox" data-f="admin" ${u.admin ? "checked" : ""} ${lockRole ? "disabled" : ""}> Admin</label></td>
+        <td class="muted" title="${esc(unitTitle)}">${esc(u.unit_code ? unitLabel(u.unit_code) : "—")}</td>
+        <td><select data-f="parent_id" ${lockRole || level === "administrateur" ? "disabled" : ""}>${parentOptions(level, u.parent_id, u.id, true)}</select></td>
         <td><input type="checkbox" data-f="actif" ${u.actif ? "checked" : ""} ${self ? "disabled" : ""}></td>
         <td>
           <button class="btn btn-small" data-act="save">Enregistrer</button>
@@ -4595,26 +4794,48 @@ async function viewUsers() {
 
     ${canManageUsers() ? `
     <div class="card new-user-card" style="margin-bottom:16px">
-      <h3>Nouvel utilisateur</h3>
+      <h3>Nouvelle personne</h3>
+      <p class="muted" style="margin-top:0">Recherchez la personne dans Sedit RH : son nom, son matricule et son unité sont repris, puis l'annuaire Active Directory fournit son e-mail et son identifiant.</p>
       <div class="params-grid new-user-grid">
-        <label>Identifiant <input id="nu-login"></label>
-        <label>Identifiant AD <input id="nu-ad-login" placeholder="(identique)"></label>
-        <label>Matricule <input id="nu-matricule" maxlength="20"></label>
-        <label>Nom <input id="nu-nom"></label>
-        <label>E-mail <input id="nu-email" type="email"></label>
-        <label>${adMode ? "Mot de passe (administrateur seulement)" : "Mot de passe"} <input id="nu-pass" type="password"></label>
-        <label>Rôle <select id="nu-role">${createRoleOptions}</select></label>
-        <label>Responsable <select id="nu-parent">${parentOptions(defaultCreateRole, state.user.id, null, true)}</select></label>
-        <button class="btn btn-primary new-user-submit" id="nu-create">Créer</button>
+        <label>Rôle <select id="np-profil">${creatableProfils.map((p) => `<option value="${p}">${PROFIL_LABELS[p]}</option>`).join("")}</select></label>
+        ${isAdmin ? `<label class="admin-flag"><input type="checkbox" id="np-admin"> Administrateur (droit en plus du rôle)</label>` : ""}
+        <label class="np-wide" id="np-search-wrap">Rechercher dans Sedit RH
+          <input id="np-search" type="search" autocomplete="off" placeholder="Nom, prénom ou matricule (2 lettres minimum)">
+          <div id="np-results" class="np-results hidden"></div>
+        </label>
+        <label>Nom <input id="np-nom"></label>
+        <label>Prénom <input id="np-prenom"></label>
+        <label>Matricule <input id="np-matricule" maxlength="20"></label>
+        <label>E-mail <input id="np-email" type="email"></label>
+        <label>Identifiant AD <input id="np-ad-login" placeholder="(à trouver dans l'AD)"></label>
+        <div class="np-wide np-ad" id="np-ad-status"></div>
+        <div class="np-wide" id="np-unit-block">
+          <label>Unité d'affectation (Sedit RH)
+            <input id="np-unit-filter" type="search" placeholder="Filtrer les unités…" style="margin-bottom:4px">
+            <select id="np-unit" size="1"></select>
+          </label>
+        </div>
+        <label class="np-wide hidden" id="np-vunit-block">Unité qui le valide
+          <select id="np-vunit"></select>
+        </label>
+        <label class="np-wide hidden" id="np-level-block">Niveau de validation
+          <select id="np-level"><option value="">Selon l'unité (direction, service, secteur…)</option><option value="dga">DGA (hors organisation RH)</option><option value="dgs">DGS (hors organisation RH)</option></select>
+        </label>
+        <label class="np-wide hidden" id="np-sup-block">Valideur supérieur (DGA, DGS…)
+          <select id="np-sup"></select>
+        </label>
+        <label class="np-wide hidden" id="np-pass-block">Mot de passe local (obligatoire pour un administrateur : compte de secours) <input id="np-pass" type="password"></label>
+        <button class="btn btn-primary new-user-submit" id="np-create">Créer</button>
       </div>
     </div>` : ""}
 
-    <p class="users-hint">Hiérarchie : Administrateur > Valideur DGS > Valideur DGA > Valideur Direction > Valideur Service > Valideur Secteur > Valideur Unité > Valideur Équipe > Agent. Les valideurs gèrent les comptes de leur périmètre.</p>
+    <p class="users-hint">Trois rôles : Administrateur, Valideur et Agent. Un agent est affecté à une unité de l'organisation (Sedit RH) ; un valideur est lui-même affecté à une unité et validé par une unité supérieure. Les valideurs gèrent les comptes de leur périmètre.</p>
     <div class="users-toolbar">
       <input type="search" id="users-search" placeholder="Rechercher un identifiant, un nom ou un e-mail">
       <select id="users-role-filter">
-        <option value="">Tous les niveaux</option>
-        ${Object.entries(ROLE_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+        <option value="">Tous les rôles</option>
+        ${Object.entries(PROFIL_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+        <option value="admin">Administrateurs</option>
       </select>
       <select id="users-active-filter">
         <option value="">Tous</option>
@@ -4629,12 +4850,12 @@ async function viewUsers() {
     </div>
     <table class="data users-table">
       <colgroup>
-        <col style="width:8%"><col style="width:8%"><col style="width:7%"><col style="width:11%"><col style="width:12%"><col style="width:7%">
-        <col style="width:11%"><col style="width:15%"><col style="width:5%"><col style="width:13%">
+        <col style="width:7%"><col style="width:7%"><col style="width:6%"><col style="width:10%"><col style="width:11%"><col style="width:6%">
+        <col style="width:9%"><col style="width:13%"><col style="width:13%"><col style="width:4%"><col style="width:13%">
       </colgroup>
       <thead><tr>
         <th>Identifiant</th><th title="Identifiant Active Directory (vide = identique à l'identifiant)">Identifiant AD</th><th>Matricule</th><th>Nom</th><th>E-mail</th><th>Mot de passe</th>
-        <th>Rôle</th><th>Responsable</th><th>Actif</th><th>Actions</th>
+        <th>Rôle</th><th title="Unité d'affectation (Sedit RH)">Unité</th><th>Responsable</th><th>Actif</th><th>Actions</th>
       </tr></thead>
       <tbody id="users-table-body">
         ${rowsHtml}
@@ -4657,7 +4878,7 @@ async function viewUsers() {
     const pageSize = Number($("#users-page-size").value) || 25;
     const rows = [...document.querySelectorAll("#users-table-body tr[data-id]")];
     const filtered = rows.filter((row) => {
-      if (role && row.dataset.role !== role) return false;
+      if (role === "admin" ? row.dataset.admin !== "1" : (role && row.dataset.role !== role)) return false;
       if (active && row.dataset.actif !== active) return false;
       if (!q) return true;
       return [row.dataset.login, row.dataset.nom, row.dataset.email]
@@ -4695,36 +4916,7 @@ async function viewUsers() {
   if (canManageUsers()) {
     const auditBtn = $("#btn-user-audit");
     if (auditBtn) auditBtn.addEventListener("click", openUserAuditModal);
-    const refreshCreateParents = () => {
-      const role = $("#nu-role").value;
-      $("#nu-parent").innerHTML = parentOptions(role, state.user.id, null, true);
-      $("#nu-parent").disabled = role === "administrateur";
-    };
-    $("#nu-role").addEventListener("change", refreshCreateParents);
-    refreshCreateParents();
-
-    $("#nu-create").addEventListener("click", async () => {
-      try {
-        const role = $("#nu-role").value;
-        await api("/api/users", {
-          method: "POST",
-          body: JSON.stringify({
-            login: $("#nu-login").value.trim(),
-            nom: $("#nu-nom").value.trim(),
-            ad_login: $("#nu-ad-login").value.trim(),
-            matricule: $("#nu-matricule").value.trim(),
-            email: $("#nu-email").value.trim(),
-            password: $("#nu-pass").value,
-            role,
-            parent_id: role === "administrateur" ? null : ($("#nu-parent").value || null),
-          }),
-        });
-        toast("Utilisateur créé");
-        viewUsers();
-      } catch (err) {
-        $("#users-msg").innerHTML = `<div class="form-error">${esc(err.message)}</div>`;
-      }
-    });
+    setupNewPerson({ orgUnits, unitByCode, adMode, users, onError: (m) => { $("#users-msg").innerHTML = m ? `<div class="form-error">${esc(m)}</div>` : ""; } });
   }
 
   $$("table.data tr[data-id]").forEach((tr) => {
@@ -4733,8 +4925,8 @@ async function viewUsers() {
     const parentEl = tr.querySelector('[data-f="parent_id"]');
     if (roleEl && !roleEl.disabled) {
       roleEl.addEventListener("change", () => {
-        parentEl.innerHTML = parentOptions(roleEl.value, null, id);
-        parentEl.disabled = roleEl.value === "administrateur";
+        parentEl.innerHTML = parentOptions(internalRole(roleEl.value, tr.dataset.level), null, id);
+        parentEl.disabled = tr.dataset.level === "administrateur";
       });
     }
     tr.querySelector('[data-act="save"]').addEventListener("click", async () => {
@@ -4745,6 +4937,7 @@ async function viewUsers() {
         matricule: tr.querySelector('[data-f="matricule"]').value.trim(),
         email: tr.querySelector('[data-f="email"]').value,
         role: roleEl.value,
+        admin: !!(tr.querySelector('[data-f="admin"]') || {}).checked,
         parent_id: parentEl.value || null,
         actif: tr.querySelector('[data-f="actif"]').checked,
       };
@@ -4774,6 +4967,175 @@ async function viewUsers() {
         $("#users-msg").innerHTML = `<div class="form-error">${esc(err.message)}</div>`;
       }
     });
+  });
+}
+
+/* Mes congés : ma propre fiche de congés (sans les paramètres et périodes, réservés à mon valideur) */
+async function viewMyLeave() {
+  const c = $("#content");
+  c.innerHTML = `<h1>Mes congés ${state.year || ""}</h1><p>Chargement…</p>`;
+  try {
+    const mine = await api("/api/my-leave?year=" + encodeURIComponent(state.year));   // ma fiche, même si je valide d'autres personnes
+    if (mine && mine.fiche_id) { location.hash = "#/agent/" + mine.fiche_id + "/conges"; return; }
+    c.innerHTML = `<h1>Mes congés ${esc(state.year || "")}</h1>
+      <div class="card"><p>Vous n'avez pas encore de fiche de congés pour ${esc(state.year)}.</p>
+      <p class="muted">Elle est créée par votre valideur lorsqu'il définit votre période de paramètres (pénibilité, durée, quotité, jours travaillés).</p></div>`;
+  } catch (e) {
+    c.innerHTML = `<h1>Mes congés</h1><div class="form-error">${esc(e.message)}</div>`;
+  }
+}
+
+/* Création d'une personne : Sedit RH (saisie prédictive) → Active Directory (e-mail, identifiant) → unités. */
+function setupNewPerson({ orgUnits, unitByCode, adMode, users, onError }) {
+  const profilEl = $("#np-profil");
+  const picked = { date_arrivee: "" };
+  const parentOf = (code) => (unitByCode[code] || {}).parent_code || "";
+  const ancestorsOf = (code) => {
+    const out = [];
+    let cur = parentOf(code);
+    while (cur && unitByCode[cur] && !out.includes(cur)) { out.push(cur); cur = parentOf(cur); }
+    return out;
+  };
+  const fillUnits = () => {
+    const q = ($("#np-unit-filter").value || "").trim().toLowerCase();
+    const current = $("#np-unit").value;
+    const list = orgUnits.filter((u) => !q || u.path.toLowerCase().includes(q) || u.code.toLowerCase().includes(q) || u.code === current);
+    $("#np-unit").innerHTML = `<option value="">— Choisir une unité —</option>` + list.map((u) =>
+      `<option value="${esc(u.code)}" ${u.code === current ? "selected" : ""}>${esc(u.path)} (${esc(u.code)})</option>`).join("");
+  };
+  const fillValidatorUnits = () => {
+    const unit = $("#np-unit").value;
+    const anc = ancestorsOf(unit);
+    const cur = $("#np-vunit").value;
+    $("#np-vunit").innerHTML = `<option value="">${anc.length ? "— Aucune (rattaché à moi) —" : "— Aucune unité supérieure —"}</option>` +
+      anc.map((c) => `<option value="${esc(c)}" ${c === cur ? "selected" : ""}>${esc(unitByCode[c].path)} (${esc(c)})</option>`).join("");
+  };
+  const applyProfil = () => {
+    const p = profilEl.value;
+    const lvl = p === "valideur" ? $("#np-level").value : "";
+    const top = lvl === "dga" || lvl === "dgs";
+    const unit = $("#np-unit").value;
+    if (p === "valideur") fillValidatorUnits();
+    const hasAncestors = !!unit && ancestorsOf(unit).length > 0;
+    // Une direction n'a pas d'unité supérieure dans Sedit RH : elle est validée par un DGA (valideur de niveau DGA/DGS).
+    const needSup = p === "valideur" && ((top && lvl === "dga") || (!top && unit && !hasAncestors));
+    $("#np-level-block").classList.toggle("hidden", p !== "valideur");
+    $("#np-vunit-block").classList.toggle("hidden", p !== "valideur" || top || !hasAncestors);
+    $("#np-unit-block").classList.toggle("hidden", p === "administrateur" || top);
+    $("#np-sup-block").classList.toggle("hidden", !needSup);
+    const wantsAdmin = !!($("#np-admin") && $("#np-admin").checked);
+    $("#np-pass-block").classList.toggle("hidden", !(wantsAdmin || !adMode));
+    if (needSup) {
+      const allowed = lvl === "dga" ? ["dgs"] : ["dga", "dgs"];
+      const cands = users.filter((u) => u.actif && allowed.includes(userRole(u)));
+      const cur = $("#np-sup").value;
+      $("#np-sup").innerHTML = `<option value="">${cands.length ? "— Aucun (rattaché à moi) —" : "— Aucun DGA/DGS créé : créez-le d'abord (niveau DGA) —"}</option>` +
+        cands.map((u) => `<option value="${u.id}" ${String(u.id) === cur ? "selected" : ""}>${esc(u.nom || u.login)} (${esc(ROLE_LABELS[userRole(u)])})</option>`).join("");
+    }
+  };
+  profilEl.addEventListener("change", applyProfil);
+  if ($("#np-admin")) $("#np-admin").addEventListener("change", applyProfil);
+  $("#np-level").addEventListener("change", applyProfil);
+  $("#np-unit-filter").addEventListener("input", fillUnits);
+  $("#np-unit").addEventListener("change", applyProfil);
+  fillUnits();
+  applyProfil();
+
+  // 1. Saisie prédictive dans Sedit RH
+  let timer = null;
+  let seq = 0;
+  const results = $("#np-results");
+  $("#np-search").addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = $("#np-search").value.trim();
+    if (q.length < 2) { results.classList.add("hidden"); return; }
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      try {
+        const rows = await api("/api/sirh/agents?q=" + encodeURIComponent(q));
+        if (mine !== seq) return;
+        results.innerHTML = rows.length
+          ? rows.map((a, i) => `<button type="button" class="np-result" data-i="${i}">
+              <strong>${esc(a.nom)} ${esc(a.prenom)}</strong> <span class="muted">${esc(a.matricule)} — ${esc(a.unit_libelle || a.service || a.direction)}</span></button>`).join("")
+          : `<div class="muted np-empty">Aucun agent en poste ne correspond dans Sedit RH</div>`;
+        results.classList.remove("hidden");
+        results.querySelectorAll(".np-result").forEach((b) => b.addEventListener("click", () => pick(rows[Number(b.dataset.i)])));
+        onError("");
+      } catch (err) {
+        results.classList.add("hidden");
+        onError(err.message);
+      }
+    }, 300);
+  });
+
+  const pick = (a) => {
+    results.classList.add("hidden");
+    $("#np-search").value = `${a.nom} ${a.prenom}`;
+    $("#np-nom").value = a.nom;
+    $("#np-prenom").value = a.prenom;
+    $("#np-matricule").value = a.matricule;
+    picked.date_arrivee = a.date_arrivee || "";
+    if (a.unit_code && unitByCode[a.unit_code]) {
+      $("#np-unit-filter").value = "";
+      fillUnits();
+      $("#np-unit").value = a.unit_code;
+      applyProfil();
+    }
+    matchAd();
+  };
+
+  // 2. Rapprochement avec l'Active Directory
+  const status = $("#np-ad-status");
+  const matchAd = async () => {
+    const nom = $("#np-nom").value.trim(), prenom = $("#np-prenom").value.trim();
+    if (!nom) return;
+    status.innerHTML = `<span class="muted">Recherche dans l'Active Directory…</span>`;
+    try {
+      const r = await api(`/api/ad/match?nom=${encodeURIComponent(nom)}&prenom=${encodeURIComponent(prenom)}`);
+      const use = (c) => { $("#np-email").value = c.email || $("#np-email").value; $("#np-ad-login").value = c.username; };
+      if (r.status === "unique") {
+        use(r.candidates[0]);
+        status.innerHTML = `<span class="ok">Trouvé dans l'AD : ${esc(r.candidates[0].displayName)} (${esc(r.candidates[0].username)}${r.candidates[0].email ? ", " + esc(r.candidates[0].email) : ""})</span>`;
+      } else if (r.status === "plusieurs") {
+        status.innerHTML = `Plusieurs comptes AD correspondent : <select id="np-ad-pick"><option value="">— Choisir —</option>${r.candidates.map((c, i) =>
+          `<option value="${i}">${esc(c.displayName)} (${esc(c.username)})</option>`).join("")}</select>`;
+        $("#np-ad-pick").addEventListener("change", (e) => { if (e.target.value !== "") use(r.candidates[Number(e.target.value)]); });
+      } else if (r.status === "aucun") {
+        status.innerHTML = `<span class="muted">Aucun compte AD ne correspond : renseignez l'e-mail et l'identifiant à la main.</span>`;
+      } else {
+        status.innerHTML = `<span class="muted">Annuaire indisponible${r.message ? " (" + esc(r.message) + ")" : ""} : renseignez l'e-mail à la main.</span>`;
+      }
+    } catch (err) {
+      status.innerHTML = `<span class="muted">${esc(err.message)}</span>`;
+    }
+  };
+  $("#np-nom").addEventListener("change", matchAd);
+  $("#np-prenom").addEventListener("change", matchAd);
+
+  // 3. Création
+  $("#np-create").addEventListener("click", async () => {
+    try {
+      const p = profilEl.value;
+      await api("/api/users/person", {
+        method: "POST",
+        body: JSON.stringify({
+          profil: p,
+          nom: $("#np-nom").value.trim(), prenom: $("#np-prenom").value.trim(),
+          matricule: $("#np-matricule").value.trim(), email: $("#np-email").value.trim(),
+          ad_login: $("#np-ad-login").value.trim(),
+          unit_code: p === "administrateur" ? "" : $("#np-unit").value,
+          validator_unit_code: p === "valideur" ? $("#np-vunit").value : "",
+          admin: !!($("#np-admin") && $("#np-admin").checked),
+          level: p === "valideur" ? $("#np-level").value : "",
+          supervisor_id: p === "valideur" && !$("#np-sup-block").classList.contains("hidden") ? ($("#np-sup").value || null) : null,
+          date_arrivee: picked.date_arrivee, password: $("#np-pass").value,
+        }),
+      });
+      toast(p === "agent" ? "Agent créé (compte et fiche)" : "Utilisateur créé");
+      viewUsers();
+    } catch (err) {
+      onError(err.message);
+    }
   });
 }
 
@@ -4815,3 +5177,487 @@ $("#user-audit-modal").addEventListener("mousedown", (e) => {
 $("#year-select").addEventListener("change", (e) => setYear(Number(e.target.value)));
 loadVersion();
 tryRestoreSession();
+
+/* ==========================================================================
+   Règles métier (lecture du fichier REGLES_METIER.md) — Paramétrage > Documentation
+   ========================================================================== */
+function renderMarkdown(md) {
+  const inline = (t) => esc(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  const lines = String(md || "").split(/\r?\n/);
+  let html = "", inList = false, para = [], table = [];
+  const flushPara = () => { if (para.length) { html += `<p>${inline(para.join(" "))}</p>`; para = []; } };
+  const flushList = () => { if (inList) { html += "</ul>"; inList = false; } };
+  const flushTable = () => {
+    if (!table.length) return;
+    const cells = (row) => row.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+    const head = cells(table[0]);
+    const body = table.slice(2).map(cells);
+    html += `<table class="data md-table"><thead><tr>${head.map((h) => `<th>${inline(h)}</th>`).join("")}</tr></thead><tbody>${
+      body.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    table = [];
+  };
+  for (const line of lines) {
+    if (/^\s*\|/.test(line)) { flushPara(); flushList(); table.push(line.trim()); continue; }
+    flushTable();
+    let m;
+    if ((m = /^(#{1,4})\s+(.*)$/.exec(line))) { flushPara(); flushList(); html += `<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`; }
+    else if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) { flushPara(); if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = /^>\s?(.*)$/.exec(line))) { flushPara(); flushList(); html += `<blockquote>${inline(m[1])}</blockquote>`; }
+    else if (!line.trim()) { flushPara(); flushList(); }
+    else { flushList(); para.push(line.trim()); }
+  }
+  flushPara(); flushList(); flushTable();
+  return html;
+}
+
+async function viewBusinessRules() {
+  const body = contentEl();
+  body.innerHTML = `<h2>Règles métier</h2><p>Chargement…</p>`;
+  const r = await fetch("/api/docs/regles-metier");
+  if (!r.ok) throw new Error("Règles métier indisponibles (erreur " + r.status + ")");
+  body.innerHTML = `<div class="md-doc">${renderMarkdown(await r.text())}</div>`;
+}
+
+/* ==========================================================================
+   Mes agents : arbre des personnes que je valide + agents Sedit RH à glisser-déposer
+   ========================================================================== */
+async function viewMyAgents() {
+  if (!canManageUsers()) { location.hash = "#/dashboard"; return; }
+  if (state.maAll === undefined) { try { state.maAll = localStorage.getItem("suivi_ma_all") === "1"; } catch (_) { state.maAll = false; } }
+  const c = $("#content");
+  c.innerHTML = `<h1>Mon équipe</h1><p>Chargement…</p>`;
+  let tree, units = [];
+  try {
+    [tree, units] = await Promise.all([api("/api/my-agents?year=" + encodeURIComponent(state.year) + (state.maAll ? "&depth=all" : "")), api("/api/org-units?scope=all").catch(() => [])]);
+  } catch (e) { c.innerHTML = `<h1>Mon équipe</h1><div class="form-error">${esc(e.message)}</div>`; return; }
+
+  /* ---- Mon équipe par entité (comme l'ancien « Mes fiches ») : groupes = entités, cartes = personnes ---- */
+  const people = {};
+  (function reg(n) { people[n.id] = n; (n.children || []).forEach(reg); })(tree);
+  const norm = (x) => String(x || "").trim().toLowerCase();
+  const groupLabel = (n) => n.unit_label || n.nom || n.login;
+  const mkGroup = (n) => {
+    const g = { owner: n, label: groupLabel(n), members: [n], groups: [] };   // le responsable passe en premier
+    (n.children || []).forEach((ch) => { if ((ch.children || []).length) g.groups.push(mkGroup(ch)); else g.members.push(ch); });
+    return g;
+  };
+  const merge = (g) => {   // entités de même nom regroupées
+    g.groups.forEach(merge);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const seen = {}, kept = [];
+      for (const sub of g.groups) {
+        const t = norm(sub.label) === norm(g.label) ? g : seen[norm(sub.label)];
+        if (t) { t.members.push(...sub.members); t.groups.push(...sub.groups); changed = true; }
+        else { seen[norm(sub.label)] = sub; kept.push(sub); }
+      }
+      g.groups = kept;
+    }
+  };
+  const rootGroup = tree.all
+    ? { owner: tree, label: "Toute la collectivité", members: [], groups: (tree.children || []).map(mkGroup) }
+    : mkGroup(tree);
+  merge(rootGroup);
+
+  const donut = (pct) => `<svg viewBox="0 0 36 36" class="ma-donut" role="img" aria-label="Quotité ${pct} %"><title>Quotité ${pct} %</title>
+      <circle cx="18" cy="18" r="15.9155" fill="none" stroke="#eadfd9" stroke-width="4.2"/>
+      <circle cx="18" cy="18" r="15.9155" fill="none" stroke="#c4573a" stroke-width="4.2" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="25"/>
+      <text x="18" y="21.2" text-anchor="middle" font-size="9" font-weight="700" fill="#4a2118">${pct}%</text></svg>`;
+  const periodHtml = (n) => {
+    const pr = n.fiche && n.fiche.complete ? n.fiche.period : null;
+    if (!pr) return `<div class="ma-noperiod">${n.fiche ? "Période incomplète" : "Pas de période"}</div>`;
+    const pct = Math.max(1, Math.min(100, parseInt(String(pr.quotite).replace(/[^0-9]/g, ""), 10) || 100));
+    const days = (pr.days || []).map(Number);
+    return `<div class="ma-period-view">${donut(pct)}
+      <div class="ma-period-info">
+        <div class="ma-days" title="Jours travaillés${pr.ferie ? " (fériés travaillés)" : ""}">${WEEKDAYS.map(([k, l, full]) => `<i class="${days.includes(k) ? "on" : ""}" title="${full}">${l}</i>`).join("")}${pr.ferie ? `<b title="Travaille les jours fériés">F</b>` : ""}</div>
+        <div class="muted">${esc(pr.duree || "")}${pr.penibilite ? " · " + esc(pr.penibilite) : ""}</div>
+        ${pr.count > 1 ? `<div class="muted" title="Plusieurs périodes dans l'année : la période en cours est affichée">${pr.count} périodes</div>` : ""}
+      </div></div>`;
+  };
+  // Une fiche congés n'existe que lorsque la personne a au moins une période de paramètres.
+  const ficheHtml = (n) => (n.fiche && n.fiche.complete
+    ? `<a class="ma-fiche-link" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir la fiche ${esc(n.year)}">Fiche ${esc(n.year)}</a>
+      ${n.fiche.next_exists ? `<span class="muted" title="La fiche ${esc(n.year + 1)} existe déjà">✓ ${esc(n.year + 1)}</span>`
+        : `<button type="button" class="btn btn-small ma-dup" data-fid="${n.fiche.id}" title="Reporte la période en vigueur (quotité, jours travaillés…) sur ${esc(n.year + 1)} : crée la fiche ${esc(n.year + 1)} ; les congés posés ne sont pas copiés">Reporter en ${esc(n.year + 1)}</button>`}`
+    : `<button type="button" class="btn btn-small ma-period" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
+  const cardHtml = (n, resp, groupName) => {
+    const me = n.id === state.user.id;
+    return `<div class="ma-card ma-drop${resp ? " ma-resp" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
+      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}</span>${resp ? `<span class="ma-star" title="Responsable de l'entité">★</span>` : ""}</div>
+      ${n.unit_label && norm(n.unit_label) !== norm(groupName) ? `<div class="muted ma-cunit" title="Unité de la personne">${esc(n.unit_label)}</div>` : ""}
+      <div class="ma-card-badges">
+        <span class="badge-role role-${esc(n.role)}">${esc(PROFIL_LABELS[n.profil] || n.profil)}${n.admin ? " · Admin" : ""}</span>
+        ${n.delegated ? `<span class="ma-deleg" title="Délégation en cours : cette personne vous délègue ses validations">délégation</span>` : ""}
+        ${n.count ? `<span class="ma-count" title="${n.more ? "Personnes sous sa responsabilité (affichez toute la ligne hiérarchique pour les voir)" : "Personnes sous sa responsabilité"}">${n.count}${n.more ? "+" : ""}</span>` : ""}
+        ${n.no_email && n.actif ? `<span class="ma-noemail" title="Sans adresse e-mail : aucune notification ne lui sera envoyée">⚠ e-mail</span>` : ""}
+      </div>
+      ${periodHtml(n)}
+      <div class="ma-card-actions">${ficheHtml(n)}
+        ${n.no_email && n.actif && !n.all ? `<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button>` : ""}</div>
+    </div>`;
+  };
+  const groupHtml = (g, level) => `<div class="ma-group" style="margin-left:${Math.min(level, 3) * 18}px">
+      <div class="ma-ghead ma-drop role-${esc(g.owner.role)}" data-id="${g.owner.id}" title="Déposer ici pour placer sous ${esc(g.owner.nom || g.owner.login)}">
+        <span>${esc(g.label)}</span><span class="ma-gcount">${g.members.length} personne${g.members.length > 1 ? "s" : ""}</span></div>
+      ${g.members.length ? `<div class="ma-cards">${g.members.map((m, k) => cardHtml(m, k === 0 && m.id === g.owner.id && !tree.all, g.label)).join("")}</div>` : ""}
+      ${g.groups.map((x) => groupHtml(x, level + 1)).join("")}
+    </div>`;
+  const dupIds = [];
+  Object.values(people).forEach((n) => { if (n.fiche && n.fiche.complete && !n.fiche.next_exists) dupIds.push(n.fiche.id); });
+
+  c.innerHTML = `
+    <div class="page-head"><h1>Mon équipe</h1>
+      <div class="page-actions">
+        ${dupIds.length ? `<button type="button" class="btn" id="ma-dup-all" title="Reporte la période en vigueur de chaque personne de l'équipe sur ${state.year + 1} (crée les fiches ${state.year + 1} manquantes)">Reporter les périodes en ${state.year + 1} (${dupIds.length})</button>` : ""}
+        ${canCreateFiche() ? `<button type="button" class="btn btn-primary" id="ma-new-fiche">+ Nouvelle fiche</button>` : ""}
+      </div></div>
+    <p class="muted">À gauche, mon équipe classée par entité, avec la période de chaque personne (quotité, jours travaillés). À droite, les agents de Sedit RH de mon niveau ou en dessous :
+      <strong>cochez-en un ou plusieurs puis glissez-les sur une personne</strong> pour les créer dans l'application sous elle (elle devient alors valideur). Vous pouvez aussi glisser une personne de l'arbre sur une autre pour changer son valideur.</p>
+    <div id="ma-msg"></div>
+    <div class="ma-layout">
+      <div class="card ma-left"><div class="ma-left-head"><h3>Mon équipe (${state.maAll ? tree.count : tree.children.length}${!state.maAll && tree.count > tree.children.length ? ` sur ${tree.count} au total` : ""})</h3>
+        <button type="button" class="btn btn-small" id="ma-depth">${state.maAll ? "Voir seulement mes agents directs" : "Voir toute ma ligne hiérarchique"}</button></div>
+        <div class="ma-groups">${groupHtml(rootGroup, 0)}</div></div>
+      <div class="card ma-right">
+        <h3>Agents Sedit RH à ajouter</h3>
+        <input type="search" id="ma-q" placeholder="Rechercher (nom, prénom, matricule, unité)" autocomplete="off">
+        <label class="ma-all"><input type="checkbox" id="ma-all"> Inclure les agents hors de mon unité (toute la collectivité)</label>
+        <div class="ma-sel-bar">
+          <button type="button" class="btn btn-small" id="ma-sel-all">Tout sélectionner</button>
+          <button type="button" class="btn btn-small" id="ma-sel-none">Aucun</button>
+          <span id="ma-sel-count" class="muted"></span>
+        </div>
+        <div id="ma-sirh-info" class="muted"></div>
+        <div id="ma-sirh-list" class="ma-sirh-list"><p class="muted">Chargement de Sedit RH…</p></div>
+      </div>
+    </div>`;
+
+  $("#ma-depth").addEventListener("click", () => {
+    state.maAll = !state.maAll;
+    try { localStorage.setItem("suivi_ma_all", state.maAll ? "1" : "0"); } catch (_) { /* sans effet */ }
+    viewMyAgents();
+  });
+  const msg = (m) => { $("#ma-msg").innerHTML = m ? `<div class="form-error">${esc(m)}</div>` : ""; };
+
+  /* Liste Sedit RH : sélection multiple (cases à cocher), glisser tout ce qui est coché */
+  let items = [];
+  const known = {};          // tous les agents vus (la sélection survit à une nouvelle recherche)
+  const selected = new Set();
+  const updateSel = () => {
+    $("#ma-sel-count").textContent = selected.size ? `${selected.size} sélectionné(s)` : "";
+    $("#ma-sirh-list").querySelectorAll(".ma-sirh").forEach((el) => {
+      const on = selected.has(el.dataset.m);
+      el.classList.toggle("ma-selected", on);
+      el.querySelector("input").checked = on;
+    });
+  };
+  const drawList = () => {
+    const groups = {};
+    items.forEach((a) => { (groups[a.unit_libelle || "(sans unité)"] = groups[a.unit_libelle || "(sans unité)"] || []).push(a); });
+    $("#ma-sirh-list").innerHTML = items.length ? Object.entries(groups).map(([unit, list]) => `
+      <div class="ma-unit-title">${esc(unit)}</div>
+      ${list.map((a) => `<div class="ma-sirh" draggable="true" data-m="${esc(a.matricule)}"><input type="checkbox" tabindex="-1"><span><strong>${esc(a.nom)} ${esc(a.prenom)}</strong>
+        <span class="muted">${esc(a.matricule)}${a.fonction ? " — " + esc(a.fonction) : ""}</span></span></div>`).join("")}`).join("")
+      : `<p class="muted">Aucun agent à afficher.</p>`;
+    $("#ma-sirh-list").querySelectorAll(".ma-sirh").forEach((el) => {
+      el.addEventListener("click", () => {
+        if (selected.has(el.dataset.m)) selected.delete(el.dataset.m); else selected.add(el.dataset.m);
+        updateSel();
+      });
+      el.addEventListener("dragstart", (ev) => {
+        // Glisser un agent coché emmène toute la sélection ; un agent non coché part seul.
+        const list = selected.has(el.dataset.m) ? [...selected] : [el.dataset.m];
+        ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "sirh", matricules: list }));
+        ev.dataTransfer.effectAllowed = "copyMove";
+      });
+    });
+    updateSel();
+  };
+  $("#ma-sel-all").addEventListener("click", () => { items.forEach((a) => selected.add(a.matricule)); updateSel(); });
+  $("#ma-sel-none").addEventListener("click", () => { selected.clear(); updateSel(); });
+  let timer = null, seq = 0;
+  const loadList = async () => {
+    const mine = ++seq;
+    try {
+      const r = await api("/api/my-agents/sirh?q=" + encodeURIComponent($("#ma-q").value.trim()) + ($("#ma-all").checked ? "&scope=all" : ""));
+      if (mine !== seq) return;
+      items = r.items;
+      items.forEach((a) => { known[a.matricule] = a; });
+      $("#ma-sirh-info").textContent = r.warning || `${r.total} agent(s) absent(s) de l'application${r.total > r.items.length ? " — affinez la recherche (" + r.items.length + " affichés)" : ""}`;
+      drawList();
+    } catch (e) { $("#ma-sirh-list").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+  };
+  $("#ma-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(loadList, 300); });
+  $("#ma-all").addEventListener("change", loadList);
+  c.querySelectorAll(".ma-dup").forEach((b) => {
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      b.disabled = true;
+      try {
+        const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: [Number(b.dataset.fid)], year: state.year + 1 }) });
+        if ((res.created || []).length) { toast(`Période reportée en ${state.year + 1}`); viewMyAgents(); }
+        else { b.disabled = false; msg(((res.errors || [])[0] || {}).error || "Duplication impossible"); }
+      } catch (e) { b.disabled = false; msg(e.message); }
+    });
+  });
+  c.querySelectorAll(".ma-ad").forEach((b) => {
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); askAd(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  });
+  c.querySelectorAll(".ma-period").forEach((b) => {
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); askPeriod(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  });
+  loadList();
+
+  /* Dépôts sur l'arbre */
+  const nodeName = (id) => { const n = people[id]; return n ? (n.nom || n.login) : ""; };
+  const newBtn = $("#ma-new-fiche");
+  if (newBtn) newBtn.addEventListener("click", openNewFicheModal);
+  const dupAll = $("#ma-dup-all");
+  if (dupAll) dupAll.addEventListener("click", async () => {
+    dupAll.disabled = true;
+    try {
+      const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: dupIds, year: state.year + 1 }) });
+      toast(`${(res.created || []).length} période(s) reportée(s) en ${state.year + 1}`);
+      viewMyAgents();
+    } catch (e) { dupAll.disabled = false; msg(e.message); }
+  });
+  c.querySelectorAll(".ma-drop").forEach((el) => {
+    if (el.getAttribute("draggable")) el.addEventListener("dragstart", (ev) => {
+      ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "user", id: Number(el.dataset.id) }));
+      ev.dataTransfer.effectAllowed = "move";
+      ev.stopPropagation();
+    });
+    el.addEventListener("dragover", (ev) => { ev.preventDefault(); el.classList.add("ma-over"); });
+    el.addEventListener("dragleave", () => el.classList.remove("ma-over"));
+    el.addEventListener("drop", async (ev) => {
+      ev.preventDefault();
+      el.classList.remove("ma-over");
+      let data;
+      try { data = JSON.parse(ev.dataTransfer.getData("text/plain")); } catch (_) { return; }
+      const parentId = Number(el.dataset.id);
+      msg("");
+      if (data.type === "user") {
+        if (data.id === parentId) return;
+        try {
+          await api("/api/my-agents/move", { method: "POST", body: JSON.stringify({ user_id: data.id, parent_id: parentId }) });
+          toast("Personne déplacée");
+          viewMyAgents();
+        } catch (e) { msg(e.message); }
+      } else if (data.type === "sirh") {
+        const list = (data.matricules || []).map((m) => known[m]).filter(Boolean);
+        if (list.length) askUnitAndAttach(list, parentId);
+      }
+    });
+  });
+
+  /* Dialogue : recherche du compte AD d'une personne (e-mail et identifiant) */
+  async function askAd(uid, name) {
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card">
+      <h3>Compte AD de ${esc(name)}</h3>
+      <div class="ma-ad-search"><input type="search" id="mad-q" placeholder="Rechercher dans l'AD (nom, identifiant)…"><button class="btn btn-small" id="mad-go">Rechercher</button></div>
+      <div id="mad-list" class="ma-ad-list"><p class="muted">Recherche en cours…</p></div>
+      <div class="ma-dialog-actions"><button class="btn" id="mad-close">Fermer</button></div>
+      <div id="mad-err"></div></div>`;
+    document.body.appendChild(ov);
+    $("#mad-close").addEventListener("click", () => ov.remove());
+    const show = (r) => {
+      const list = $("#mad-list");
+      if (r.status === "indisponible") { list.innerHTML = `<p class="muted">Annuaire indisponible${r.message ? " (" + esc(r.message) + ")" : ""}.</p>`; return; }
+      list.innerHTML = r.candidates.length ? r.candidates.map((h, i) => `<div class="ma-ad-item">
+          <span><strong>${esc(h.displayName)}</strong> <span class="muted">${esc(h.username)}${h.email ? " — " + esc(h.email) : " — sans e-mail"}</span></span>
+          <button class="btn btn-small btn-primary" data-i="${i}" ${h.email ? "" : "disabled"}>Choisir</button></div>`).join("")
+        : `<p class="muted">Aucun compte trouvé : essayez une autre recherche.</p>`;
+      list.querySelectorAll("button[data-i]").forEach((b) => b.addEventListener("click", async () => {
+        const h = r.candidates[Number(b.dataset.i)];
+        b.disabled = true;
+        try {
+          await api(`/api/my-agents/${uid}/ad`, { method: "POST", body: JSON.stringify({ username: h.username }) });
+          ov.remove();
+          toast(`${name} : ${h.email} (compte AD ${h.username})`);
+          viewMyAgents();
+        } catch (e) { b.disabled = false; $("#mad-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+      }));
+    };
+    const search = async (q) => {
+      $("#mad-list").innerHTML = `<p class="muted">Recherche en cours…</p>`;
+      try { show(await api(`/api/my-agents/${uid}/ad` + (q ? "?q=" + encodeURIComponent(q) : ""))); }
+      catch (e) { $("#mad-list").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+    };
+    $("#mad-go").addEventListener("click", () => search($("#mad-q").value.trim()));
+    $("#mad-q").addEventListener("keydown", (ev) => { if (ev.key === "Enter") search($("#mad-q").value.trim()); });
+    search("");
+  }
+
+  /* Dialogue : première période de paramètres = création de la fiche congés */
+  function askPeriod(uid, name) {
+    const st = state.settings || {};
+    const pens = (st.penibilites || []).map((x) => x.name || x);
+    const pick = (list, pref) => (list.map(String).includes(pref) ? pref : (list[0] ?? ""));
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card">
+      <h3>Période de paramètres de ${esc(name)}</h3>
+      <p class="muted">Année ${esc(state.year)}. La fiche congés est créée avec cette première période ; d'autres changements se déclarent ensuite dans la fiche.</p>
+      <div class="params-grid">
+        <label>Pénibilité <select id="mp-pen">${optionList(pens, pick(pens, "Modérée"))}</select></label>
+        <label>Durée <select id="mp-duree"></select></label>
+        <label>Quotité <select id="mp-quot">${optionList(st.quotites, pick(st.quotites || [], "100%"))}</select></label>
+        <label>Jours/sem. <select id="mp-jours">${optionList(st.jours_hebdo, pick(st.jours_hebdo || [], "5"))}</select></label>
+      </div>
+      <div class="mp-days"><span>Jours travaillés</span> <span id="mp-days">${daysCheckboxes(defaultDays(5), "data-mpd", false)}</span>
+        <label class="wd"><input type="checkbox" id="mp-ferie"> travaille les jours fériés</label></div>
+      <div class="ma-dialog-actions"><button class="btn" id="mp-cancel">Annuler</button><button class="btn btn-primary" id="mp-ok">Créer la fiche</button></div>
+      <div id="mp-err"></div></div>`;
+    document.body.appendChild(ov);
+    const fillDuree = () => {
+      const list = (st.penibilites_durees && st.penibilites_durees[$("#mp-pen").value]) || st.durees || [];
+      $("#mp-duree").innerHTML = optionList(list, pick(list, "38 heures"));
+    };
+    fillDuree();
+    $("#mp-pen").addEventListener("change", fillDuree);
+    const setDays = (days) => ov.querySelectorAll("[data-mpd]").forEach((b) => { b.checked = days.includes(Number(b.dataset.mpd)); });
+    setDays(defaultDays($("#mp-jours").value));
+    $("#mp-jours").addEventListener("change", () => setDays(defaultDays($("#mp-jours").value)));
+    ov.querySelectorAll("[data-mpd]").forEach((b) => b.addEventListener("change", () => {
+      const n = ov.querySelectorAll("[data-mpd]:checked").length;
+      if ((st.jours_hebdo || []).map(Number).includes(n)) $("#mp-jours").value = String(n);
+    }));
+    $("#mp-cancel").addEventListener("click", () => ov.remove());
+    $("#mp-ok").addEventListener("click", async () => {
+      $("#mp-ok").disabled = true;
+      try {
+        const r = await api(`/api/my-agents/${uid}/fiche`, { method: "POST", body: JSON.stringify({
+          year: state.year, penibilite: $("#mp-pen").value, duree_hebdo: $("#mp-duree").value,
+          quotite: $("#mp-quot").value, jours_hebdo: $("#mp-jours").value,
+          jours_travailles: [...ov.querySelectorAll("[data-mpd]:checked")].map((b) => Number(b.dataset.mpd)),
+          ferie_travaille: $("#mp-ferie").checked }) });
+        ov.remove();
+        toast("Fiche créée");
+        location.hash = "#/agent/" + r.fiche_id;
+      } catch (e) {
+        $("#mp-ok").disabled = false;
+        $("#mp-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`;
+      }
+    });
+  }
+
+  /* Dialogue : unité (celle de Sedit RH de chaque agent, ou une unité commune), puis création un par un */
+  function askUnitAndAttach(list, parentId) {
+    const one = list.length === 1 ? list[0] : null;
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card">
+      <h3>Créer ${one ? esc(one.nom) + " " + esc(one.prenom) : list.length + " agents"}</h3>
+      <p>Sous <strong>${esc(nodeName(parentId))}</strong> (cette personne devient valideur ${one ? "de l'agent" : "des agents"}).</p>
+      ${one ? `<p class="muted">Matricule ${esc(one.matricule)}.</p>` : `<ul class="ma-dialog-list">${list.map((a) => `<li>${esc(a.nom)} ${esc(a.prenom)} <span class="muted">${esc(a.matricule)}</span></li>`).join("")}</ul>`}
+      <label>Unité ${one ? "de l'agent" : "des agents"}
+        <input type="search" id="mad-filter" placeholder="Filtrer les unités…" style="margin-bottom:4px">
+        <select id="mad-unit"></select></label>
+      <div class="ma-dialog-actions"><button class="btn" id="mad-cancel">Annuler</button><button class="btn btn-primary" id="mad-ok">Créer</button></div>
+      <div id="mad-err"></div></div>`;
+    document.body.appendChild(ov);
+    const fill = () => {
+      const q = ($("#mad-filter").value || "").toLowerCase();
+      const cur = $("#mad-unit").value || (one ? one.unit_code : "__own");
+      $("#mad-unit").innerHTML = (one ? `<option value="">— Choisir —</option>` : `<option value="__own">Unité Sedit RH de chaque agent</option>`) + units
+        .filter((u) => !q || u.path.toLowerCase().includes(q) || u.code === cur)
+        .map((u) => `<option value="${esc(u.code)}" ${u.code === cur ? "selected" : ""}>${esc(u.path)} (${esc(u.code)})</option>`).join("");
+    };
+    fill();
+    $("#mad-filter").addEventListener("input", fill);
+    $("#mad-cancel").addEventListener("click", () => ov.remove());
+    $("#mad-ok").addEventListener("click", async () => {
+      $("#mad-ok").disabled = true;
+      const choice = $("#mad-unit").value;
+      const done = [], failed = [];
+      for (const a of list) {
+        try {
+          const r = await api("/api/my-agents/attach", { method: "POST", body: JSON.stringify({
+            matricule: a.matricule, parent_id: parentId, unit_code: choice === "__own" ? "" : choice }) });
+          done.push({ a, r });
+        } catch (e) { failed.push(`${a.nom} ${a.prenom} : ${e.message}`); }
+      }
+      done.forEach(({ a }) => selected.delete(a.matricule));
+      if (!failed.length) {
+        ov.remove();
+        const noMail = done.filter((d) => !d.r.email_found).length;
+        toast((done.length === 1 ? `${one.nom} ${one.prenom} créé(e)` + (noMail ? " — e-mail à renseigner (introuvable dans l'AD)" : " — e-mail trouvé dans l'AD")
+          : `${done.length} agents créés` + (noMail ? ` — ${noMail} sans e-mail trouvé dans l'AD` : "")) + ". Définissez leur période pour créer leur fiche.");
+        viewMyAgents();
+      } else {
+        $("#mad-ok").disabled = false;
+        $("#mad-err").innerHTML = `<div class="form-error">${done.length} créé(s), ${failed.length} en échec :<br>${failed.map(esc).join("<br>")}</div>`;
+        list = list.filter((a) => !done.some((d) => d.a.matricule === a.matricule));
+        if (!done.length) return;
+        setTimeout(() => { ov.remove(); viewMyAgents(); }, 4000);
+      }
+    });
+  }
+}
+
+/* ==========================================================================
+   Délégation : je délègue mes validations à mon propre valideur (absence automatique et/ou périodes)
+   ========================================================================== */
+async function viewDelegation() {
+  if (!canManageUsers()) { location.hash = "#/dashboard"; return; }
+  const c = $("#content");
+  c.innerHTML = `<h1>Délégation</h1><p>Chargement…</p>`;
+  let d;
+  try { d = await api("/api/delegation"); } catch (e) { c.innerHTML = `<h1>Délégation</h1><div class="form-error">${esc(e.message)}</div>`; return; }
+  if (!d.delegate) {
+    c.innerHTML = `<h1>Délégation</h1><div class="card"><p>Vous n'avez pas de valideur : il n'y a personne à qui déléguer.</p></div>`;
+    return;
+  }
+  const dec = (a) => (a === "validee" ? "Validée" : "Refusée");
+  c.innerHTML = `
+    <h1>Délégation</h1>
+    <p class="muted">Pendant une délégation, mon valideur <strong>${esc(d.delegate.nom || d.delegate.login)}</strong> reçoit aussi le mail de chaque nouvelle demande (avec les boutons Valider / Refuser) et les relances. Il pouvait déjà valider à ma place : la délégation le prévient et garde la trace de ce qu'il a fait.</p>
+    ${d.active_now ? `<div class="form-ok">Une délégation est en cours aujourd'hui.</div>` : ""}
+    <div id="dg-msg"></div>
+    <div class="card" style="margin-bottom:16px">
+      <h3>Délégation automatique</h3>
+      <label class="inline"><input type="checkbox" id="dg-auto" ${d.auto ? "checked" : ""}> Je délègue automatiquement à mon valideur quand je suis absent (journée complète posée dans ma fiche de congés)</label>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <h3>Périodes de délégation</h3>
+      <p class="muted">Utile même sans congés (déplacement, formation…).</p>
+      <div class="dg-add"><label class="inline">Du <input type="date" id="dg-start"></label>
+        <label class="inline">au <input type="date" id="dg-end"></label>
+        <button class="btn btn-primary btn-small" id="dg-add">Ajouter la période</button></div>
+      ${d.periods.length ? `<table class="data"><thead><tr><th>Du</th><th>Au</th><th></th></tr></thead><tbody>${d.periods.map((p) => `
+        <tr><td>${esc(frDate(p.start_date))}</td><td>${esc(frDate(p.end_date))}</td>
+        <td><button class="btn btn-small btn-danger" data-del="${p.id}">Supprimer</button></td></tr>`).join("")}</tbody></table>` : `<p class="muted">Aucune période de délégation.</p>`}
+    </div>
+    <div class="card">
+      <h3>Validations faites à ma place</h3>
+      ${d.done.length ? `<table class="data"><thead><tr><th>Quand</th><th>Agent</th><th>Dates</th><th>Code</th><th>Décision</th><th>Par</th><th>Commentaire</th></tr></thead><tbody>
+        ${d.done.map((x) => `<tr><td>${esc(String(x.at || "").slice(0, 16).replace("T", " "))}</td><td>${esc(x.agent)}</td>
+          <td>${(x.dates || []).map(esc).join("<br>")}</td><td>${esc(x.code || "")}</td><td>${dec(x.action)}</td><td>${esc(x.par)}</td><td>${esc(x.comment || "")}</td></tr>`).join("")}
+        </tbody></table>` : `<p class="muted">Personne n'a encore validé ou refusé de demande à votre place.</p>`}
+    </div>`;
+  const msg = (m) => { $("#dg-msg").innerHTML = m ? `<div class="form-error">${esc(m)}</div>` : ""; };
+  $("#dg-auto").addEventListener("change", async (e) => {
+    try { await api("/api/delegation/auto", { method: "PUT", body: JSON.stringify({ auto: e.target.checked }) }); toast(e.target.checked ? "Délégation automatique activée" : "Délégation automatique désactivée"); }
+    catch (err) { e.target.checked = !e.target.checked; msg(err.message); }
+  });
+  $("#dg-add").addEventListener("click", async () => {
+    try {
+      await api("/api/delegation/periods", { method: "POST", body: JSON.stringify({ start: $("#dg-start").value, end: $("#dg-end").value }) });
+      toast("Période de délégation ajoutée");
+      viewDelegation();
+    } catch (err) { msg(err.message); }
+  });
+  c.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api("/api/delegation/periods/" + b.dataset.del, { method: "DELETE" }); toast("Période supprimée"); viewDelegation(); }
+    catch (err) { msg(err.message); }
+  }));
+}

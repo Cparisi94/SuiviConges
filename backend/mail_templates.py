@@ -32,24 +32,32 @@ TEMPLATES = {
             "agent": "Nom et prénom de l'agent",
             "code": "Code de l'absence (CA, RTT…)",
             "code_libelle": "Libellé du code",
-            "dates": "Liste des demi-journées demandées",
+            "dates": "Dates demandées, en plages (« du 20 avril 2026 au 24 avril 2026 »)",
             "jours": "Nombre de jours",
             "commentaire": "Commentaire de l'agent",
             "annee": "Année de la fiche",
             "lien_fiche": "Lien vers la fiche de l'agent",
             "lien_demandes": "Lien vers les demandes à valider",
+            "lien_valider": "Lien personnel pour valider la demande en un clic (bouton)",
+            "lien_refuser": "Lien personnel pour refuser la demande (bouton)",
+            "lien_calendrier": "Lien vers le calendrier d'équipe (bouton)",
         },
         "subject": "[Suivi congés] Demande de {agent} — {code_libelle}",
         "body": (
             "Bonjour,\n\n{agent} a soumis une demande de congé.\n\n"
-            "Code : {code_libelle} ({code})\nDemi-journées :\n{dates}\n\n"
+            "Code : {code_libelle} ({code})\nDates :\n{dates}\n\n"
             "Nombre de jours : {jours}\nCommentaire : {commentaire}\n\n"
-            "Fiche : {lien_fiche}\nDemandes à valider : {lien_demandes}\n\n"
-            "Cette demande est en attente de votre validation."
+            "Cette demande est en attente de votre validation.\n\n"
+            "[[bouton:Valider|{lien_valider}]]\n[[bouton:Refuser|{lien_refuser}]]\n"
+            "[[bouton:Voir le calendrier d'équipe|{lien_calendrier}]]\n\n"
+            "Fiche : {lien_fiche}\nDemandes à valider : {lien_demandes}"
         ),
         "sample": {
             "agent": "DUPONT Marie", "code": "CA", "code_libelle": "Congé annuel",
-            "dates": "  - 3 mai 2027 — matin\n  - 3 mai 2027 — après-midi", "jours": "1",
+            "dates": "  - du 3 mai 2027 au 7 mai 2027", "jours": "5",
+            "lien_valider": "https://conges.example.fr/api/mail-action/exemple?a=validee",
+            "lien_refuser": "https://conges.example.fr/api/mail-action/exemple?a=refusee",
+            "lien_calendrier": "https://conges.example.fr/#/planning?equipe=1",
             "commentaire": "Pont de l'Ascension", "annee": "2027",
             "lien_fiche": "https://conges.example.fr/#/agent/12", "lien_demandes": "https://conges.example.fr/#/requests",
         },
@@ -115,6 +123,18 @@ def _stored():
     return data if isinstance(data, dict) else {}
 
 
+# Anciens textes par défaut : un message resté identique à l'un d'eux (jamais personnalisé) reçoit le nouveau texte par défaut.
+PREVIOUS_BODIES = {
+    "nouvelle_demande": [
+        "Bonjour,\n\n{agent} a soumis une demande de congé.\n\n"
+        "Code : {code_libelle} ({code})\nDemi-journées :\n{dates}\n\n"
+        "Nombre de jours : {jours}\nCommentaire : {commentaire}\n\n"
+        "Fiche : {lien_fiche}\nDemandes à valider : {lien_demandes}\n\n"
+        "Cette demande est en attente de votre validation.",
+    ],
+}
+
+
 def load():
     """Réglages effectifs : valeurs enregistrées, sinon valeurs par défaut."""
     stored = _stored()
@@ -124,7 +144,7 @@ def load():
         mine = (stored.get("templates") or {}).get(key) or {}
         templates[key] = {
             "subject": mine.get("subject") or tpl["subject"],
-            "body": mine.get("body") or tpl["body"],
+            "body": (mine.get("body") if mine.get("body") not in PREVIOUS_BODIES.get(key, []) else "") or tpl["body"],
             "enabled": bool(mine.get("enabled", True)),
         }
     return {"enabled": bool(stored.get("enabled", False)), "layout": layout, "templates": templates}
@@ -215,13 +235,39 @@ def substitute(text, values):
     return "\n".join(lines)
 
 
+BUTTON = re.compile(r"^\s*\[\[bouton:([^|\]]+)\|(https?://[^\]\s]+)\]\]\s*$")
+BUTTON_COLORS = (("valider", "#1b7a3d"), ("refuser", "#b3261e"))
+
+
+def _button(label, url):
+    low = label.lower()
+    color = next((c for k, c in BUTTON_COLORS if low.startswith(k)), "#c4573a")
+    return ('<a href="%s" style="display:inline-block;padding:10px 18px;margin:4px 8px 4px 0;border-radius:6px;'
+            'background:%s;color:#ffffff;text-decoration:none;font-weight:600">%s</a>'
+            % (html.escape(url, quote=True), color, html.escape(label)))
+
+
+def plain(text):
+    """Texte brut sans marqueurs de bouton : « [[bouton:Valider|URL]] » devient « Valider : URL »."""
+    return re.sub(r"\[\[bouton:([^|\]]+)\|([^\]\s]+)\]\]", r"\1 : \2", text)
+
+
 def to_html(text):
-    """Texte brut -> HTML (échappé ; les adresses http(s) deviennent des liens)."""
+    """Texte brut -> HTML (échappé ; les adresses http(s) deviennent des liens ; « [[bouton:Texte|URL]] » devient un bouton)."""
     out = []
     for line in text.split("\n"):
+        m = BUTTON.match(line)
+        if m:
+            out.append(("btn", _button(m.group(1).strip(), m.group(2))))
+            continue
         escaped = html.escape(line)
-        out.append(re.sub(r"(https?://[^\s<]+)", r'<a href="\1">\1</a>', escaped))
-    return "<br>\n".join(out)
+        out.append(("txt", re.sub(r"(https?://[^\s<]+)", r'<a href="\1">\1</a>', escaped)))
+    html_out = ""
+    for i, (kind, piece) in enumerate(out):
+        if i:
+            html_out += " " if (kind == "btn" and out[i - 1][0] == "btn") else "<br>\n"
+        html_out += piece
+    return html_out
 
 
 def wrap(text, layout=None):
@@ -239,5 +285,5 @@ def render(key, values, settings=None):
     tpl, layout = settings["templates"][key], settings["layout"]
     subject = substitute(tpl["subject"], values).replace("\n", " ").strip()
     full_text = with_signature(substitute(tpl["body"], values), layout)
-    return {"subject": subject, "text": full_text, "html": wrap(full_text, layout),
+    return {"subject": subject, "text": plain(full_text), "html": wrap(full_text, layout),
             "enabled": tpl["enabled"], "layout": layout}

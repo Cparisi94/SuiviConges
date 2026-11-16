@@ -10,7 +10,7 @@ import re
 import unicodedata
 import uuid
 
-from flask import Flask, jsonify, request, send_file, send_from_directory, session
+from flask import Flask, has_request_context, jsonify, request, send_file, send_from_directory, session
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
@@ -261,10 +261,26 @@ ABSENCE_CODES = (
 
 
 def _user_role(user):
+    """Rôle utilisé pour les droits : un compte administrateur (indicateur `admin`) a tous les droits,
+    quel que soit son profil d'agent ou de valideur ; sans cet indicateur, le niveau interne (`role`)."""
+    if (user or {}).get("admin"):
+        return "administrateur"
     role = (user or {}).get("role")
     if role in ROLE_LEVELS:
         return role
     return "administrateur" if (user or {}).get("admin") else "secteur"
+
+
+def _profil(user):
+    """Profil affiché : valideur ou agent. L'administration est un droit en plus (indicateur `admin`)."""
+    return "agent" if (user or {}).get("role") == "agent" else "valideur"
+
+
+def _internal_role(requested, current=None):
+    """Convertit le profil « valideur » en niveau interne (le niveau actuel est conservé, sinon secteur)."""
+    if requested == "valideur":
+        return current if current in ROLE_LEVELS and current != "agent" else "secteur"
+    return requested
 
 
 def _subtree_ids(db, root_id):
@@ -291,19 +307,29 @@ def _org_ancestor_name(db, user_id, role):
     while uid and uid not in seen:
         seen.add(uid)
         row = db.execute(
-            "SELECT id, login, nom, role, parent_id FROM users WHERE id=?", (uid,)
+            "SELECT id, login, nom, role, parent_id, unit_code FROM users WHERE id=?", (uid,)
         ).fetchone()
         if not row:
             break
         if _user_role(row_to_dict(row)) == role:
-            return row["nom"] or row["login"] or ""
+            unit = db.execute("SELECT libelle FROM org_units WHERE code=?", (row["unit_code"],)).fetchone() if row["unit_code"] else None
+            return (unit["libelle"] if unit else "") or row["nom"] or row["login"] or ""
         uid = row["parent_id"]
     return ""
 
 
+def _sees_all(user):
+    """Un administrateur voit « tout » seulement s'il le demande (interrupteur « Voir tout », en-tête X-Scope: all) ;
+    par défaut, comme tout le monde, il voit son équipe (les personnes qu'il valide, de proche en proche)."""
+    try:
+        return bool((user or {}).get("admin")) and has_request_context() and request.headers.get("X-Scope") == "all"
+    except RuntimeError:
+        return False
+
+
 def _scope_ids(db, user):
-    """Utilisateurs visibles : tous pour l'admin, le sous-arbre sinon."""
-    if user.get("admin") or _user_role(user) == "administrateur":
+    """Utilisateurs visibles : mon équipe (sous-arbre) ; tous pour un administrateur qui a choisi « Voir tout »."""
+    if _sees_all(user):
         return [r["id"] for r in db.execute("SELECT id FROM users").fetchall()]
     return _subtree_ids(db, user["id"])
 
@@ -316,7 +342,7 @@ def _scope_agents(db, user, year=None):
             where += " AND a.year=?"
             params.append(int(year))
         return db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE %s ORDER BY a.nom" % where,
             params,
         ).fetchall()
@@ -330,7 +356,7 @@ def _scope_agents(db, user, year=None):
         where += " AND a.year=?"
         params.append(int(year))
     return db.execute(
-        "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+        "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
         "WHERE %s ORDER BY u.login, a.nom" % where,
         params,
     ).fetchall()
@@ -389,7 +415,7 @@ def _settings_for_year(settings, year):
 
 def _agent_by_id(db, aid):
     return db.execute(
-        "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id WHERE a.id=?",
+        "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id WHERE a.id=?",
         (aid,),
     ).fetchone()
 
@@ -431,14 +457,14 @@ def _can_manage_users(user):
 
 
 def _can_edit_cells(db, user, agent):
-    """Saisie directe des absences : admin ou responsable, jamais le titulaire."""
+    """Saisie directe des absences : admin ou responsable, jamais le titulaire (même administrateur : il fait une demande)."""
     if not agent:
+        return False
+    if agent["agent_user_id"] == user["id"]:
         return False
     if user.get("admin"):
         return True
     if _user_role(user) == "agent":
-        return False
-    if agent["agent_user_id"] == user["id"]:
         return False
     return agent["user_id"] in set(_scope_ids(db, user))
 
@@ -455,7 +481,7 @@ def _validator_chain(db, owner_id):
     while uid and uid not in seen:
         seen.add(uid)
         row = db.execute(
-            "SELECT id, login, nom, email, role, parent_id, actif FROM users WHERE id=?",
+            "SELECT id, login, nom, nom_famille, prenom, email, role, parent_id, actif FROM users WHERE id=?",
             (uid,),
         ).fetchone()
         if not row:
@@ -564,6 +590,10 @@ def login():
         return jsonify({"error": "Trop de tentatives de connexion, réessayez dans quelques minutes"}), 429
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE login=?", (login_name,)).fetchone()
+    if not user:
+        # Identifiant insensible à la casse (AD : « cparisi », comptes créés depuis Sedit RH : « CPARISI ») ; ambigu = refusé.
+        same = db.execute("SELECT * FROM users WHERE lower(login)=lower(?)", (login_name,)).fetchall()
+        user = same[0] if len(same) == 1 else None
     db.close()
     if not user:
         ratelimit.record(bucket)
@@ -599,6 +629,7 @@ def me():
     user.pop("mot_de_passe", None)
     user["password_by_ad"] = _password_managed_by_ad(request.user)
     user["auth_mode"] = config.AUTH_MODE
+    user["profil"] = _profil(user)
     real = getattr(request, "real_user", None)
     if real:
         user["impersonation"] = {"by": {"id": real["id"], "login": real["login"], "nom": real["nom"]}}
@@ -709,6 +740,7 @@ def users_list():
     db = get_db()
     select = (
         "SELECT u.id, u.login, u.ad_login, u.matricule, u.nom, u.email, u.admin, u.role, u.parent_id, "
+        "u.unit_code, u.validator_unit_code, "
         "u.actif, u.cree_le, p.nom AS parent_nom, p.login AS parent_login "
         "FROM users u LEFT JOIN users p ON p.id = u.parent_id "
     )
@@ -723,13 +755,15 @@ def users_list():
         rows = db.execute(select + "WHERE u.id IN (%s)" % marks, ids).fetchall()
     db.close()
     users = [row_to_dict(r) for r in rows]
+    for u in users:
+        u["profil"] = _profil(u)
 
     def norm(value):
         return unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode().lower()
 
     # Niveau de validation (administrateur -> agent), puis identifiant.
     users.sort(key=lambda u: (
-        -ROLE_LEVELS.get(_user_role(u), 0),
+        -ROLE_LEVELS.get(u.get("role"), 0),
         norm(u.get("login")),
     ))
     return jsonify(users)
@@ -763,7 +797,7 @@ def users_create():
     login_name = (data.get("login") or "").strip()
     password = data.get("password") or ""
     email = (data.get("email") or "").strip()
-    role = (data.get("role") or ("administrateur" if data.get("admin") else "secteur")).strip()
+    role = _internal_role((data.get("role") or ("administrateur" if data.get("admin") else "secteur")).strip())
     if not login_name:
         return jsonify({"error": "Identifiant obligatoire"}), 400
     if not password:
@@ -841,7 +875,9 @@ def users_create():
         (cur.lastrowid,),
     ).fetchone()
     db.close()
-    return jsonify(row_to_dict(user))
+    out = row_to_dict(user)
+    out["profil"] = _profil(out)
+    return jsonify(out)
 
 
 @app.route("/api/users/<int:uid>", methods=["PUT"])
@@ -864,25 +900,28 @@ def users_update(uid):
             db.close()
             return jsonify({"error": "Ce compte n'est pas dans votre périmètre"}), 403
         # Un valideur gère les paramètres des comptes liés, pas leur rôle ni leur rattachement.
-        role = _user_role(row_to_dict(user))
+        role = user["role"]
         parent_id = user["parent_id"]
         admin_flag = user["admin"]
     else:
-        role = (data.get("role") or _user_role(row_to_dict(user))).strip()
+        role = _internal_role((data.get("role") or user["role"]).strip(), user["role"])
         if role not in ROLE_LEVELS:
             db.close()
             return jsonify({"error": "Rôle invalide"}), 400
         parent_id = data.get("parent_id", user["parent_id"])
         if parent_id in ("", 0):
             parent_id = None
+        # L'administration est un droit supplémentaire, indépendant du profil (agent ou valideur).
+        admin_flag = 1 if (role == "administrateur" or (data["admin"] if "admin" in data else user["admin"])) else 0
         if uid == request.user["id"]:
-            if role != "administrateur":
+            if not admin_flag:
                 db.close()
                 return jsonify({"error": "Impossible de retirer vos propres droits administrateur"}), 400
             if not data.get("actif", user["actif"]):
                 db.close()
                 return jsonify({"error": "Impossible de désactiver votre propre compte"}), 400
-            parent_id = None
+            if role == "administrateur":
+                parent_id = None
         else:
             err = _validate_user_parent(db, role, parent_id, uid)
             if err:
@@ -890,7 +929,6 @@ def users_update(uid):
                 return jsonify({"error": err}), 400
         if role == "administrateur":
             parent_id = None
-        admin_flag = 1 if role == "administrateur" else 0
     login_name = user["login"]
     if is_admin and "login" in data:
         login_name = (data.get("login") or "").strip()
@@ -955,7 +993,9 @@ def users_update(uid):
         (uid,),
     ).fetchone()
     db.close()
-    return jsonify(row_to_dict(user))
+    out = row_to_dict(user)
+    out["profil"] = _profil(out)
+    return jsonify(out)
 
 
 @app.route("/api/users/<int:uid>", methods=["DELETE"])
@@ -993,7 +1033,7 @@ def _agent_payload(db, agent_id, user_id=None, with_cells=True):
         agent = _agent_by_id(db, agent_id)
     else:
         agent = db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.id=? AND a.user_id=?",
             (agent_id, user_id),
         ).fetchone()
@@ -1060,6 +1100,25 @@ def _parse_iso_date(value):
         return None
 
 
+def _clean_work_days(raw, jours_hebdo=None):
+    """Jours travaillés d'une période (1 = lundi … 7 = dimanche). Absent : du lundi au vendredi (ou les N premiers jours).
+
+    Retourne None si la liste est invalide ou si son effectif ne correspond pas au nombre de jours par semaine."""
+    if raw in (None, ""):
+        return list(range(1, (jours_hebdo or 5) + 1)) if (jours_hebdo or 5) <= 7 else [1, 2, 3, 4, 5]
+    if not isinstance(raw, list):
+        return None
+    try:
+        days = sorted({int(x) for x in raw})
+    except (TypeError, ValueError):
+        return None
+    if not days or any(d < 1 or d > 7 for d in days):
+        return None
+    if jours_hebdo is not None and len(days) != jours_hebdo:
+        return None
+    return days
+
+
 def _normalize_periods(raw, params, year):
     """Valide les périodes de paramètres d'une fiche.
 
@@ -1108,6 +1167,9 @@ def _normalize_periods(raw, params, year):
                 jours = int(jours)
             except (TypeError, ValueError):
                 return None
+        days = _clean_work_days(item.get("jours_travailles"), jours)
+        if days is None:
+            return None
         out.append({
             "start": start.isoformat(),
             "end": end.isoformat(),
@@ -1115,6 +1177,8 @@ def _normalize_periods(raw, params, year):
             "duree_hebdo": (item.get("duree_hebdo") or "").strip(),
             "quotite": (item.get("quotite") or "").strip(),
             "jours_hebdo": jours,
+            "jours_travailles": days,
+            "ferie_travaille": bool(item.get("ferie_travaille")),
         })
         previous_end = end
 
@@ -1139,32 +1203,41 @@ def _agent_password():
     return "Conges" + uuid.uuid4().hex[:4].upper() + "!"
 
 
+def _create_agent_account(db, nom, prenom, email, matricule, owner_id, ad_login=""):
+    """Crée le compte d'un agent (sans fiche) rattaché à `owner_id`. Retourne (id du compte, identifiant)."""
+    login = _agent_login(db, prenom, nom)
+    full_name = ("%s %s" % (nom, prenom)).strip()
+    cur = db.execute(
+        "INSERT INTO users (login, ad_login, nom, nom_famille, prenom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
+        "VALUES (?,?,?,?,?,?,?,?,0,'agent',?,1)",
+        (login, ad_login, full_name, nom, prenom, email, matricule, generate_password_hash(_agent_password()), owner_id),
+    )
+    return cur.lastrowid, login
+
+
+def _insert_fiche(db, nom, prenom, email, matricule, agent_user_id, owner_id, validator_id, year, params,
+                  periods=None, is_manager=0):
+    """Insère la fiche congés d'une personne (sans contrôle ni commit). Retourne l'id de la fiche."""
+    cur = db.execute(
+        "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, periods, is_manager) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (owner_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, json_dumps(params),
+         json_dumps(periods or []), is_manager),
+    )
+    if is_manager:
+        db.execute("UPDATE agents SET is_manager=0 WHERE user_id=? AND year=? AND id<>?", (owner_id, year, cur.lastrowid))
+    return cur.lastrowid
+
+
 def _create_fiche_with_account(db, nom, prenom, email, matricule, owner_id, validator_id, year, params,
                                is_manager=0, ad_login=""):
     """Crée le compte de l'agent et sa fiche (sans contrôle ni commit : l'appelant valide et commite).
 
     Retourne (id de la fiche, id du compte agent, identifiant, mot de passe local généré)."""
-    login = _agent_login(db, prenom, nom)
-    password = _agent_password()
-    full_name = ("%s %s" % (nom, prenom)).strip()
-    cur_user = db.execute(
-        "INSERT INTO users (login, ad_login, nom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
-        "VALUES (?,?,?,?,?,?,0,'agent',?,1)",
-        (login, ad_login, full_name, email, matricule, generate_password_hash(password), owner_id),
-    )
-    agent_user_id = cur_user.lastrowid
-    cur = db.execute(
-        "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (owner_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, json_dumps(params), is_manager),
-    )
-    agent_row_id = cur.lastrowid
-    if is_manager:
-        db.execute(
-            "UPDATE agents SET is_manager=0 WHERE user_id=? AND year=? AND id<>?",
-            (owner_id, year, agent_row_id),
-        )
-    return agent_row_id, agent_user_id, login, password
+    agent_user_id, login = _create_agent_account(db, nom, prenom, email, matricule, owner_id, ad_login)
+    agent_row_id = _insert_fiche(db, nom, prenom, email, matricule, agent_user_id, owner_id, validator_id, year, params,
+                                 None, is_manager)
+    return agent_row_id, agent_user_id, login, ""
 
 
 @app.route("/api/agents", methods=["POST"])
@@ -1398,6 +1471,7 @@ def agents_update(aid):
     nom = (data.get("nom") if "nom" in data else agent["nom"] or "").strip().upper()
     prenom = (data.get("prenom") if "prenom" in data else agent["prenom"] or "").strip().upper()
     email = (data.get("email") if "email" in data else agent["email"] or "").strip()
+    email = (agent["email"] or "").strip() or email      # l'e-mail vient de l'annuaire : une fois renseigné, il ne se modifie plus ici
     if not nom or not prenom:
         db.close()
         return jsonify({"error": "Nom et prénom obligatoires"}), 400
@@ -1450,6 +1524,8 @@ def agents_update(aid):
     else:
         is_manager = int(agent["is_manager"] or 0)
     matricule, merr = _clean_matricule(data["matricule"] if "matricule" in data else agent["matricule"])
+    if agent["matricule"]:
+        matricule, merr = agent["matricule"], None        # le matricule vient de Sedit RH : une fois renseigné, il ne se modifie plus
     holder = _matricule_holder(db, matricule, agent["agent_user_id"])
     if merr or holder:
         db.close()
@@ -1568,20 +1644,36 @@ def agents_duplicate():
             year = int(source["year"]) + 1
         if not (2000 <= year <= 2100):
             year = int(source["year"]) + 1
+        if source["agent_user_id"] and db.execute(
+                "SELECT 1 FROM agents WHERE agent_user_id=? AND year=?", (source["agent_user_id"], year)).fetchone():
+            errors.append({"id": raw, "error": "La fiche %d existe déjà pour cette personne" % year})
+            continue
+        # On reporte la PÉRIODE en vigueur en fin d'année (paramètres, jours travaillés, fériés) sur toute l'année suivante.
         params = json_loads(source["params"])
         source_periods = json_loads(source["periods"]) if source["periods"] else []
-        if source_periods:
-            last = source_periods[-1]
-            for key in ("penibilite", "duree_hebdo", "quotite", "jours_hebdo"):
+        last = source_periods[-1] if source_periods else {}
+        for key in ("penibilite", "duree_hebdo", "quotite", "jours_hebdo", "jours_travailles", "ferie_travaille"):
+            if last and key in last:
                 params[key] = last.get(key)
         params["date_arrivee"] = ""
         params["date_depart"] = ""
         params = _normalize_params(params)
+        new_periods = []
+        if params.get("penibilite") and params.get("quotite") and params.get("jours_hebdo") not in (None, ""):
+            try:
+                jours = int(params["jours_hebdo"])
+            except (TypeError, ValueError):
+                jours = None
+            days = _clean_work_days(params.get("jours_travailles"), jours) or _clean_work_days(None, jours)
+            params["jours_travailles"] = days
+            new_periods = [{"start": "%04d-01-01" % year, "end": "%04d-12-31" % year, "penibilite": params["penibilite"],
+                            "duree_hebdo": params.get("duree_hebdo") or "", "quotite": params["quotite"], "jours_hebdo": jours,
+                            "jours_travailles": days, "ferie_travaille": bool(params.get("ferie_travaille"))}]
         cur = db.execute(
-            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, is_manager) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, periods, is_manager) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (source["user_id"], source["agent_user_id"], source["nom"], source["prenom"],
-             source["email"], source["matricule"], source["validator_id"], year, json_dumps(params),
+             source["email"], source["matricule"], source["validator_id"], year, json_dumps(params), json_dumps(new_periods),
              int(source["is_manager"] or 0)),
         )
         if source["is_manager"]:
@@ -1650,6 +1742,39 @@ def _cell_valid(key, year):
     except ValueError:
         return False
     return True
+
+
+def _agent_coverage(agent):
+    """Périodes couvertes : [{start, end, days, ferie}] — les périodes de paramètres, sinon la présence (arrivée → départ).
+
+    `days` = jours travaillés (1 = lundi … 7 = dimanche, par défaut du lundi au vendredi) ; `ferie` = travaille les jours fériés."""
+    year = int(agent["year"])
+    periods = json_loads(agent["periods"]) if agent["periods"] else []
+    if periods:
+        return [{"start": p["start"], "end": p["end"],
+                 "days": p.get("jours_travailles") or _clean_work_days(None, p.get("jours_hebdo")),
+                 "ferie": bool(p.get("ferie_travaille"))} for p in periods]
+    params = json_loads(agent["params"]) if agent["params"] else {}
+    jours = params.get("jours_hebdo")
+    try:
+        jours = int(jours) if jours not in (None, "") else None
+    except (TypeError, ValueError):
+        jours = None
+    return [{"start": (params.get("date_arrivee") or "%d-01-01" % year)[:10],
+             "end": (params.get("date_depart") or "%d-12-31" % year)[:10],
+             "days": params.get("jours_travailles") or _clean_work_days(None, jours),
+             "ferie": bool(params.get("ferie_travaille"))}]
+
+
+def _cell_covered(coverage, year, key, holidays=()):
+    """La demi-journée est-elle dans une période ET travaillée (jour de la semaine coché, férié seulement si travaillé) ?"""
+    month, day = key // 1000, (key % 1000) // 10
+    iso = "%04d-%02d-%02d" % (int(year), month, day)
+    weekday = dt.date(int(year), month, day).isoweekday()
+    for period in coverage:
+        if period["start"] <= iso <= period["end"]:
+            return weekday in period["days"] and (period["ferie"] or iso not in holidays)
+    return False
 
 
 def _agent_cells(db, agent_id):
@@ -1853,6 +1978,15 @@ def _can_change_owner(db, user, agent):
     )
 
 
+def _display_name(row):
+    """« Prénom NOM » d'un compte (jamais l'identifiant) ; à défaut, son nom affiché."""
+    prenom = (row.get("prenom") or "").strip()
+    famille = (row.get("nom_famille") or "").strip()
+    if prenom and famille:
+        return "%s %s" % (prenom.title(), famille)
+    return row.get("nom") or row.get("login") or ""
+
+
 def _owner_options(db, user, agent):
     if not agent or not _can_change_owner(db, user, agent):
         return []
@@ -1860,7 +1994,7 @@ def _owner_options(db, user, agent):
     role_marks = ",".join("?" for _ in roles)
     if user.get("admin"):
         rows = db.execute(
-            "SELECT id, login, nom, role FROM users "
+            "SELECT id, login, nom, nom_famille, prenom, role FROM users "
             "WHERE actif=1 AND role IN (%s) ORDER BY nom, login" % role_marks,
             roles,
         ).fetchall()
@@ -1868,12 +2002,15 @@ def _owner_options(db, user, agent):
         ids = _scope_ids(db, user)
         id_marks = ",".join("?" for _ in ids)
         rows = db.execute(
-            "SELECT id, login, nom, role FROM users "
+            "SELECT id, login, nom, nom_famille, prenom, role FROM users "
             "WHERE actif=1 AND role IN (%s) AND id IN (%s) ORDER BY nom, login"
             % (role_marks, id_marks),
             roles + ids,
         ).fetchall()
-    return [row_to_dict(r) for r in rows]
+    out = [row_to_dict(r) for r in rows]
+    for r in out:
+        r["display"] = _display_name(r)
+    return out
 
 
 def _agent_flags(db, user, agent):
@@ -1891,9 +2028,8 @@ def _agent_flags(db, user, agent):
 
 
 def _request_validator(db, user):
-    """Responsable N+1 actif ; remonte la hiérarchie, puis l'admin."""
-    if user.get("admin"):
-        return None
+    """Responsable N+1 actif ; remonte la hiérarchie, puis un autre administrateur (même pour un administrateur : jamais de
+    validation directe de sa propre demande ; sans personne au-dessus, la demande est validée d'office)."""
     seen = set()
     pid = user.get("parent_id")
     while pid and pid not in seen:
@@ -2035,9 +2171,11 @@ def _create_special_request(db, agent, data, request_type, user):
     """Crée une demande de cassage ou une demande d'absence en heures."""
     code = (data.get("code") or "").strip().upper()
     comment = (data.get("comment") or "").strip()
+    own_fiche = agent["agent_user_id"] == user["id"]      # sa propre fiche : une demande comme tout le monde, jamais auto-validée
     is_responsible = bool(
-        user.get("admin")
-        or (_user_role(user) in VALIDATOR_ROLES and _can_edit_agent(db, user, agent))
+        not own_fiche
+        and (user.get("admin")
+             or (_user_role(user) in VALIDATOR_ROLES and _can_edit_agent(db, user, agent)))
     )
     if is_responsible:
         validator_id, auto, status = None, True, "validee"
@@ -2363,7 +2501,7 @@ def requests_list():
         sql += " AND (r.user_id=? OR a.agent_user_id=?)"
         params.extend([request.user["id"], request.user["id"]])
     elif scope == "to_validate":
-        if request.user.get("admin"):
+        if _sees_all(request.user):
             sql += " AND r.status IN ('en_attente','annulation_demandee')"
         else:
             ids = _scope_ids(db, request.user)
@@ -2376,7 +2514,7 @@ def requests_list():
             )
             params.extend(ids * 2)
     elif scope == "perimeter":
-        if request.user.get("admin"):
+        if _sees_all(request.user):
             pass
         elif _user_role(request.user) in VALIDATOR_ROLES:
             ids = _scope_ids(db, request.user)
@@ -2470,7 +2608,7 @@ def requests_counts():
         "AND r.status IN ('en_attente','annulation_demandee')",
         (request.user["id"], request.user["id"]),
     ).fetchone()["c"]
-    if request.user.get("admin"):
+    if _sees_all(request.user):
         to_validate = db.execute(
             "SELECT COUNT(*) AS c FROM leave_requests "
             "WHERE status IN ('en_attente','annulation_demandee')"
@@ -2512,7 +2650,7 @@ def reminders_list():
     )
     params = ["-%d days" % days]
     role = _user_role(request.user)
-    if request.user.get("admin"):
+    if _sees_all(request.user):
         pass
     elif role == "agent":
         sql += " AND (r.user_id=? OR a.agent_user_id=?)"
@@ -2611,6 +2749,11 @@ def requests_create():
     if any(not _cell_valid(key, agent["year"]) for key in cells):
         db.close()
         return jsonify({"error": "Sélection invalide pour l'année de la fiche"}), 400
+    coverage = _agent_coverage(agent)
+    holidays = {str(x[0]) for x in (load_settings().get("jours_feries") or [])}
+    if any(not _cell_covered(coverage, agent["year"], int(key), holidays) for key in cells):
+        db.close()
+        return jsonify({"error": "Une des demi-journées n'est pas travaillée ou n'est couverte par aucune période de paramètres de la fiche"}), 400
     existing = _agent_cells(db, agent_id)
     if any(str(key) in existing for key in cells):
         db.close()
@@ -2696,19 +2839,45 @@ def requests_create():
             if item.get("code") == code:
                 code_label = item.get("libelle") or code
                 break
-        notify_validator(
-            validator_email=validator_email,
-            validator_name=validator_label,
-            agent_name=agent_name,
-            code=code,
-            code_label=code_label,
-            cells=cells,
-            year=agent_year,
-            days=len(cells) / 2.0,
-            comment=comment,
-            fiche_id=agent_id,
-            request_id=request_id,
-        )
+        # Destinataires : le valideur, et son délégataire (son propre valideur) si une délégation est en cours aujourd'hui.
+        recipients = [(validator_id, validator_email, validator_label)]
+        try:
+            ddb = get_db()
+            delegate = delegation.active_delegate(ddb, validator_id) if validator_id else None
+            ddb.close()
+        except Exception:  # noqa: BLE001 — une délégation illisible ne doit jamais empêcher la demande
+            delegate = None
+        if delegate:
+            recipients.append((delegate["id"], delegate["email"] or "", "%s (délégation de %s)" % (
+                delegate["nom"] or delegate["login"], validator_label)))
+        base_url = config.BASE_URL
+        try:
+            first_month = min(int(k) for k in cells) // 1000
+        except (ValueError, TypeError):
+            first_month = 1
+        for recipient_id, recipient_email, recipient_name in recipients:
+            links = {}
+            if base_url and recipient_id:
+                token = mail_actions.make_token(app.secret_key, request_id, recipient_id)
+                links = {
+                    "lien_valider": "%s/api/mail-action/%s?a=validee" % (base_url, token),
+                    "lien_refuser": "%s/api/mail-action/%s?a=refusee" % (base_url, token),
+                    "lien_calendrier": "%s/#/planning?equipe=1&mois=%d&annee=%d" % (base_url, first_month, agent_year),
+                }
+            notify_validator(
+                validator_email=recipient_email,
+                validator_name=recipient_name,
+                agent_name=agent_name,
+                code=code,
+                code_label=code_label,
+                cells=cells,
+                year=agent_year,
+                days=len(cells) / 2.0,
+                comment=comment,
+                fiche_id=agent_id,
+                request_id=request_id,
+                extra=links,
+            )
     return jsonify(out)
 
 
@@ -3146,13 +3315,13 @@ def dashboard():
         agents = _scope_agents(db, request.user, year)
     elif _user_role(request.user) == "agent":
         agents = db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
     else:
         agents = db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
@@ -3216,6 +3385,7 @@ def hr_dashboard():
             "role": "agent",
             "kind": "fiche",
             "owner_id": agent_row["user_id"],
+            "agent_user_id": agent_row["agent_user_id"],
             "absences": absence_days,
             "capacity": capacity,
             "rate": round(absence_days / capacity * 100, 2) if capacity else 0,
@@ -3234,15 +3404,17 @@ def hr_dashboard():
 
     scope_ids = set(_scope_ids(db, request.user))
     nodes = {}
+    unit_names = {r["code"]: r["libelle"] for r in db.execute("SELECT code, libelle FROM org_units").fetchall()}
     for u in db.execute(
-        "SELECT id, login, nom, role, parent_id FROM users"
+        "SELECT id, login, nom, role, parent_id, unit_code FROM users"
     ).fetchall():
         if u["id"] not in scope_ids:
             continue
         role = _user_role(row_to_dict(u))
         nodes[u["id"]] = {
             "id": "u:%s" % u["id"],
-            "label": u["nom"] or u["login"] or "",
+            # Une entité (unité Sedit RH) est désignée par son nom, pas par celui de son valideur.
+            "label": unit_names.get(u["unit_code"]) or u["nom"] or u["login"] or "",
             "role": role,
             "kind": "user",
             "_parent": u["parent_id"],
@@ -3253,6 +3425,14 @@ def hr_dashboard():
         owner = nodes.get(fiche["owner_id"])
         if owner:
             owner["fiches"].append(fiche)
+    # Le responsable (valideur) d'une entité apparaît en premier dans son entité : sa propre fiche quitte le groupe de son valideur.
+    for fiche in fiche_stats:
+        mine = nodes.get(fiche.get("agent_user_id"))
+        home = nodes.get(fiche["owner_id"])
+        if mine and home and mine is not home and (mine["fiches"] or mine["children"]) and fiche in home["fiches"]:
+            home["fiches"].remove(fiche)
+            fiche["resp"] = True
+            mine["fiches"].append(fiche)
     roots = []
     for node in nodes.values():
         parent = nodes.get(node["_parent"])
@@ -3260,6 +3440,30 @@ def hr_dashboard():
             parent["children"].append(node)
         else:
             roots.append(node)
+
+    def collapse(node):
+        """Fusionne les entités de même nom (une direction et son service du même nom, deux valideurs d'une même unité)."""
+        for child in node["children"]:
+            collapse(child)
+        changed = True
+        while changed:
+            changed = False
+            seen = {}
+            kept = []
+            for child in node["children"]:
+                key = (child["label"] or "").strip().lower()
+                target = node if key == (node["label"] or "").strip().lower() else seen.get(key)
+                if target is not None:
+                    target["fiches"].extend(child["fiches"])
+                    target["children"].extend(child["children"])
+                    changed = True
+                else:
+                    seen[key] = child
+                    kept.append(child)
+            node["children"] = kept
+
+    for root in roots:
+        collapse(root)
 
     def finalize(node):
         children = [c for c in (finalize(child) for child in node["children"]) if c]
@@ -3270,7 +3474,7 @@ def hr_dashboard():
             children,
             key=lambda c: (-ROLE_LEVELS.get(c.get("role"), 0), c.get("label", "")),
         )
-        node["fiches"] = sorted(fiches, key=lambda f: f.get("label", ""))
+        node["fiches"] = sorted(fiches, key=lambda f: (0 if f.get("resp") else 1, f.get("label", "")))
         node["agents"] = sum(f["agents"] for f in fiches) + sum(c["agents"] for c in children)
         node["absences"] = sum(f["absences"] for f in fiches) + sum(c["absences"] for c in children)
         node["capacity"] = sum(f["capacity"] for f in fiches) + sum(c["capacity"] for c in children)
@@ -3378,25 +3582,25 @@ def planning():
         target_row = db.execute("SELECT * FROM users WHERE id=?", (target,)).fetchone()
         if target_row and _user_role(row_to_dict(target_row)) == "agent":
             agents = db.execute(
-                "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
                 "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
                 (target, year),
             ).fetchall()
         else:
             agents = db.execute(
-                "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
                 "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
                 (target, year),
             ).fetchall()
     elif _user_role(request.user) == "agent":
         agents = db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
     else:
         agents = db.execute(
-            "SELECT a.*, u.login AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
@@ -3455,6 +3659,20 @@ def planning():
     return jsonify({"year": year, "month": month, "agents": out})
 
 
+@app.route("/api/my-leave", methods=["GET"])
+@login_required
+def my_leave():
+    """Ma propre fiche de congés de l'année (celle dont je suis le titulaire), quel que soit mon rôle ou mon périmètre."""
+    year = _request_year()
+    db = get_db()
+    row = db.execute(
+        "SELECT id, year FROM agents WHERE agent_user_id=? AND year=? ORDER BY id LIMIT 1",
+        (request.user["id"], year),
+    ).fetchone()
+    db.close()
+    return jsonify({"fiche_id": row["id"] if row else None, "year": year})
+
+
 @app.route("/api/scope-users", methods=["GET"])
 @login_required
 def scope_users():
@@ -3470,7 +3688,7 @@ def scope_users():
         return jsonify([])
     marks = ",".join("?" for _ in ids)
     rows = db.execute(
-        "SELECT id, login, nom, role, parent_id FROM users WHERE id IN (%s) ORDER BY login" % marks,
+        "SELECT id, login, nom, role, parent_id, unit_code FROM users WHERE id IN (%s) ORDER BY login" % marks,
         ids,
     ).fetchall()
     db.close()
@@ -3521,6 +3739,7 @@ def validators_list():
     year = _request_year()
     for row in rows:
         row["manager_name"] = _manager_name_for_user(db, row["id"], year)
+        row["display"] = _display_name(row)
     db.close()
     return jsonify(rows)
 
@@ -3550,10 +3769,32 @@ register_docs(app)
 act_as.init_act_as(app, current_user, _audit_user)
 import admin_settings  # noqa: E402
 import rh_import  # noqa: E402
+import people  # noqa: E402
 
 admin_settings.init_admin_settings(app, admin_required)
 rh_import.init_rh(app, admin_required, _create_fiche_with_account, _audit_user, _normalize_params,
                   _matricule_holder, _clean_matricule)
+import delegation  # noqa: E402
+import mail_actions  # noqa: E402
+import my_agents  # noqa: E402
+
+delegation.init_delegation(app, login_required, _can_manage_users)
+mail_actions.init_mail_actions(app, requests_approve.__wrapped__, requests_refuse.__wrapped__, load_settings)
+my_agents.init_my_agents(app, login_required, _can_manage_users, _scope_ids, _create_agent_account, _insert_fiche,
+                         _audit_user, _normalize_params, _request_year, ROLE_LEVELS, load_settings)
+
+
+@app.route("/api/docs/regles-metier", methods=["GET"])
+@login_required
+def docs_business_rules():
+    """Règles métier de l'application (fichier REGLES_METIER.md), lisibles dans Paramétrage > Documentation."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "REGLES_METIER.md")
+    with open(path, encoding="utf-8") as fh:
+        return app.response_class(fh.read(), mimetype="text/markdown; charset=utf-8")
+
+
+people.init_people(app, login_required, _can_manage_users, _scope_ids, _create_agent_account, _audit_user,
+                   _clean_matricule, _matricule_holder, _normalize_params, _valid_email, _request_year, ROLE_LEVELS)
 
 
 def bootstrap():

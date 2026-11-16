@@ -33,12 +33,15 @@ Docker n'est pas installé sur ce poste : les images ne peuvent pas être constr
 Convention `0.x.y` (avant la production) : **x** = ajout d'un module ou d'une fonctionnalité, **y** = correction ou amélioration sans nouveau module, `1.0.0` = production.
 Version actuelle : voir `backend/version.py` (source unique).
 
+**Règles métier** : toute règle métier ajoutée ou modifiée (droits, hiérarchie, calculs, circuit de validation, création de personnes…) doit être inscrite **dans la même version** dans `backend/REGLES_METIER.md` (document lisible dans l'application, Paramétrage > Documentation > Règles métier).
+
 **À chaque nouvelle version, documenter l'application avec les nouveautés** :
 1. `backend/version.py` : changer `VERSION` et ajouter l'entrée **en tête** de `VERSIONS` (version, date du jour AAAA-MM-JJ, `minor` ou `patch`, titre, liste de nouveautés
    rédigée pour les utilisateurs métier).
 2. `CHANGELOG.md` : ajouter la section `## X.Y.Z — AAAA-MM-JJ — titre` **en tête**, avec les mêmes nouveautés.
 3. `MANIFEST.md` : mettre à jour la ligne de statut (`v X.Y.Z`), les sections fonctionnelles concernées (exigences nouvelles ou modifiées avec leurs identifiants,
    décisions de la section 0, questions ouvertes, hypothèses, écarts) et ajouter une ligne au tableau de la section 29.
+3 bis. `backend/REGLES_METIER.md` : refléter toute règle métier nouvelle ou modifiée (et la date de mise à jour).
 4. `modifications.md` : expliquer au métier ce qui a changé, pourquoi, l'impact pour les utilisateurs et ce qui a été vérifié (ou non).
 5. `README.md` si les commandes, l'architecture ou le déploiement changent.
 6. Lancer les tests : `backend/tests/test_version.py` échoue si `version.py`, `CHANGELOG.md` et `MANIFEST.md` ne sont pas en phase. Vérifier aussi dans un navigateur

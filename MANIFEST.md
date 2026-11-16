@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.4.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.13.1 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -41,6 +41,15 @@ Sources analysées pour ce document :
 | **D15** | Deux **journaux d'administration** (connexions, e-mails) avec **durée de conservation réglable** ; les agents gérés par l'AD n'ont plus de gestion de mot de passe dans l'application. | 14.6, 15 |
 | **D17** | Les **matricules des agents de la base** sont récupérés dans Sedit RH par rapprochement de **nom et prénom** (correspondances certaines seulement, validées par l'administrateur) ; 30 agents sur 34 rapprochés. | 14.9 |
 | **D18** | L'**organisation Sedit RH** est présentée comme la hiérarchie de l'application (Direction › Service › Secteur › Agent) et permet de **créer des agents** dans l'application (comptes et fiches) en cochant des agents ou des unités ; les **comptes valideurs d'unité** manquants peuvent être créés (miroir de l'organisation RH). | 14.10 |
+| **D19** | Les rôles se limitent à **Valideur et Agent** ; **Administrateur** est un **droit supplémentaire** (indicateur `admin`, case à cocher) qu'une personne agent ou valideur peut cumuler. Le niveau interne (direction, service, secteur, équipe…) reste porté par `users.role` et se déduit de l'**unité Sedit RH** de la personne ; un **agent** est affecté à une unité, un **valideur** à une unité et est validé par une **unité supérieure** (ses anciens rôles DGS/DGA/Direction/Service/Secteur/Unité/Équipe sont tous des « Valideur »). Le périmètre reste calculé par l'arbre des responsables, déduit des unités. | 14.11 |
+| **D20** | Les **règles métier** sont consignées dans `backend/REGLES_METIER.md`, lisible dans Paramétrage > Documentation > Règles métier, et **mises à jour à chaque version** (règle ajoutée dans `CLAUDE.md`). | 14.12 |
+| **D21** | Le menu **Mon équipe** montre l'arbre des personnes que je valide et permet, par **glisser-déposer** d'agents Sedit RH de mon niveau ou en dessous, de les créer **sous** une personne : celle-ci devient valideur (niveau déduit de son unité, plafonné sous celui de son propre valideur) et prend l'unité de l'agent déposé si elle n'en a pas. | 14.12 |
+| **D22** | **Une personne n'a une fiche congés que si elle a au moins une période de paramètres** : le compte est créé d'abord, la fiche naît avec la première période (`POST /api/my-agents/<id>/fiche`). Les jours hors de toute période sont **grisés et refusés** (calendrier et demandes). | 14.12 |
+| **D23** | Chaque période porte ses **jours travaillés** (1 = lundi … 7 = dimanche, du lundi au vendredi par défaut) et l'indicateur **jours fériés travaillés** ; les autres jours sont **grisés, non sélectionnables et non décomptés** (calendrier et demandes). Dans « Mes fiches », les groupes portent le **nom de l'entité** et le **responsable** passe en premier. | 14.12 |
+| **D24** | Le **périmètre par défaut est l'équipe** (sous-arbre des personnes que l'on valide) **pour tous, administrateurs compris** ; l'administrateur peut basculer sur « **Voir tout** » (en-tête `X-Scope: all`, ignoré pour les autres profils). Les droits d'accès (ouvrir une fiche, administrer) ne changent pas. | 14.12 |
+| **D25** | Les e-mails de demande portent des **boutons** : « Valider » / « Refuser » mènent à une **page de confirmation protégée par un jeton signé** (demande + destinataire, 14 jours) ; l'ouverture du lien n'a aucun effet, la décision est prise au clic (POST) avec les mêmes contrôles que l'écran ; « Voir le calendrier d'équipe » ouvre le planning de mon équipe. | 16, 14.13 |
+| **D26** | Un valideur **délègue à son propre valideur** : automatiquement quand il est absent (journée complète posée dans sa fiche) et/ou sur des **périodes du/au** ; la délégation **prévient** le délégataire (mails, relances) et **trace** ses décisions ; elle ne crée pas de droit nouveau (un supérieur peut déjà valider). | 14.13 |
+| **D27** | **« Mon équipe » remplace « Mes fiches »** : une seule vue, classée **par entité** (responsable ★ en premier, entités de même nom regroupées), où chaque personne est une carte avec sa **période en images** (camembert de quotité, jours travaillés, durée, pénibilité). La liste d'équipe, la création de fiche, la duplication N+1 et le glisser-déposer y sont réunis ; `#/agents` redirige vers `#/my-agents`. | 14.14 |
 | **D16** | La connexion à **Sedit RH** (adresse et clé) est configurée dans `.env`, en local pour l'instant (API `api-apps/sedit-rh`, port 3440) ; un écran Paramétrage > API Sedit RH **teste la connexion et compte les agents**. | 14.8, 18 |
 
 ---
@@ -372,6 +381,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **PLA-01** — Vue d'un **mois** : les absences de chaque agent jour par jour, avec **week-ends, jours fériés et vacances scolaires** ; **totaux par agent**.
 - **PLA-02** — Portée : « mes fiches » ou « **toutes les fiches de mon périmètre** » regroupées par niveau hiérarchique (dégradés de brique du plus sombre — direction — au plus clair — secteur).
 - **PLA-03** — Les agents voient leur équipe avec les **motifs masqués** (DRO-03).
+- **PLA-05** — Les jours d'une **demande en attente** apparaissent dans le planning **éclaircis et en pointillé**, comme dans la fiche ; les jours validés gardent la couleur pleine du code.
 - **PLA-04** — **Impression** du planning en A4 paysage, sans la synthèse mensuelle.
 
 ---
@@ -448,6 +458,65 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 
 ---
 
+### 14.11 Trois rôles, unités Sedit RH et création d'une personne
+- **ADM-07** — Deux rôles à l'écran, **Valideur** et **Agent**, plus la case **Administrateur** (droit cumulable, réservé aux administrateurs, avec mot de passe local de secours) ; l'API des utilisateurs expose `profil` (valideur/agent) et `admin` en plus de `role` (niveau interne) ; un compte `admin` a tous les droits quel que soit son rôle ; la valeur `valideur` envoyée en modification conserve le niveau interne du compte (sinon « secteur »).
+- **ADM-08** — Table **`org_units`** (code, libellé, niveau, parent) copiée depuis `/api/v1/organisation` de Sedit RH à la première utilisation puis sur demande (`GET /api/org-units?refresh=1`, administrateur) ; colonnes `users.unit_code` et `users.validator_unit_code` (migration `0005`). Un valideur ne voit que les unités de son périmètre (son unité et ses descendantes).
+- **ADM-09** — **Création d'une personne** (`POST /api/users/person`) : recherche prédictive dans Sedit RH (`GET /api/sirh/agents?q=`, mots multiples), rapprochement avec l'AD (`GET /api/ad/match`, identifiant attendu = initiale du prénom + nom, ex. `cparisi`) pour l'e-mail et l'identifiant, puis unité(s).
+- **ADM-10** — **Agent** : unité d'affectation obligatoire ; rattaché au valideur de cette unité, à défaut au valideur de l'unité supérieure la plus proche (les comptes d'unité hérités sont reconnus par leur niveau et leur nom) ; compte et fiche créés. Refus explicite si aucune unité de la chaîne n'a de valideur.
+- **ADM-11** — **Valideur** : unité d'affectation + **unité qui le valide**, obligatoirement une unité supérieure (pas de cycle possible) ; rattaché au valideur de cette unité ; sans unité validatrice, il est rattaché à celui qui le crée (ou à personne si c'est un administrateur). Le niveau interne est celui de son unité. **Direction** : aucune unité supérieure dans Sedit RH, le valideur est un **DGA** (ou DGS) choisi dans la liste des valideurs de ces niveaux ; un DGA/DGS se crée avec le champ « niveau de validation » (sans unité, `level` et `supervisor_id` dans l'API) ; le valideur supérieur doit toujours être d'un niveau plus élevé.
+- **ADM-12** — Un valideur ne peut créer que dans son périmètre (unité et valideur de rattachement) ; seul un administrateur crée un administrateur. Toute création est inscrite au journal d'audit (profil, niveau, unités, matricule).
+- Question ouverte **Q17** : faut-il migrer les comptes d'unité hérités (« DIR-… », « SRV-… ») vers des personnes titulaires, et renseigner leur unité (aujourd'hui rapprochés par nom) ?
+
+
+### 14.12 Mon équipe et règles métier
+- **MAG-01** — Menu **Mon équipe** (valideurs et administrateurs) : arbre `GET /api/my-agents` des personnes que je valide, puis de celles que mes subordonnés valident, avec effectifs.
+- **MAG-02** — Liste de droite `GET /api/my-agents/sirh?q=` : agents en poste de Sedit RH dont l'unité est la mienne ou en dessous (toutes pour un administrateur sans unité), absents de l'application (par matricule ou nom), hors moi-même ; 300 résultats au plus, recherche par nom, prénom, matricule ou unité.
+- **MAG-03** — Dépôt d'un agent Sedit RH sur une personne (`POST /api/my-agents/attach`) : crée compte et fiche (propriétaire et valideur = cette personne), unité confirmée dans mon périmètre, e-mail et identifiant AD repris s'ils sont uniques ; la personne devient valideur (`users.role` = niveau de son unité, sous celui de son propre valideur) et prend l'unité de l'agent si elle n'en avait pas.
+- **MAG-04** — Déplacement (`POST /api/my-agents/move`) : change le valideur et le propriétaire de la fiche ; refusé sous soi-même ou un subordonné, hors périmètre, pour un compte administrateur sans valideur, ou si le valideur de destination n'est pas d'un niveau plus élevé.
+- **MAG-06** — **Sélection multiple** : cases à cocher (et « Tout sélectionner ») dans la liste Sedit RH ; glisser un agent coché emmène toute la sélection (un agent non coché part seul) ; le dépôt crée les agents un par un via `POST /api/my-agents/attach`, chacun dans son unité Sedit RH ou dans une unité commune ; le bilan distingue créés et échecs.
+- **MAG-07** — **Fiche = première période** : l'attache d'un agent et la création d'une personne ne créent plus de fiche ; l'arbre montre « Définir la période » (ou « Compléter la période » si une fiche existante est vide) puis le lien de la fiche de l'année ; la période est validée contre les listes du paramétrage (pénibilité, durée liée à la pénibilité, quotité, jours/sem.) ; sa date de début est la date d'arrivée Sedit RH si elle tombe dans l'année, sinon le 1er janvier, sa fin le 31 décembre.
+- **MAG-08** — **Hors de mon unité** : `GET /api/my-agents/sirh?scope=all` liste les agents de toute la collectivité ; le rattachement d'un agent d'une autre unité est permis, toujours sous une personne de mon périmètre ; la liste des unités du dialogue est complète (`GET /api/org-units?scope=all`).
+- **CAL-06** — Les **jours couverts par aucune période de paramètres** (ou, sans période, hors de la présence arrivée → départ) sont **grisés et non sélectionnables** dans le calendrier ; le serveur refuse une demande d'absence sur ces jours.
+- **CAL-07** — **Jours travaillés** : `jours_travailles` (liste 1–7, effectif = `jours_hebdo`) et `ferie_travaille` dans chaque période (et dans `params` quand il n'y a qu'une période implicite) ; un jour est sélectionnable s'il est couvert par une période, que son jour de semaine est coché et qu'il n'est pas férié (sauf fériés travaillés). Contrôle identique côté serveur (`_cell_covered`).
+- **FIC-10** — « Mes fiches » : le groupe d'un responsable porte le **nom de son entité** (`users.unit_code` → libellé Sedit RH), la fiche du responsable passe **en premier** (surlignée) dans le groupe de l'entité qu'il valide.
+- **TDB-05** — Arbre du tableau de bord RH : libellé d'un nœud = **nom de l'entité** (`users.unit_code` → `org_units.libelle`), à défaut le nom du compte ; la fiche du **responsable** passe en premier dans l'entité qu'il valide (« (Responsable) ») ; les entités de même nom sont fusionnées ; `_org_ancestor_name` (tableau par direction / service) suit la même règle.
+- **FIC-14** — En-tête de fiche compact (une ligne de champs `fb-grid`) ; en mode **Mes congés** (`#/agent/<id>/conges`) la fiche est en **consultation** : champs désactivés, ni suppression ni changement de valideur, le calendrier ne sert qu'à poser des demandes (l'API ne retire pas pour autant au valideur ou à l'administrateur ses droits sur une fiche, voir DRO-01).
+- **FIC-13** — Barre d'onglets des fiches : le bouton **« + »** ouvre une **liste de choix** des fiches de l'année dans mon périmètre (recherche, cases à cocher, fiches déjà ouvertes grisées) et ouvre les fiches cochées en onglets ; il ne crée plus de fiche (la création se fait dans « Mes fiches » ou « Mon équipe »).
+- **FIC-12** — Vocabulaire : le « propriétaire » d'une fiche s'appelle **« Valideur »** à l'écran, désigné par **Prénom NOM** (`nom_famille`, `prenom`) et jamais par son identifiant ; les listes de choix du valideur (`owner_options`, `/api/validators`) portent un champ `display`.
+- **FIC-11** — Nom de famille et prénom mémorisés séparément sur le compte (`nom_famille`, `prenom`) ; à défaut, repris de Sedit RH par matricule.
+- **CGE-02** — `GET /api/my-leave?year=` renvoie l'identifiant de ma fiche (titulaire = moi), indépendamment de mon périmètre : un valideur retrouve ainsi sa propre fiche, qui appartient à son valideur.
+- **CGE-03** — Sur **sa propre fiche** (titulaire), personne ne saisit ni ne valide directement, **administrateur compris** : `can_edit_cells` est faux, `can_request` vrai ; les demandes de jours, d'heures et de cassage suivent le circuit normal (valideur = responsable N+1, à défaut un autre administrateur, à défaut validation d'office) ; DEM-03 ne s'applique pas à sa propre fiche.
+- **CGE-01** — Menu **Mes congés** (route `#/my-leave`, tous les profils) : ouvre la fiche de l'année dont la personne est le titulaire (`agent_user_id`), en mode « congés » (`#/agent/<id>/conges`) où le bloc **Paramètres et périodes** est masqué ; sans fiche, message explicatif. Pour un agent, le menu « Mes fiches » est masqué.
+- **MAG-09** — Rapprochement AD : à nom égal, le compte qui a une adresse e-mail est préféré ; la pastille « ⚠ e-mail » de Mon équipe signale les personnes actives sans e-mail (une demande dont le valideur n'a pas d'e-mail est journalisée « non envoyé » dans le journal des e-mails).
+- **DRO-04** — `_scope_ids` renvoie le sous-arbre de l'utilisateur ; seul un administrateur qui envoie `X-Scope: all` obtient tous les comptes. S'appliquent : fiches, planning, demandes (« à valider », « périmètre »), compteurs, rappels, arbre Mon équipe (racine « Toute la collectivité »). L'écran Utilisateurs de l'administration reste complet.
+- **MAG-10** — **Recherche AD** : `GET /api/my-agents/<id>/ad[?q=]` (rapprochement par nom, ou texte libre) et `POST /api/my-agents/<id>/ad {username}` : reprend l'e-mail (relu dans l'annuaire) et l'identifiant AD sur le compte et ses fiches ; refus si l'identifiant est déjà utilisé ; tracé au journal d'audit.
+- **MAG-12** — Bouton **« Dupliquer pour N+1 »** sur chaque personne de Mon équipe qui a une fiche (`fiche.next_exists` indique si la fiche N+1 existe) : appelle `POST /api/agents/duplicate` (MUL-03 : paramètres conservés sauf arrivée / départ, congés non copiés).
+- **MAG-05** — Les unités proposées dans le dialogue sont limitées à mon périmètre (`GET /api/org-units?scope=mine`).
+- **DOC-01** — `GET /api/docs/regles-metier` sert `backend/REGLES_METIER.md` à tout utilisateur connecté ; l'écran Paramétrage > Documentation > Règles métier l'affiche. Toute règle métier ajoutée ou modifiée y est inscrite dans la même version.
+- Question ouverte **Q18** : un agent glissé sous une personne dont l'unité diffère de la sienne (unité non supérieure) est accepté — faut-il l'interdire ?
+
+### 14.13 Délégation, e-mails à boutons, Mon équipe en deux niveaux
+- **DEL-01** — Table `delegations` (valideur, du, au) et `users.delegate_auto` (migration `0007`) ; le **délégataire est le responsable direct** (`parent_id`) ; menu **Délégation** (`/api/delegation`).
+- **DEL-02** — Délégation active un jour donné : période explicite le couvrant, **ou** délégation automatique et valideur **absent ce jour-là** (deux demi-journées posées dans sa fiche).
+- **DEL-03** — Pendant une délégation, le mail de **nouvelle demande** est aussi envoyé au délégataire (jeton à son nom) et la **relance quotidienne** lui est adressée.
+- **DEL-04** — « Validations faites à ma place » : décisions (validée / refusée) prises par une autre personne que moi sur les demandes qui me sont attribuées, avec l'auteur, les dates, le code et le commentaire (100 dernières).
+- **DEL-05** — Garde-fous : le délégataire doit exister et être actif ; une période passée ou inversée est refusée.
+- **NOT-05** — E-mail de demande : variable `dates` en **plages** (`format_ranges`, week-ends sautés), boutons `[[bouton:Texte|URL]]` (variables `lien_valider`, `lien_refuser`, `lien_calendrier`) rendus en boutons HTML, repliés en « Texte : URL » dans le texte et le journal ; les lignes sans adresse (CONGES_BASE_URL vide) disparaissent. Un texte par défaut ancien jamais personnalisé est remplacé par le nouveau.
+- **NOT-06** — `GET /api/mail-action/<jeton>` affiche la demande et deux boutons sans rien enregistrer ; `POST` enregistre la décision comme l'écran (`approve` / `refuse`, droits et soldes revérifiés) ; jeton signé (`itsdangerous`, sel `mail-action`) valable 14 jours ; le lien est **personnel**. `CONGES_BASE_URL` doit pointer vers le frontal public (qui relaie `/api`).
+- **MAG-11** — `GET /api/my-agents?depth=` : par défaut **les personnes que je valide directement** et, pour mes délégants du moment, les leurs ; `depth=all` (bouton « Voir toute ma ligne hiérarchique ») : tous les niveaux ; `count` = tous les subordonnés.
+- **PLA-06** — Lien `#/planning?equipe=1&mois=M&annee=A` : planning de mon équipe, au mois et à l'année demandés.
+
+### 14.14 Mon équipe par entité (fusion avec Mes fiches)
+- **EQP-01** — Vue **par entité** : un groupe par responsable (titre = nom de l'unité Sedit RH, à défaut le nom du compte), cartes des personnes dont le **responsable en premier** ; entités de même nom fusionnées ; sous-groupes décalés.
+- **EQP-02** — Carte : nom, rôle (Valideur / Agent, Admin), pastilles (délégation, effectif sous sa responsabilité, ⚠ e-mail), **période en cours** (`fiche.period` : quotité en camembert, jours travaillés L M M J V S D, durée, pénibilité, fériés « F », nombre de périodes), actions (fiche, Définir / Compléter la période, Dupliquer pour N+1, Recherche AD).
+- **EQP-03** — En-tête : **+ Nouvelle fiche** et **Dupliquer toutes les fiches pour N+1** (celles sans fiche N+1) ; glisser-déposer d'une carte sur une carte ou sur l'en-tête d'une entité (= sous le responsable de cette entité).
+- **EQP-05** — Fiche : e-mail et matricule **verrouillés** (champs désactivés ; `PUT /api/agents/<id>` conserve la valeur existante) ; case « Resp. unité » retirée de l'écran (`is_manager` reste en base pour l'existant) ; champ **Unité** : `GET/PUT /api/my-agents/<id>/unit` proposent **toutes les unités de la direction** de la personne (à défaut, celles de mon périmètre) ; Mon équipe en deux colonnes (équipe large, Sedit RH 330 px).
+- **ANN-01** — Fiche : **sélecteur d'année** (`GET /api/my-agents/<id>/years`) pour passer d'une année à l'autre de la même personne ; option « + N+1 (reporter la période) ».
+- **ANN-02** — **Report de période** (`POST /api/agents/duplicate`) : crée la fiche N+1 avec une **période explicite** reprenant la dernière période de l'année (paramètres, `jours_travailles`, `ferie_travaille`) sur toute l'année ; congés, arrivée et départ non copiés ; refus si la fiche existe déjà. Remplace l'ancienne duplication qui perdait les jours travaillés.
+- **UNI-02** — **À la source** : l'API Sedit RH (`api-apps/sedit-rh/backend/src/rh/rest.js`, route `/organisation`) complète l'organigramme SIIM par les unités `PST_AFFECT` des agents en poste (rattachées à leur service, `origine: agents`, effectifs inclus) ; 48 unités ajoutées ; schéma OpenAPI `Secteur.origine`. UNI-01 reste en secours côté application.
+- **UNI-01** — `sedit_rh.organisation_units` complète `/api/v1/organisation` par les **équipes portées par des agents** (codes `service` / `secteur` / `affectation` absents de l'arbre), niveau « équipe », rattachées par préfixe de code (ex. BF1112 → BF1).
+- **EQP-04** — Le menu « Mes fiches » est retiré ; l'ancien écran n'est plus joignable.
+
 ## 15. Authentification et sessions
 
 - **AUT-01** — **Mode local** (`CONGES_AUTH_MODE=local`) : mots de passe de l'application (hachage scrypt, 8 caractères minimum, changement par l'utilisateur).
@@ -456,6 +525,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **AUT-04** — Le changement de mot de passe dans l'application est **refusé** aux comptes gérés par l'AD, et le **bouton « Mot de passe » n'est pas affiché** à ces agents (en mode AD, seuls les administrateurs conservent un mot de passe local de secours).
 - **AUT-05** — **Session** : cookie signé (`HttpOnly`, `SameSite=Lax`, `Secure` en HTTPS), valable 10 h ; l'identité n'est jamais lue dans un en-tête fourni par le client.
 - **AUT-06** — **Limitation des essais** : 8 échecs en 15 minutes par adresse (+ 10 par minute côté nginx) ; message d'erreur identique pour un compte inconnu et un mot de passe faux.
+- **AUT-09** — L'**identifiant de connexion est insensible à la casse** (si deux comptes ne diffèrent que par la casse, seule la saisie exacte est acceptée).
 - **AUT-07** — **Premier démarrage** : un compte `admin` est créé avec `CONGES_INITIAL_ADMIN_PASSWORD` ou un mot de passe aléatoire affiché une fois.
 - **AUT-08** — Chaque tentative de connexion est **journalisée** (voir 14.6) avec la méthode utilisée ; à la création d'une fiche en mode AD, l'écran indique que l'agent se connecte avec son compte Ville (sans afficher de mot de passe).
 
@@ -651,6 +721,8 @@ racine      docker-compose.yml, docker-compose.dmz.yml, .env.example, README.md,
 | **Q12** | Les niveaux hiérarchiques doivent-ils devenir configurables ? | DRH |
 | **Q13** | Sedit RH, suite : synchroniser **automatiquement** les agents et l'organisation (arrivées, départs, changements de service) plutôt qu'à la demande ? Reprendre d'autres informations (fonction « responsable de secteur » pour désigner les valideurs d'unité) ? Quelle clé et quelle adresse en production ? | DRH / DSI |
 | **Q16** | Comptes d'unité créés automatiquement : qui doit en être le titulaire (valideur) et comment le désigner (fonction RH, saisie à la main) ? Les agents sans e-mail dans l'AD doivent-ils être refusés plutôt que créés sans e-mail ? | DRH |
+| **Q17** | Faut-il remplacer les comptes d'unité hérités (« DIR-… », « SRV-… », créés avant les rôles) par des **personnes valideurs** rattachées à leur unité, et la recherche d'un agent peut-elle aussi proposer le valideur de l'unité ? | DRH |
+| **Q18** | Dans « Mon équipe », faut-il refuser de placer un agent sous une personne dont l'unité n'est pas égale ou supérieure à celle de l'agent ? | DRH |
 | **Q15** | L'en-tête des e-mails (gabarit institutionnel de l'APM) doit-il pouvoir être personnalisé par application ? Cela suppose que l'APM accepte un paramètre d'en-tête (aujourd'hui : expéditeur et pied de page seulement). | DSI |
 | **Q14** | Quels autres e-mails automatiques souhaite-t-on (validation / refus à l'agent, annulation, alerte RCH) — voir Q4 — pour les ajouter au registre des gabarits ? | DRH |
 
@@ -687,6 +759,28 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.13.1** | 2026-11-16 | API Sedit RH : toutes les unités publiées. |
+| **0.13.0** | 2026-11-16 | Années dans la fiche, report des périodes, équipes manquantes de Sedit RH. |
+| **0.12.1** | 2026-11-16 | Fiche : unité modifiable, e-mail et matricule verrouillés ; Mon équipe plus large. |
+| **0.12.0** | 2026-11-16 | Mon équipe remplace Mes fiches : entités et périodes visuelles. |
+| **0.11.5** | 2026-11-16 | Mes congés : demandes pour tous, jamais de validation directe. |
+| **0.11.4** | 2026-11-16 | Mon équipe : Dupliquer pour l'année suivante. |
+| **0.11.3** | 2026-11-16 | Tableau de bord RH : entités et responsables. |
+| **0.11.2** | 2026-11-16 | Fiche plus compacte ; « Mes congés » en consultation. |
+| **0.11.1** | 2026-11-16 | Onglets de fiches : « + » ouvre des fiches de l'équipe. |
+| **0.11.0** | 2026-11-16 | E-mails avec boutons, délégation des valideurs, Mon équipe en deux niveaux. |
+| **0.10.2** | 2026-11-16 | Planning : jours non validés en pointillé. |
+| **0.10.1** | 2026-11-16 | Mes congés : sa propre fiche même pour un valideur. |
+| **0.10.0** | 2026-11-16 | Mon équipe par défaut, « Voir tout » pour les administrateurs, recherche AD. |
+| **0.9.1** | 2026-11-16 | E-mails des valideurs : compte AD retenu et alerte « sans e-mail ». |
+| **0.9.0** | 2026-11-16 | Menu « Mes congés » et « Mon équipe ». |
+| **0.8.1** | 2026-11-16 | Fiches : « Valideur » et noms Prénom NOM. |
+| **0.8.0** | 2026-11-16 | Jours travaillés par période, entités et responsables dans « Mes fiches », noms corrigés. |
+| **0.7.0** | 2026-11-16 | Fiche congés = première période de paramètres, agents hors unité, jours hors période grisés. |
+| **0.6.2** | 2026-11-16 | Mes agents : sélection multiple pour le glisser-déposer. |
+| **0.6.1** | 2026-11-16 | Connexion : identifiant insensible à la casse. |
+| **0.6.0** | 2026-11-16 | Mes agents (glisser-déposer depuis Sedit RH) et règles métier consultables. |
+| **0.5.0** | 2026-11-16 | Trois rôles et unités Sedit RH : création d'une personne depuis Sedit RH et l'Active Directory. |
 | **0.4.0** | 2026-11-10 | Organisation Sedit RH, matricules et création d'agents depuis la base RH. |
 | **0.3.0** | 2026-11-10 | Test de l'API Sedit RH et nombre d'agents. |
 | **0.2.3** | 2026-11-10 | E-mails : adresse du test d'envoi saisissable à côté du bouton. |

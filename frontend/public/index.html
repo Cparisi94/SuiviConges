@@ -32,13 +32,16 @@
     <nav id="main-nav">
       <a href="#/dashboard" data-nav="dashboard"><span id="nav-dashboard-label">Tableau de bord</span></a>
       <a href="#/hr" data-nav="hr" id="nav-hr">Tableau de bord RH</a>
-      <a href="#/agents" data-nav="agents">Mes fiches</a>
+      <a href="#/my-leave" data-nav="my-leave" id="nav-my-leave">Mes congés</a>
+      <a href="#/my-agents" data-nav="my-agents" id="nav-my-agents" class="hidden">Mon équipe</a>
+      <a href="#/delegation" data-nav="delegation" id="nav-delegation" class="hidden">Délégation</a>
       <a href="#/requests" data-nav="requests"><span id="nav-requests-label">Demandes</span> <span id="req-badge" class="req-badge hidden"></span></a>
       <a href="#/planning" data-nav="planning">Planning</a>
       <a href="#/settings" data-nav="settings" id="nav-settings">Paramétrage</a>
       <a href="#/users" data-nav="users" id="nav-users">Utilisateurs</a>
     </nav>
     <div class="topbar-right">
+      <label id="scope-toggle" class="scope-toggle hidden" title="Administrateur : voir toutes les fiches, demandes et plannings, pas seulement mon équipe"><input type="checkbox" id="scope-all"> Voir tout</label>
       <select id="year-select" class="year-select" title="Année de travail"></select>
       <a href="#/versions" id="app-version" class="version-link" title="Journal des versions"></a>
       <span id="user-badge"></span>
@@ -233,13 +236,13 @@
   </div>
 </div>
 
-<!-- Modale de changement de propriétaire -->
+<!-- Modale de changement de valideur -->
 <div id="owner-modal" class="modal hidden">
   <div class="modal-card">
-    <h3>Changer le propriétaire</h3>
+    <h3>Changer le valideur</h3>
     <p class="muted">Fiche de <b id="owner-fiche-name"></b></p>
     <div id="owner-error" class="form-error hidden"></div>
-    <label>Nouveau propriétaire
+    <label>Nouveau valideur
       <select id="owner-select"></select></label>
     <div class="modal-actions">
       <button type="button" class="btn" id="owner-cancel">Annuler</button>
@@ -295,7 +298,7 @@
         <input type="email" id="nf-email"></label>
       <label>Matricule
         <input type="text" id="nf-matricule" autocomplete="off" maxlength="20"></label>
-      <label>Propriétaire de la fiche <span class="req">*</span>
+      <label>Valideur de la fiche <span class="req">*</span>
         <select id="nf-owner"></select></label>
       <label>Compte valideur <span class="req">*</span>
         <select id="nf-validator"></select></label>

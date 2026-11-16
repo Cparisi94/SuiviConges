@@ -84,14 +84,24 @@ def send_pending_reminders(days=DEFAULT_DAYS):
                     str(row["soumis_le"] or row["cree_le"] or "")[:10])
                 for row in group
             ]
-            ok, error = mailer.send_template("relance_demandes", email, {
-                "nombre": str(len(group)), "jours": str(days), "liste": "\n".join(lines),
-                "lien_demandes": "%s/#/requests" % base.rstrip("/") if base else "",
-            })
-            if ok:
-                sent += 1
-            else:
-                _log("relance non envoyée à %s : %s" % (email, error))
+            targets = [email]
+            try:    # délégation en cours : le délégataire (valideur du valideur) est relancé aussi
+                import delegation
+                if first["validator_id"]:
+                    delegate = delegation.active_delegate(conn, first["validator_id"])
+                    if delegate and (delegate["email"] or "").strip() and delegate["email"].strip() not in targets:
+                        targets.append(delegate["email"].strip())
+            except Exception as exc:  # noqa: BLE001
+                _log("délégation illisible : %s" % exc)
+            for target in targets:
+                ok, error = mailer.send_template("relance_demandes", target, {
+                    "nombre": str(len(group)), "jours": str(days), "liste": "\n".join(lines),
+                    "lien_demandes": "%s/#/requests" % base.rstrip("/") if base else "",
+                })
+                if ok:
+                    sent += 1
+                else:
+                    _log("relance non envoyée à %s : %s" % (target, error))
         _set_setting(conn, "last_pending_reminder_date", today)
         conn.commit()
         _log("%s relance(s) envoyée(s) pour %s demande(s)" % (sent, len(rows)))
