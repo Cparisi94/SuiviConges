@@ -1834,6 +1834,9 @@ async function viewPlanning() {
 
 let planningReq = 0;
 async function loadPlanning() {
+  if (!state.unitNames) {   // noms des entités (unités Sedit RH) pour les titres de groupe
+    try { state.unitNames = Object.fromEntries((await api("/api/org-units?scope=all")).map((x) => [x.code, x.libelle])); } catch (_) { state.unitNames = {}; }
+  }
   const req = ++planningReq;
   const body = $("#plan-body");
   if (!body) return;
@@ -1965,8 +1968,11 @@ function renderPlanning(data) {
   if (grouped) {
     const scopeUsers = state.planningUsers || [];
     const scopeIds = new Set(scopeUsers.map((u) => u.id));
+    const planUnitNames = state.unitNames || {};
     const agentsByUser = {};
-    agents.forEach((a) => { (agentsByUser[a.user_id] = agentsByUser[a.user_id] || []).push(a); });
+    // Les encadrants (ma chaîne de valideurs et moi) forment un groupe à part : on y voit leur disponibilité.
+    const supers = agents.filter((a) => a.supervisor).sort((a, b) => String(agentName(a)).localeCompare(String(agentName(b)), "fr"));
+    agents.filter((a) => !a.supervisor).forEach((a) => { (agentsByUser[a.user_id] = agentsByUser[a.user_id] || []).push(a); });
     Object.values(agentsByUser).forEach((list) => list.sort((a, b) => {
       const ma = a.is_manager ? 1 : 0;
       const mb = b.is_manager ? 1 : 0;
@@ -2000,13 +2006,17 @@ function renderPlanning(data) {
       const children = sortHierarchyChildren(u, kids[u.id] || []);
       if (own.length || children.some((c) => subtreeHasAgents(c))) {
         const roleLabel = ROLE_LABELS[userRole(u)] || userRole(u);
-        const display = (u.nom && u.nom !== roleLabel) ? u.nom : u.login;
+        const display = planUnitNames[u.unit_code] || ((u.nom && u.nom !== roleLabel) ? u.nom : u.login);   // l'entité, pas le nom du valideur
         const label = esc(display);
         rows += `<tr class="plan-group level-${Math.min(level, 3)} role-${userRole(u)}"><td colspan="${nd + 2}">${label}</td></tr>`;
         own.forEach((a) => { rows += agentRow(a); });
         children.forEach((c) => renderNode(c, level + 1));
       }
     };
+    if (supers.length) {
+      rows += `<tr class="plan-group level-0 plan-supers"><td colspan="${nd + 2}">Encadrants — disponibilité</td></tr>`;
+      supers.forEach((a) => { rows += agentRow(a); });
+    }
     roots.forEach((u) => renderNode(u, 0));
     // Utilisateurs du périmètre non atteints (orphelins) : affichés à la racine.
     scopeUsers.filter((u) => !rendered.has(u.id)).sort(byRoleName).forEach((u) => renderNode(u, 0));
@@ -2267,7 +2277,6 @@ function renderFiche() {
         <input type="text" id="f-nom" value="${esc(f.nom)}"${dis}></label>
       <label class="fiche-name-field">Prénom
         <input type="text" id="f-prenom" value="${esc(f.prenom || "")}"${dis}></label>
-      <span class="fiche-year" id="f-year"><select id="f-year-sel" class="fiche-year-sel" title="Passer à la fiche d'une autre année"><option>${f.year || ""}</option></select></span>
       ${f.user_id !== state.user.id ? `<span class="fiche-owner">Valideur : ${esc(f.proprietaire || "—")}</span>` : ""}
       <span id="save-ind" style="color:var(--muted);font-size:12px"></span>
       <button class="btn" id="f-print">Imprimer</button>
@@ -2380,26 +2389,6 @@ function renderFiche() {
     f.validator_id = e.target.value ? Number(e.target.value) : null;
     scheduleSave();
   });
-  // Années de la personne : passer à la fiche 2027, ou la préparer en reportant la période en vigueur.
-  const yearSel = $("#f-year-sel");
-  if (yearSel && f.agent_user_id) {
-    api(`/api/my-agents/${f.agent_user_id}/years`).then((list) => {
-      const last = list.length ? list[list.length - 1].year : f.year;
-      const canCreate = !ro && !state.leaveView;
-      yearSel.innerHTML = list.map((y) => `<option value="${y.id}" ${y.id === f.id ? "selected" : ""}>${y.year}</option>`).join("")
-        + (canCreate ? `<option value="new">+ ${last + 1} (reporter la période)</option>` : "");
-      yearSel.addEventListener("change", async () => {
-        if (yearSel.value !== "new") { location.hash = "#/agent/" + yearSel.value + (state.leaveView ? "/conges" : ""); return; }
-        yearSel.disabled = true;
-        try {
-          const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: [f.id], year: last + 1 }) });
-          if ((res.created || []).length) { toast(`Fiche ${last + 1} créée : période reportée`); location.hash = "#/agent/" + res.created[0].id; }
-          else { toast(((res.errors || [])[0] || {}).error || "Création impossible", true); yearSel.disabled = false; yearSel.value = String(f.id); }
-        } catch (err) { toast(err.message, true); yearSel.disabled = false; yearSel.value = String(f.id); }
-      });
-    }).catch(() => { /* la navigation entre années est facultative */ });
-  }
-
   // Unité de la personne : liste des entités de sa direction (toutes celles de la DSI pour un agent de la DSI).
   const unitSel = $("#p-unit");
   if (unitSel && f.agent_user_id && !unitSel.disabled) {
@@ -5174,7 +5163,22 @@ $("#user-audit-modal").addEventListener("mousedown", (e) => {
 });
 
 /* ---------------------------- démarrage ---------------------------- */
-$("#year-select").addEventListener("change", (e) => setYear(Number(e.target.value)));
+$("#year-select").addEventListener("change", async (e) => {
+  const y = Number(e.target.value);
+  const m = location.hash.match(/^#\/agent\/(\d+)(\/conges)?/);
+  if (m && state.fiche && state.fiche.agent_user_id) {
+    // On regarde une fiche : l'année du haut ouvre la fiche de la même personne pour cette année, si elle existe.
+    try {
+      const list = await api(`/api/my-agents/${state.fiche.agent_user_id}/years`);
+      const target = list.find((x) => x.year === y);
+      if (target) { await flushPendingSave(); state.year = y; localStorage.setItem(YEAR_KEY, String(y)); renderYearSelect(); location.hash = "#/agent/" + target.id + (m[2] || ""); return; }
+      toast(`Pas de fiche ${y} pour cette personne (« Reporter en ${y} » dans Mon équipe).`, true);
+    } catch (err) { toast(err.message, true); }
+    renderYearSelect();
+    return;
+  }
+  setYear(y);
+});
 loadVersion();
 tryRestoreSession();
 
@@ -5287,7 +5291,7 @@ async function viewMyAgents() {
   const cardHtml = (n, resp, groupName) => {
     const me = n.id === state.user.id;
     return `<div class="ma-card ma-drop${resp ? " ma-resp" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
-      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}</span>${resp ? `<span class="ma-star" title="Responsable de l'entité">★</span>` : ""}</div>
+      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}</span>${resp || n.unit_head ? `<span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</div>
       ${n.unit_label && norm(n.unit_label) !== norm(groupName) ? `<div class="muted ma-cunit" title="Unité de la personne">${esc(n.unit_label)}</div>` : ""}
       <div class="ma-card-badges">
         <span class="badge-role role-${esc(n.role)}">${esc(PROFIL_LABELS[n.profil] || n.profil)}${n.admin ? " · Admin" : ""}</span>
@@ -5297,6 +5301,7 @@ async function viewMyAgents() {
       </div>
       ${periodHtml(n)}
       <div class="ma-card-actions">${ficheHtml(n)}
+        <button type="button" class="btn btn-small ma-unit-edit" data-uid="${n.id}" title="Définir l'unité de cette personne (liste), et si elle en est la responsable">✎ Unité</button>
         ${n.no_email && n.actif && !n.all ? `<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button>` : ""}</div>
     </div>`;
   };
@@ -5405,6 +5410,10 @@ async function viewMyAgents() {
       } catch (e) { b.disabled = false; msg(e.message); }
     });
   });
+  c.querySelectorAll(".ma-unit-edit").forEach((b) => {
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); askUnit(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  });
   c.querySelectorAll(".ma-ad").forEach((b) => {
     b.addEventListener("click", (ev) => { ev.stopPropagation(); askAd(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
     b.addEventListener("mousedown", (ev) => ev.stopPropagation());
@@ -5456,6 +5465,50 @@ async function viewMyAgents() {
       }
     });
   });
+
+  /* Dialogue : unité d'une personne (liste des entités de sa direction, unités locales comprises) et responsable d'unité */
+  async function askUnit(uid, name) {
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card">
+      <h3>Unité de ${esc(name)}</h3>
+      <label>Unité (liste des entités de sa direction)
+        <select id="mu-unit"><option>Chargement…</option></select></label>
+      <label class="inline mu-head"><input type="checkbox" id="mu-head"> Responsable de cette unité</label>
+      <details class="mu-new"><summary>L'unité n'existe pas dans la liste ? La créer</summary>
+        <div class="ma-ad-search"><input id="mu-name" placeholder="Nom (ex. Numérique éducatif)"><button type="button" class="btn btn-small" id="mu-create">Créer sous l'unité choisie</button></div>
+        <p class="muted">Créée localement, sous l'unité sélectionnée ci-dessus ; elle ne dépend pas de Sedit RH.</p></details>
+      <div class="ma-dialog-actions"><button class="btn" id="mu-cancel">Annuler</button><button class="btn btn-primary" id="mu-ok">Enregistrer</button></div>
+      <div id="mu-err"></div></div>`;
+    document.body.appendChild(ov);
+    $("#mu-cancel").addEventListener("click", () => ov.remove());
+    let data = { units: [], unit_code: "" };
+    const draw = (sel) => {
+      $("#mu-unit").innerHTML = (sel ? "" : `<option value="">— Choisir —</option>`) + data.units.map((u) =>
+        `<option value="${esc(u.code)}" ${u.code === sel ? "selected" : ""}>${esc(u.path)} (${esc(u.code)})${u.local ? " · locale" : ""}${u.head ? " — responsable : " + esc(u.head) : ""}</option>`).join("");
+      const cur = data.units.find((u) => u.code === $("#mu-unit").value);
+      $("#mu-head").checked = !!(cur && cur.head_user_id === uid);
+    };
+    const load = async (sel) => { data = await api(`/api/my-agents/${uid}/unit`); draw(sel !== undefined ? sel : data.unit_code); };
+    try { await load(); } catch (e) { $("#mu-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; return; }
+    $("#mu-unit").addEventListener("change", () => draw($("#mu-unit").value));
+    $("#mu-create").addEventListener("click", async () => {
+      try {
+        const r = await api("/api/my-agents/units", { method: "POST", body: JSON.stringify({ libelle: $("#mu-name").value, parent_code: $("#mu-unit").value }) });
+        $("#mu-name").value = "";
+        await load(r.code);
+        toast("Unité créée : " + r.libelle);
+      } catch (e) { $("#mu-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+    });
+    $("#mu-ok").addEventListener("click", async () => {
+      try {
+        await api(`/api/my-agents/${uid}/unit`, { method: "PUT", body: JSON.stringify({ unit_code: $("#mu-unit").value, head: $("#mu-head").checked }) });
+        ov.remove();
+        toast("Unité enregistrée");
+        viewMyAgents();
+      } catch (e) { $("#mu-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+    });
+  }
 
   /* Dialogue : recherche du compte AD d'une personne (e-mail et identifiant) */
   async function askAd(uid, name) {

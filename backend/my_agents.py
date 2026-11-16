@@ -161,6 +161,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
                        "role": u["role"], "admin": u["admin"], "actif": u["actif"], "no_email": not (u["email"] or "").strip(),
                        "profil": "agent" if u["role"] == "agent" else "valideur",
                        "unit_code": u["unit_code"], "unit_label": (index.get(u["unit_code"]) or {}).get("libelle", ""),
+                       "unit_head": bool(u["unit_code"] and (index.get(u["unit_code"]) or {}).get("head_user_id") == u["id"]),
                        "children": []}
                 expand = deep or level == 0 or (level == 1 and u["id"] in delegating)
                 for c in sorted(kids.get(u["id"], []), key=lambda x: (x["nom"] or x["login"]).lower()):
@@ -311,6 +312,40 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
         finally:
             db.close()
 
+    # ------------------------------------------------------------------ créer une unité locale (absente de Sedit RH)
+    LEVEL_BELOW = {"direction": "service", "service": "secteur", "secteur": "equipe", "equipe": "equipe"}
+
+    @bp.route("/units", methods=["POST"])
+    @login_required
+    def unit_create():
+        """Crée une unité locale (ex. « Numérique éducatif ») sous une unité existante ; jamais écrasée par la synchronisation."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        body = request.get_json(force=True) or {}
+        libelle = (body.get("libelle") or "").strip().upper()
+        parent = (body.get("parent_code") or "").strip()
+        if not libelle or len(libelle) > 120:
+            return error("Nom de l'unité obligatoire (120 caractères au plus)", 400)
+        db = get_db()
+        try:
+            units = load_units(db)
+            index = people.unit_index(units)
+            if parent not in index:
+                return error("Choisissez l'unité dont dépend la nouvelle unité", 400)
+            allowed, _w = my_unit_codes(db, units, index)
+            if allowed is not None and parent not in allowed:
+                return error("Cette unité n'est pas dans votre périmètre", 403)
+            if any(u["parent_code"] == parent and u["libelle"].strip().upper() == libelle for u in units):
+                return error("Cette unité existe déjà sous cette unité", 400)
+            nums = [int(u["code"][3:]) for u in units if u["code"].startswith("LOC") and u["code"][3:].isdigit()]
+            code = "LOC%03d" % (max(nums + [0]) + 1)
+            db.execute("INSERT INTO org_units (code, libelle, level, parent_code, position, local) VALUES (?,?,?,?,?,1)",
+                       (code, libelle, LEVEL_BELOW.get(index[parent]["level"], "equipe"), parent, 100000 + len(units)))
+            db.commit()
+            return jsonify({"code": code, "libelle": libelle, "parent_code": parent})
+        finally:
+            db.close()
+
     # ------------------------------------------------------------------ unité de la personne (liste des entités de sa direction)
     def unit_options(db, uid):
         """(unité actuelle, liste des unités proposées) : toute la direction de la personne (direction, services, secteurs,
@@ -325,10 +360,13 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
         else:
             mine, _warning = my_unit_codes(db, units, index)
             codes = set(index) if mine is None else mine
+        heads = {r["id"]: r["nom"] for r in db.execute("SELECT id, nom FROM users").fetchall()}
         out = []
         for u in units:
             if u["code"] in codes:
-                out.append({"code": u["code"], "libelle": u["libelle"], "level": u["level"], "path": people.unit_path(index, u["code"])})
+                out.append({"code": u["code"], "libelle": u["libelle"], "level": u["level"], "path": people.unit_path(index, u["code"]),
+                            "local": bool(u.get("local")), "head_user_id": u.get("head_user_id"),
+                            "head": heads.get(u.get("head_user_id")) or ""})
         return current, out
 
     @bp.route("/<int:uid>/unit", methods=["GET"])
@@ -351,7 +389,8 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
         """Change l'unité (entité) d'une personne parmi les unités de sa direction."""
         if not can_manage(request.user):
             return error("Accès réservé aux administrateurs et valideurs", 403)
-        code = ((request.get_json(force=True) or {}).get("unit_code") or "").strip()
+        body = request.get_json(force=True) or {}
+        code = (body.get("unit_code") or "").strip()
         db = get_db()
         try:
             by_id, _kids = children_map(db)
@@ -363,6 +402,13 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
                 return error("Choisissez une unité de la même direction (liste proposée)", 400)
             db.execute("UPDATE users SET unit_code=? WHERE id=?", (code, uid))
             audit_user(db, uid, user["login"], request.user, "modification", "unité", current, code, "Unité modifiée depuis la fiche")
+            if "head" in body:   # responsable de l'unité : un compte ne dirige qu'une unité
+                if body["head"]:
+                    db.execute("UPDATE org_units SET head_user_id=NULL WHERE head_user_id=?", (uid,))
+                    db.execute("UPDATE org_units SET head_user_id=? WHERE code=?", (uid, code))
+                    audit_user(db, uid, user["login"], request.user, "modification", "responsable d'unité", "", code, "Responsable de l'unité")
+                else:
+                    db.execute("UPDATE org_units SET head_user_id=NULL WHERE code=? AND head_user_id=?", (code, uid))
             db.commit()
             return jsonify({"unit_code": code})
         finally:

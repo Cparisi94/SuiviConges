@@ -13,6 +13,25 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.14.2 — 2026-11-16 — Planning : titres de groupe par entité
+
+- Dans le planning, les titres de groupe portent le nom de l'entité (unité) et non celui du valideur : plus de doublon « Chevalier Marc » entre le groupe des encadrants et l'en-tête de son équipe.
+
+## 0.14.1 — 2026-11-16 — Planning : raison pour mon équipe, présence pour les autres, encadrants visibles
+
+- Planning : un simple agent ne voit que la présence ou l'absence ; un encadrant voit la raison (code) pour les agents de son équipe et pour sa propre fiche ; les autres fiches n'affichent que présence / absence.
+- Planning : un groupe « Encadrants — disponibilité » montre la disponibilité de mes encadrants (ma chaîne de valideurs) et la mienne, en présence / absence.
+
+## 0.14.0 — 2026-11-16 — Mon équipe : unité de chaque agent, unités locales et responsable d'unité
+
+- Dans Mon équipe, le bouton « ✎ Unité » de chaque carte permet de choisir l'unité de la personne dans la liste des entités de sa direction et d'indiquer si elle en est la responsable (★).
+- Si l'unité n'existe pas dans Sedit RH (ex. « Numérique éducatif », « Cellule administrative et financière »), on la crée localement sous l'unité choisie : elle rejoint la liste et n'est jamais écrasée par la synchronisation ; le responsable de l'unité est enregistré dans l'unité.
+- La liste déroulante d'année du haut change aussi la fiche affichée (fiche de la même personne pour l'année choisie) ; l'année n'est plus répétée dans l'en-tête de la fiche.
+
+## 0.13.2 — 2026-11-16 — Barre du haut adaptée aux fenêtres étroites
+
+- La barre du haut ne coupe plus les libellés sur plusieurs lignes quand la fenêtre n'est pas en plein écran : les menus et les boutons sont resserrés, puis le menu passe sur sa propre ligne sous le titre quand la place manque.
+
 ## 0.13.1 — 2026-11-16 — API Sedit RH : toutes les unités publiées
 
 - L'API Sedit RH (projet api-apps/sedit-rh) publie désormais dans /api/v1/organisation les unités d'affectation portées par des agents en poste mais absentes de l'organigramme SIIM, rattachées à leur service avec le champ « origine : agents » (ex. « Équipe projet éduc. innovation inclusion », BF1112, sous la DSI) ; l'application les reprend telles quelles (sa propre complétion reste en secours).

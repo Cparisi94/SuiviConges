@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.13.1.
+> Dernière mise à jour : version 0.14.2.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -59,6 +59,7 @@
 - Impression d'une fiche sur une page A4 paysage.
 - **Années** : le sélecteur d'année de la fiche passe à l'année d'une même personne. On ne reproduit pas des fiches mais des **périodes** : « reporter la période » crée la fiche de l'année suivante avec la période en vigueur en fin d'année (quotité, jours travaillés, fériés) sur toute l'année suivante ; les congés posés, les dates d'arrivée et de départ ne sont pas reportés ; un report est refusé si la fiche de l'année existe déjà.
 - **E-mail et matricule ne se modifient pas dans la fiche** (ils viennent de l'annuaire et de Sedit RH ; un e-mail manquant se renseigne par la « Recherche AD » de Mon équipe). Le **responsable d'une entité** est son valideur (il n'y a plus de case « Responsable d'unité »).
+- **Unités locales et responsable d'unité** : une unité absente de Sedit RH (« Numérique éducatif », « Cellule administrative et financière »…) se crée localement sous une unité existante ; elle n'est jamais écrasée par la synchronisation. On désigne le **responsable** d'une unité (une personne ne dirige qu'une unité) depuis le bouton « ✎ Unité » de Mon équipe.
 - **Unité d'une personne** : modifiable depuis la fiche, parmi **toutes les unités de sa direction** (direction, services, secteurs, équipes).
 - Le **« + » de la barre d'onglets** propose les agents sous ma responsabilité : on coche ceux dont on veut ouvrir la fiche (un onglet par fiche).
 - **Mon équipe** (qui remplace « Mes fiches ») regroupe les personnes et leurs fiches par **entité** (nom de l'unité Sedit RH du responsable) ; le **responsable valideur** de l'entité apparaît en premier dans son groupe.
@@ -115,7 +116,7 @@
 
 - **Agent** : sa synthèse et l'accès à sa fiche. **Valideur** : une ligne par fiche du périmètre, regroupée par responsable. **RH** : taux d'absence (jours d'absence ÷ capacité de travail) global, par direction / service et en arbre ; demandes en retard (plus de 3 jours) ; RCH proches de l'expiration.
 - Dans l'arbre du tableau de bord RH, chaque groupe porte le **nom de l'entité** (et non celui du valideur) ; le **responsable** de l'entité est en premier, les entités de même nom sont regroupées.
-- **Planning mensuel** : absences jour par jour (les jours **non validés**, d'une demande en attente, en couleur éclaircie et **pointillé**, comme dans la fiche), week-ends, jours fériés, vacances scolaires, totaux par agent ; limité au périmètre ; les agents voient leur équipe avec les **motifs masqués**.
+- **Planning mensuel** : absences jour par jour (les jours **non validés**, d'une demande en attente, en couleur éclaircie et **pointillé**, comme dans la fiche), week-ends, jours fériés, vacances scolaires, totaux par agent ; limité au périmètre ; les agents voient leur équipe avec les **motifs masqués** (présence / absence seulement) ; un encadrant voit la **raison** pour son équipe et sa propre fiche, et la **disponibilité** (présence / absence) de ses encadrants, regroupés en tête.
 
 ## 9. Authentification
 

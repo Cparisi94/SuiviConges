@@ -3605,8 +3605,38 @@ def planning():
             (request.user["id"], year),
         ).fetchall()
 
+    # Disponibilité des encadrants : ma propre fiche et celles de ma chaîne de valideurs sont ajoutées au planning
+    # (présence / absence seulement, tant qu'elles ne sont pas dans mon équipe).
+    me = request.user
+    supervisors = set()
+    if not user_id:
+        pid, seen = me.get("parent_id"), set()
+        while pid and pid not in seen:
+            seen.add(pid)
+            up = db.execute("SELECT id, parent_id, actif FROM users WHERE id=?", (pid,)).fetchone()
+            if not up:
+                break
+            if up["actif"]:
+                supervisors.add(up["id"])
+            pid = up["parent_id"]
+        if _user_role(me) != "agent":
+            supervisors.add(me["id"])
+        have = {a["id"] for a in agents}
+        missing = [u for u in supervisors if u not in {a["agent_user_id"] for a in agents}]
+        if missing:
+            marks = ",".join("?" for _ in missing)
+            extra = db.execute(
+                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire "
+                "FROM agents a JOIN users u ON u.id=a.user_id WHERE a.agent_user_id IN (%s) AND a.year=? ORDER BY a.nom" % marks,
+                missing + [year]).fetchall()
+            agents = list(agents) + [r for r in extra if r["id"] not in have]
+    scope_now = set(_scope_ids(db, me))
+
     out = []
     for a in agents:
+        # La nature de l'absence n'est donnée qu'à un encadrant, pour les agents de son équipe (et pour sa propre fiche) ;
+        # un simple agent, et toute fiche hors de l'équipe (encadrants), n'affichent que présence / absence.
+        mask = _user_role(me) == "agent" or not (a["user_id"] in scope_now or a["agent_user_id"] == me["id"])
         rows = db.execute(
             "SELECT jour, code FROM cells WHERE agent_id=? AND jour>=? AND jour<? ORDER BY jour",
             (a["id"], month * 1000, (month + 1) * 1000),
@@ -3618,8 +3648,7 @@ def planning():
             if month * 1000 <= int(k) < (month + 1) * 1000
         }
         cells_out = {str(r["jour"]): r["code"] for r in rows}
-        if _user_role(request.user) == "agent":
-            # Planning d'équipe : l'agent voit les absences, pas leur nature.
+        if mask:
             cells_out = {key: "A" for key in cells_out}
             pending = {key: "A" for key in pending}
         start_iso = dt.date(year, month, 1).isoformat()
@@ -3636,7 +3665,7 @@ def planning():
         ).fetchall():
             for key, part_hours in _hourly_half_parts(h["absence_date"], h["start_time"], h["end_time"]).items():
                 item = {
-                    "code": "A" if _user_role(request.user) == "agent" else h["code"],
+                    "code": "A" if mask else h["code"],
                     "start_time": h["start_time"],
                     "end_time": h["end_time"],
                     "hours": part_hours,
@@ -3650,6 +3679,8 @@ def planning():
             "agent_user_id": a["agent_user_id"],
             "proprietaire": a["proprietaire"],
             "is_manager": int(a["is_manager"] or 0),
+            "supervisor": a["agent_user_id"] in supervisors,
+            "masked": mask,
             "penibilite": params.get("penibilite", ""),
             "cells": cells_out,
             "pending": pending,

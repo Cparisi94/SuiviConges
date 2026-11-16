@@ -713,3 +713,38 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 - La liste d'unités de l'application a été actualisée depuis l'API.
 
 **Vérifications** : l'API en développement renvoie BF1112 sous BF1 (« origine : agents ») ; 70 tests de l'application passent. Aucun test automatique n'existe dans le projet de l'API.
+
+## Version 0.13.2 — Barre du haut adaptée aux fenêtres étroites
+
+**Ce qui a changé** : hors plein écran, la barre du haut coupait « Tableau de bord RH », « Mon équipe »… sur deux lignes et débordait. Les libellés restent sur une ligne, les menus se resserrent, et sous 1250 px le menu passe sur sa propre ligne sous le titre.
+
+**Vérifications** : essai dans un navigateur à 1150 px (menu sur sa ligne, aucun mot coupé). La partie droite de la barre (année, nom, boutons) n'a pas pu être vue à cette taille dans mon essai ; 70 tests passent.
+
+## Version 0.14.0 — Unité de chaque agent, unités locales et responsable d'unité
+
+**Ce qui a changé**
+- **Mon équipe** : chaque carte a un bouton « ✎ Unité » : on choisit l'unité dans la liste des entités de la direction de la personne, et on coche « Responsable de cette unité » (la personne reçoit alors ★, et le responsable est enregistré dans l'unité).
+- **Unités qui n'existent pas dans Sedit RH** : sous la liste, « L'unité n'existe pas ? La créer » ajoute une unité **locale** (par exemple « Numérique éducatif », dont Réda serait responsable, ou « Cellule administrative et financière » pour Isabelle) sous l'unité sélectionnée. Elle apparaît dans toutes les listes d'unités et n'est jamais supprimée par la synchronisation avec Sedit RH.
+- **Année** : la liste déroulante du haut ouvre aussi la fiche de la même personne pour l'année choisie ; l'année n'est plus répétée dans l'en-tête de la fiche.
+
+**À savoir**
+- Une unité locale n'existe que dans cette application ; si Sedit RH la publie plus tard, il faudra rattacher les agents à la nouvelle unité.
+- La création d'unités est ouverte aux valideurs dans leur périmètre : à restreindre aux administrateurs si vous préférez (Q20 du manifeste).
+- Changer l'unité d'une personne ne change pas son valideur.
+
+**Vérifications** : test automatique (création, doublon, liste de la direction, responsable, conservation par la synchronisation, refus pour un agent) ; 71 tests passent. Le dialogue et le sélecteur d'année n'ont pas été essayés à l'écran.
+
+## Version 0.14.1 — Planning : raison pour mon équipe, présence pour les autres
+
+**Ce qui a changé**
+- **Simple agent** : ne voit que présence ou absence (jamais la raison), y compris sur sa propre ligne.
+- **Encadrant** : voit la raison des congés des agents de son équipe et de sa propre fiche ; les autres fiches restent en présence / absence.
+- **Disponibilité des encadrants** : un groupe « Encadrants — disponibilité » en tête du planning montre mes encadrants (ma chaîne de valideurs) et moi, en présence / absence ; auparavant, ni vos encadrants ni votre propre fiche n'apparaissaient s'ils n'étaient pas dans votre équipe.
+
+**Vérifications** : test automatique (raison pour l'équipe et soi-même, présence seule pour le valideur, simple agent) ; 72 tests passent ; non essayé à l'écran.
+
+## Version 0.14.2 — Planning : titres de groupe par entité
+
+**Ce qui a changé** : dans le planning, Marc CHEVALIER apparaissait deux fois : dans « Encadrants — disponibilité » (sa ligne) et comme titre de groupe de son équipe. Les titres de groupe portent maintenant le nom de l'entité (par exemple « DIRECTION DES SYSTEMES D'INFORMATION »), comme dans Mon équipe ; la personne n'apparaît qu'en ligne.
+
+**Vérifications** : syntaxe vérifiée, 72 tests passent ; non revu à l'écran.

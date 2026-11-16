@@ -13,9 +13,48 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.13.1"
+VERSION = "0.14.2"
 
 VERSIONS = [
+    {
+        "version": "0.14.2",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Planning : titres de groupe par entité",
+        "items": [
+            "Dans le planning, les titres de groupe portent le nom de l'entité (unité) et non celui du valideur : plus de doublon « Chevalier Marc » entre le groupe des encadrants et l'en-tête de son équipe.",
+        ],
+    },
+    {
+        "version": "0.14.1",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Planning : raison pour mon équipe, présence pour les autres, encadrants visibles",
+        "items": [
+            "Planning : un simple agent ne voit que la présence ou l'absence ; un encadrant voit la raison (code) pour les agents de son équipe et pour sa propre fiche ; les autres fiches n'affichent que présence / absence.",
+            "Planning : un groupe « Encadrants — disponibilité » montre la disponibilité de mes encadrants (ma chaîne de valideurs) et la mienne, en présence / absence.",
+        ],
+    },
+    {
+        "version": "0.14.0",
+        "date": "2026-11-16",
+        "type": "minor",
+        "titre": "Mon équipe : unité de chaque agent, unités locales et responsable d'unité",
+        "items": [
+            "Dans Mon équipe, le bouton « ✎ Unité » de chaque carte permet de choisir l'unité de la personne dans la liste des entités de sa direction et d'indiquer si elle en est la responsable (★).",
+            "Si l'unité n'existe pas dans Sedit RH (ex. « Numérique éducatif », « Cellule administrative et financière »), on la crée localement sous l'unité choisie : elle rejoint la liste et n'est jamais écrasée par la synchronisation ; le responsable de l'unité est enregistré dans l'unité.",
+            "La liste déroulante d'année du haut change aussi la fiche affichée (fiche de la même personne pour l'année choisie) ; l'année n'est plus répétée dans l'en-tête de la fiche.",
+        ],
+    },
+    {
+        "version": "0.13.2",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Barre du haut adaptée aux fenêtres étroites",
+        "items": [
+            "La barre du haut ne coupe plus les libellés sur plusieurs lignes quand la fenêtre n'est pas en plein écran : les menus et les boutons sont resserrés, puis le menu passe sur sa propre ligne sous le titre quand la place manque.",
+        ],
+    },
     {
         "version": "0.13.1",
         "date": "2026-11-16",

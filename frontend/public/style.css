@@ -1651,3 +1651,25 @@ tr.row-off td { color: #888; }
 
 .fiche-year-sel { font-size: 12px; font-weight: 700; color: var(--primary-dark); background: transparent; border: 0; padding: 0 2px; width: auto; min-width: 0; cursor: pointer; }
 .fiche-year { padding: 0 4px; }
+
+/* Barre du haut : jamais de texte coupé sur plusieurs lignes ; si la fenêtre est étroite, le menu passe sur sa propre ligne */
+.topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 6px 20px; row-gap: 4px; }
+.brand, #main-nav a, .topbar-right > *, #user-badge, .year-select { white-space: nowrap; }
+#main-nav { flex-wrap: wrap; flex: 1 1 auto; min-width: 0; }
+.topbar-right { flex-wrap: nowrap; margin-left: auto; }
+@media (max-width: 1500px) {
+  .topbar { gap: 14px; padding: 6px 12px; }
+  #main-nav { gap: 2px; }
+  #main-nav a { padding: 6px 9px; font-size: 12.5px; }
+  .topbar-right { gap: 6px; }
+  .topbar .btn-ghost { padding: 4px 8px; font-size: 12px; }
+}
+@media (max-width: 1250px) {
+  #main-nav { order: 3; flex: 1 1 100%; }
+  .topbar-right { order: 2; }
+  .brand { order: 1; }
+}
+
+.mu-head { margin: 8px 0; }
+.mu-new { margin: 8px 0; font-size: 12px; }
+.mu-new summary { cursor: pointer; color: #8a3b25; }

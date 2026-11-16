@@ -53,14 +53,14 @@ def sync_units(db, force=False):
                     "synced_at=to_char(localtimestamp, 'YYYY-MM-DD HH24:MI:SS')",
                     (u["code"], u["libelle"], u["level"], u["parent_code"], u["position"]))
             marks = ",".join("?" for _ in units)
-            db.execute("DELETE FROM org_units WHERE code NOT IN (%s)" % marks, [u["code"] for u in units])
+            db.execute("DELETE FROM org_units WHERE local=0 AND code NOT IN (%s)" % marks, [u["code"] for u in units])   # les unités locales restent
             db.commit()
     return load_units(db)
 
 
 def load_units(db):
     return [row_to_dict(r) for r in db.execute(
-        "SELECT code, libelle, level, parent_code, position FROM org_units ORDER BY position").fetchall()]
+        "SELECT code, libelle, level, parent_code, position, local, head_user_id FROM org_units ORDER BY position, code").fetchall()]
 
 
 def unit_index(units):

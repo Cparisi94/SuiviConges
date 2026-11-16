@@ -1302,6 +1302,65 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual((units["BF1112"]["parent_code"], units["BF1112"]["level"]), ("BF1", "equipe"))   # rattachée à BF1 (préfixe connu)
         self.assertEqual(sorted(units), ["BF", "BF1", "BF1112"])
 
+    def test_local_unit_and_unit_head(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        conn = db.get_db()
+        conn.execute("UPDATE users SET unit_code='S1' WHERE id=4")
+        conn.commit()
+        conn.close()
+        try:
+            made = self._call("POST", "/api/my-agents/units", uid=1, payload={"libelle": "Numérique éducatif", "parent_code": "S1"})
+            self.assertEqual(made.status_code, 200, made.get_json())
+            code = made.get_json()["code"]
+            self.assertEqual(self._call("POST", "/api/my-agents/units", uid=1, payload={"libelle": "numérique éducatif", "parent_code": "S1"}).status_code, 400)  # doublon
+            self.assertEqual(self._call("POST", "/api/my-agents/units", uid=1, payload={"libelle": "X", "parent_code": "NOPE"}).status_code, 400)
+            opts = self._call("GET", "/api/my-agents/4/unit", uid=1).get_json()["units"]
+            self.assertIn(code, [u["code"] for u in opts])                                     # la liste de la direction contient l'unité locale
+            ok = self._call("PUT", "/api/my-agents/4/unit", uid=1, payload={"unit_code": code, "head": True})
+            self.assertEqual(ok.status_code, 200, ok.get_json())
+            unit = [u for u in self._call("GET", "/api/my-agents/4/unit", uid=1).get_json()["units"] if u["code"] == code][0]
+            self.assertEqual((unit["local"], unit["head_user_id"], unit["level"]), (True, 4, "secteur"))
+            # La synchronisation Sedit RH ne supprime pas les unités locales.
+            with self._units_patch():
+                self._call("GET", "/api/org-units?refresh=1", uid=1)
+            self.assertIn(code, [u["code"] for u in self._call("GET", "/api/org-units", uid=1).get_json()])
+            self.assertEqual(self._call("POST", "/api/my-agents/units", uid=4, payload={"libelle": "Y", "parent_code": "S1"}).status_code, 403)   # un agent ne crée pas d'unité
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM org_units WHERE local=1")
+            conn.execute("UPDATE users SET unit_code='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_planning_reasons_for_my_team_and_presence_only_for_supervisors(self):
+        conn = db.get_db()
+        for fid, owner, who, nom in ((2090, 1, 2, "DRH"), (2091, 2, 3, "SECT")):
+            conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) "
+                         "VALUES (?,?,?,?,'X','',?,2026,'{}','[]')", (fid, owner, who, nom, owner))
+        conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2090, 5010, 'CA'), (2091, 5020, 'RTT'), (1, 5030, 'CA')")
+        conn.commit()
+        conn.close()
+        try:
+            def rows(uid):
+                data = self._call("GET", "/api/planning?year=2026&month=5&all=1", uid=uid).get_json()
+                return {a["id"]: a for a in data["agents"]}
+
+            boss = rows(3)                                                       # SECT1 : encadrant de AGENT1 ; DRH est son propre encadrant
+            self.assertEqual(boss[1]["cells"], {"5030": "CA"})                   # ses agents : la raison
+            self.assertEqual(boss[2091]["cells"], {"5020": "RTT"})               # sa propre fiche : la raison
+            self.assertEqual((boss[2090]["cells"], boss[2090]["supervisor"], boss[2090]["masked"]), ({"5010": "A"}, True, True))   # son valideur : présence / absence
+            agent = rows(4)                                                      # simple agent : jamais la raison, mais voit ses encadrants
+            self.assertEqual(agent[1]["cells"], {"5030": "A"})
+            self.assertIn(2090, agent)
+            self.assertEqual(agent[2090]["cells"], {"5010": "A"})
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM cells WHERE agent_id IN (2090, 2091) OR (agent_id=1 AND jour=5030)")
+            conn.execute("DELETE FROM agents WHERE id IN (2090, 2091)")
+            conn.commit()
+            conn.close()
+
     def test_login_is_case_insensitive(self):
         conn = db.get_db()
         conn.execute("UPDATE users SET mot_de_passe=? WHERE id=3", (self.app_module.generate_password_hash("Motdepasse-1"),))

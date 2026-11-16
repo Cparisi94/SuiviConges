@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.13.1 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.14.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -381,6 +381,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **PLA-01** — Vue d'un **mois** : les absences de chaque agent jour par jour, avec **week-ends, jours fériés et vacances scolaires** ; **totaux par agent**.
 - **PLA-02** — Portée : « mes fiches » ou « **toutes les fiches de mon périmètre** » regroupées par niveau hiérarchique (dégradés de brique du plus sombre — direction — au plus clair — secteur).
 - **PLA-03** — Les agents voient leur équipe avec les **motifs masqués** (DRO-03).
+- **PLA-07** — `GET /api/planning` : la **raison** (code) n'est donnée qu'à un encadrant, pour les fiches de son équipe et la sienne (`masked` faux) ; toute autre fiche, et tout planning d'un simple agent, n'affichent que **présence / absence** (code « A »). Les fiches des **encadrants** (ma chaîne de valideurs, et la mienne) sont ajoutées (`supervisor`), groupe « Encadrants — disponibilité ».
 - **PLA-05** — Les jours d'une **demande en attente** apparaissent dans le planning **éclaircis et en pointillé**, comme dans la fiche ; les jours validés gardent la couleur pleine du code.
 - **PLA-04** — **Impression** du planning en A4 paysage, sans la synthèse mensuelle.
 
@@ -513,6 +514,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **EQP-05** — Fiche : e-mail et matricule **verrouillés** (champs désactivés ; `PUT /api/agents/<id>` conserve la valeur existante) ; case « Resp. unité » retirée de l'écran (`is_manager` reste en base pour l'existant) ; champ **Unité** : `GET/PUT /api/my-agents/<id>/unit` proposent **toutes les unités de la direction** de la personne (à défaut, celles de mon périmètre) ; Mon équipe en deux colonnes (équipe large, Sedit RH 330 px).
 - **ANN-01** — Fiche : **sélecteur d'année** (`GET /api/my-agents/<id>/years`) pour passer d'une année à l'autre de la même personne ; option « + N+1 (reporter la période) ».
 - **ANN-02** — **Report de période** (`POST /api/agents/duplicate`) : crée la fiche N+1 avec une **période explicite** reprenant la dernière période de l'année (paramètres, `jours_travailles`, `ferie_travaille`) sur toute l'année ; congés, arrivée et départ non copiés ; refus si la fiche existe déjà. Remplace l'ancienne duplication qui perdait les jours travaillés.
+- **UNI-03** — **Unités locales** (`org_units.local = 1`, codes `LOC001`…, migration `0008`) créées par `POST /api/my-agents/units` (nom + unité parente dans mon périmètre, niveau déduit du parent, doublon refusé) ; jamais supprimées par la synchronisation Sedit RH. **Responsable d'unité** : `org_units.head_user_id` (un compte ne dirige qu'une unité), posé par `PUT /api/my-agents/<id>/unit {unit_code, head}` ; ★ sur la carte (`unit_head`). Bouton « ✎ Unité » de Mon équipe. Le sélecteur d'année du haut ouvre la fiche de la même personne pour l'année choisie ; l'année n'est plus affichée dans l'en-tête de la fiche.
 - **UNI-02** — **À la source** : l'API Sedit RH (`api-apps/sedit-rh/backend/src/rh/rest.js`, route `/organisation`) complète l'organigramme SIIM par les unités `PST_AFFECT` des agents en poste (rattachées à leur service, `origine: agents`, effectifs inclus) ; 48 unités ajoutées ; schéma OpenAPI `Secteur.origine`. UNI-01 reste en secours côté application.
 - **UNI-01** — `sedit_rh.organisation_units` complète `/api/v1/organisation` par les **équipes portées par des agents** (codes `service` / `secteur` / `affectation` absents de l'arbre), niveau « équipe », rattachées par préfixe de code (ex. BF1112 → BF1).
 - **EQP-04** — Le menu « Mes fiches » est retiré ; l'ancien écran n'est plus joignable.
@@ -759,6 +761,10 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.14.2** | 2026-11-16 | Planning : titres de groupe par entité. |
+| **0.14.1** | 2026-11-16 | Planning : raison pour mon équipe, présence pour les autres, encadrants visibles. |
+| **0.14.0** | 2026-11-16 | Mon équipe : unité de chaque agent, unités locales et responsable d'unité. |
+| **0.13.2** | 2026-11-16 | Barre du haut adaptée aux fenêtres étroites. |
 | **0.13.1** | 2026-11-16 | API Sedit RH : toutes les unités publiées. |
 | **0.13.0** | 2026-11-16 | Années dans la fiche, report des périodes, équipes manquantes de Sedit RH. |
 | **0.12.1** | 2026-11-16 | Fiche : unité modifiable, e-mail et matricule verrouillés ; Mon équipe plus large. |
