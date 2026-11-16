@@ -13,6 +13,11 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.8 — 2026-11-17 — Bloc « Autres » (absences Sedit RH) dans la synthèse
+
+- Synthèse de la fiche : un bloc « Autres » indique, par type (congé maladie, garde d'enfant malade, congé de maternité/adoption/paternité, congé parental, soins à entourage familial), le nombre de jours ouvrés d'absence saisis dans Sedit RH sur l'année, à titre d'information.
+- « Ma synthèse » affiche les mêmes totaux sous les soldes.
+
 ## 0.17.7 — 2026-11-17 — Panneau de synthèse compact
 
 - Synthèse de la fiche : une ligne par solde (titre et restant), le détail se déplie d'un clic sur le titre ; le panneau est moins haut et plus lisible.

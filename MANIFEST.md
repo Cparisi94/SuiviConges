@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.17.7 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.17.8 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -668,6 +668,7 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 - **EXC-03** — **Télétravail** : un jour (ou une demi-journée) `TT` devient un événement « Télétravail » en disponibilité « Travaille ailleurs » (`workingElsewhere`). **Jours demandés** : une demande en attente de validation (`leave_requests.status = 'en_attente'`) donne un événement « ABSENT » en disponibilité « Provisoire » (`showAs = tentative`, `kind = PROV`) ; la validation le remplace par « Absent du bureau », le refus ou l'annulation le supprime ; une case déjà posée dans la fiche prévaut sur une demande ; seules les absences sont concernées (pas le télétravail).
 - **EXC-04** — **Suivi** : table `exchange_events` (une ligne par événement créé) ; la synchronisation ne touche que les événements qu'elle a créés ; fenêtre du 1er janvier de l'année en cours à la fin de l'année suivante (les absences déjà passées de l'année sont reprises) ; événements des années précédentes laissés dans l'agenda. Elle s'exécute à l'activation, à la demande, puis toutes les `EXCHANGE_INTERVAL_MIN` minutes (10 par défaut) ; désactiver retire les événements. **Mise à jour au fil de l'eau** : une demande, une validation, un refus, une annulation ou une modification de fiche lance la synchronisation de l'agent concerné en arrière-plan ; un événement supprimé dans Outlook est recréé (l'API Ville liste les événements de la période : `GET /api/v1/o365/calendar/events`).
 - **SYN-05** — **Soldes prévisionnels** : la synthèse (fiche et « Ma synthèse ») indique, pour chaque solde, le restant si toutes les demandes en attente étaient validées (calcul `/api/compute`, champ `prevision`, absent quand rien n'est en attente). Présentation : une ligne par solde, détail replié (clic sur le titre) ; le prévisionnel n'est affiché que s'il diffère du solde actuel.
+- **SYN-06** — **Autres** : la synthèse (fiche et « Ma synthèse ») totalise, par type d'absence (CM, GEM, CT, CP, SF), les jours ouvrés saisis dans Sedit RH sur l'année de la fiche (week-ends et jours fériés exclus), à titre d'information : ils ne modifient aucun solde.
 - **EXC-05** — **Passage par l'API Ville (APM)** : les appels utilisent `APM_API_URL` / `APM_API_KEY` (clé `X-API-KEY` de l'application), jamais Microsoft directement. Route d'agenda attendue (chemin réglable : `EXCHANGE_APM_EVENTS_PATH`, par défaut `/api/v1/o365/calendar/events`) : `POST` avec `{mailbox, subject, start, end, isAllDay, showAs, isReminderOn, sensitivity}` qui retourne `{id}` ; `DELETE <chemin>/<id>?mailbox=<e-mail>` qui retourne 204 ; l'APM porte les droits Microsoft (`Calendars.ReadWrite`). Cette route a été **ajoutée à l'APM** (`C:\dev\APM`, `backend/routes/proxy.js`, permission `o365_calendar`, boîte `mailbox` obligatoire, champs filtrés) ; tant qu'elle n'est pas déployée sur `https://api.ivry.local` (absente de `/swagger.json`), l'application le détecte (`exchange.availability`, vérifié toutes les 10 minutes), la carte de Ma synthèse indique « pas encore disponible » et rien n'est envoyé. Nouvelles tentatives sur 429/503 ; une panne est mémorisée (`users.exchange_error`) et affichée.
 
 ## 23. Organisation du code et qualité
@@ -772,6 +773,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.17.8** | 2026-11-17 | Bloc « Autres » (absences Sedit RH) dans la synthèse. |
 | **0.17.7** | 2026-11-17 | Panneau de synthèse compact. |
 | **0.17.6** | 2026-11-17 | Agenda Outlook à jour à chaque demande, soldes prévisionnels. |
 | **0.17.5** | 2026-11-17 | Jours demandés provisoires dans Outlook, CET contrôlé avec Sedit RH. |

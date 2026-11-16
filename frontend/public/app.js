@@ -830,6 +830,7 @@ async function viewAgentDashboard() {
         ${balanceCard("Bonification", "JB", `${fmt(jb.restant)} <small>${dayWord(jb.restant)}</small>`, jb.restant < 0)}
         ${balanceCard("CET", "CET", `${fmt(cet.restant)} <small>${dayWord(cet.restant)}</small>`, cet.restant < 0)}
       </div>
+      <div id="syn-rh" class="agent-rh-days hidden"></div>
         </div>
 
         <div class="agent-synthesis-right">
@@ -874,6 +875,16 @@ async function viewAgentDashboard() {
     const hoursBtn = $("#agent-hours-detail");
     if (hoursBtn) hoursBtn.addEventListener("click", openHoursDetailModal);
     setupExchangeCard(c);
+    (async () => {                                              // jours saisis dans Sedit RH (chargés à part : Sedit RH est lent)
+      try {
+        const r = await api(`/api/agents/${f.id}/absences-rh`);
+        const days = rhDaysSummary(r.items, f.year), box = $("#syn-rh");
+        if (!box || !days.length) return;
+        const total = days.reduce((n, d) => n + d.jours, 0);
+        box.innerHTML = `<b>Autres ${f.year}</b> <span class="rh-total">${fmt(total)} j</span><span class="agent-rh-days-list">${days.map((d) => `<span class="rh-chip" title="${esc(d.libelle)}"><b>${esc(d.code)}</b> ${fmt(d.jours)} j</span>`).join("")}</span>`;
+        box.classList.remove("hidden");
+      } catch (e) { /* facultatif */ }
+    })();
   } catch (err) {
     c.innerHTML = `<h1>Ma synthèse ${state.year || ""}</h1><div class="form-error">${esc(err.message)}</div>`;
   }
@@ -2543,6 +2554,8 @@ function renderFiche() {
       });
       f.rh_cells = cells;
       f.rh_count = (r.items || []).length;
+      f.rh_days = rhDaysSummary(r.items, f.year);
+      if (state.compute) renderSoldes(state.compute);          // les jours Sedit RH rejoignent la synthèse
       paintCalendar();
       const note = $("#rh-abs-note");
       if (note) {
@@ -3654,6 +3667,23 @@ async function saveFiche() {
   }
 }
 
+/* Jours d'absence saisis dans Sedit RH, par type (jours ouvrés de l'année, hors week-ends et jours fériés). */
+function rhDaysSummary(items, year) {
+  const feries = new Set(((state.settings && state.settings.jours_feries) || []).map((x) => String(x[0])));
+  const out = {};
+  (items || []).forEach((a) => {
+    const d0 = new Date(a.debut + "T12:00:00"), d1 = new Date(a.fin + "T12:00:00");
+    for (let d = d0; d <= d1; d = new Date(d.getTime() + 86400000)) {
+      if (d.getFullYear() !== year || d.getDay() === 0 || d.getDay() === 6) continue;
+      const iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      if (feries.has(iso)) continue;
+      const o = out[a.code] || (out[a.code] = { code: a.code, libelle: a.libelle, jours: 0 });
+      o.jours += 1;
+    }
+  });
+  return Object.values(out).sort((x, y) => x.code.localeCompare(y.code));
+}
+
 /* ---------------------------- panneau soldes ---------------------------- */
 function renderSoldes(r) {
   const el = $("#soldes");
@@ -3749,6 +3779,15 @@ function renderSoldes(r) {
         ["Solde initial", fmt(s.cet.initial) + " j"],
         ["Utilisé", fmt(s.cet.pris) + " j"],
       ].concat(prev("cet")), `<div class="cet-hint">Dépôt possible : <b>${typeof cet.ca_eligible === "number" ? fmt(cet.ca_eligible) + " j de CA" : cet.ca_eligible}</b> · <b>${typeof cet.rtt_eligible === "number" ? fmt(cet.rtt_eligible) + " j de RTT" : cet.rtt_eligible}</b></div>`)}
+
+      ${(() => {
+        const days = (state.fiche && state.fiche.rh_days) || [];
+        if (!days.length) return "";
+        const total = days.reduce((n, d) => n + d.jours, 0);
+        if (!state.rhOpenInit) { state.rhOpenInit = true; (state.soldeOpen = state.soldeOpen || new Set()).add("Autres"); }     // déplié par défaut : un type par ligne
+        return block("Autres", `<span class="restant">${fmt(total)} j</span>`, days.map((d) => ["<b>" + esc(d.code) + "</b> " + esc(d.libelle), fmt(d.jours) + " j"]),
+          `<div class="cet-hint">Absences saisies dans Sedit RH (jours ouvrés de l'année), à titre d'information.</div>`);
+      })()}
 
       <div class="solde-block total${(state.soldeOpen = state.soldeOpen || new Set()).has("TOTAL") ? " open" : ""}" data-sb="TOTAL">
         <h4 class="sb-head" title="Afficher ou masquer le détail"><span>TOTAL restant</span><span class="${cls(s.total.restant)}">${fmt(s.total.restant)} j</span></h4>

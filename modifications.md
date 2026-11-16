@@ -875,3 +875,9 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Synthèse de la fiche** : le panneau de droite était trop grand. Chaque solde tient maintenant sur une ligne (titre et restant) ; un clic sur le titre déplie le détail (droits, reliquat, pris, déduction…), et il reste déplié tant que vous ne le repliez pas. Le « restant prévisionnel » n'est affiché que s'il est différent du solde actuel, c'est-à-dire seulement quand des demandes sont en attente. À l'impression, tous les détails sont dépliés.
 
 **Vérifications** : syntaxe du JavaScript et tests de version ; l'affichage n'a pas été contrôlé dans un navigateur (connexion non disponible dans l'instance d'essai).
+
+## Version 0.17.8 — Bloc « Autres » (absences Sedit RH) dans la synthèse
+
+**Autres** : la synthèse de la fiche (panneau de droite) et « Ma synthèse » indiquent maintenant le nombre de jours d'absence saisis dans Sedit RH, par type (maladie, garde d'enfant malade, maternité/paternité, congé parental, soins à un proche). Ce sont des jours ouvrés de l'année (week-ends et jours fériés exclus) ; ils sont donnés à titre d'information et ne changent aucun solde de congés. Le bloc n'apparaît que si Sedit RH est joignable et que l'agent a des absences.
+
+**Vérifications** : calcul des jours contrôlé sur un exemple (jour férié et changement d'année exclus) ; affichage non contrôlé dans un navigateur.

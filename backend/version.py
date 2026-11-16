@@ -13,9 +13,19 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.7"
+VERSION = "0.17.8"
 
 VERSIONS = [
+    {
+        "version": "0.17.8",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Bloc « Autres » (absences Sedit RH) dans la synthèse",
+        "items": [
+            "Synthèse de la fiche : un bloc « Autres » indique, par type (congé maladie, garde d'enfant malade, congé de maternité/adoption/paternité, congé parental, soins à entourage familial), le nombre de jours ouvrés d'absence saisis dans Sedit RH sur l'année, à titre d'information.",
+            "« Ma synthèse » affiche les mêmes totaux sous les soldes.",
+        ],
+    },
     {
         "version": "0.17.7",
         "date": "2026-11-17",
