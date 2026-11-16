@@ -4,6 +4,7 @@
 Pour un agent qui l'a demandé (users.exchange_sync = 1) :
 - chaque jour d'absence (codes de ABSENCE_CODES) devient un événement **« ABSENT »**, affiché « Absent du bureau » (showAs = oof) ;
   une demi-journée donne un événement sur le matin ou l'après-midi, une journée complète un événement « toute la journée » ;
+- un jour **demandé** (demande en attente de validation) devient « ABSENT » en disponibilité **« Provisoire »** (tentative) ; une fois validé, l'événement passe en « Absent du bureau » ;
 - chaque jour de télétravail (code TT) devient un événement **« Télétravail »** affiché « Travaille ailleurs » (showAs = workingElsewhere).
 Rien d'autre n'est écrit (ni motif, ni code, ni détail : l'événement est en plus marqué « privé »). La synchronisation couvre
 d'aujourd'hui à la fin de l'année suivante ; la table `exchange_events` retient les événements créés pour les mettre à jour
@@ -129,28 +130,39 @@ def kind_of(code, absence_codes=None):
     return "ABSENT" if code in (absence_codes if absence_codes is not None else _absence_codes()) else None
 
 
-def desired_events(cells_by_year, today=None, until=None, absence_codes=None):
-    """{(AAAA-MM-JJ, part): kind} : part = J (journée), M (matin) ou A (après-midi).
+def desired_events(cells_by_year, today=None, until=None, absence_codes=None, pending_by_year=None):
+    """{(AAAA-MM-JJ, part): kind} : part = J (journée), M (matin) ou A (après-midi) ; kind = ABSENT, TT ou PROV.
 
     `cells_by_year` : {année: {clé de case: code}} ; la clé est mois*1000 + jour*10 + demi-journée (0 matin, 1 après-midi).
-    Seuls les jours d'aujourd'hui à `until` (fin de l'année suivante par défaut) sont retenus."""
+    `pending_by_year` : mêmes cases pour les jours **demandés** (demande en attente de validation) : une absence demandée donne PROV
+    (absent à titre provisoire) tant qu'elle n'est pas validée ; une case déjà posée dans la fiche prévaut.
+    Seuls les jours du 1er janvier de l'année en cours à `until` (fin de l'année suivante par défaut) sont retenus (les absences déjà passées de l'année y figurent aussi)."""
     today = today or dt.date.today()
     until = until or dt.date(today.year + 1, 12, 31)
+    start = dt.date(today.year, 1, 1)
     halves = {}
-    for year, cells in cells_by_year.items():
-        for key, code in (cells or {}).items():
-            k = kind_of(code, absence_codes)
-            if not k:
-                continue
-            try:
-                n = int(key)
-                day = dt.date(int(year), n // 1000, (n % 1000) // 10)
-            except (TypeError, ValueError):
-                continue
-            half = n % 10
-            if half not in (0, 1) or not (today <= day <= until):
-                continue
-            halves.setdefault(day, {})[half] = k
+    sources = [(cells_by_year, False), (pending_by_year or {}, True)]
+    for source, provisional in sources:
+        for year, cells in source.items():
+            for key, code in (cells or {}).items():
+                k = kind_of(code, absence_codes)
+                if not k:
+                    continue
+                if provisional:
+                    if k != "ABSENT":
+                        continue                       # une demande ne porte que sur des absences (le télétravail se pose directement dans la fiche)
+                    k = "PROV"
+                try:
+                    n = int(key)
+                    day = dt.date(int(year), n // 1000, (n % 1000) // 10)
+                except (TypeError, ValueError):
+                    continue
+                half = n % 10
+                if half not in (0, 1) or not (start <= day <= until):
+                    continue
+                if provisional and half in halves.get(day, {}):
+                    continue                           # la fiche l'emporte sur une demande
+                halves.setdefault(day, {})[half] = k
     out = {}
     for day, h in halves.items():
         if h.get(0) and h.get(0) == h.get(1):
@@ -173,8 +185,8 @@ def event_payload(day_iso, part, kind):
     day = dt.date.fromisoformat(day_iso)
     tz = config.EXCHANGE_TIMEZONE
     body = {
-        "subject": ABSENT_SUBJECT if kind == "ABSENT" else TT_SUBJECT,
-        "showAs": "oof" if kind == "ABSENT" else "workingElsewhere",
+        "subject": TT_SUBJECT if kind == "TT" else ABSENT_SUBJECT,
+        "showAs": {"ABSENT": "oof", "PROV": "tentative", "TT": "workingElsewhere"}[kind],
         "isReminderOn": False,
         "sensitivity": "private",
     }
@@ -191,6 +203,25 @@ def event_payload(day_iso, part, kind):
 # --------------------------------------------------------------------------- #
 #  Synchronisation d'un agent
 # --------------------------------------------------------------------------- #
+def _user_pending(db, user_id, today):
+    """{année: {clé de case: code}} des jours demandés et pas encore validés (demandes « en attente »)."""
+    import json
+    out = {}
+    for r in db.execute("SELECT a.year, r.code, r.cells FROM leave_requests r JOIN agents a ON a.id=r.agent_id "
+                        "WHERE a.agent_user_id=? AND r.status='en_attente' AND a.year>=? AND a.year<=?",
+                        (user_id, today.year, today.year + 1)).fetchall():
+        try:
+            keys = json.loads(r["cells"]) if isinstance(r["cells"], str) else (r["cells"] or [])
+        except ValueError:
+            keys = []
+        for key in keys:
+            try:
+                out.setdefault(int(r["year"]), {})[str(int(key))] = r["code"]
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def _user_cells(db, user_id, today):
     out = {}
     for a in db.execute("SELECT id, year FROM agents WHERE agent_user_id=? AND year>=? AND year<=?", (user_id, today.year, today.year + 1)).fetchall():
@@ -220,11 +251,11 @@ def sync_user(db, user_id, today=None):
         ok, message = availability()
         if not ok:
             raise ExchangeError(message)
-        want = desired_events(_user_cells(db, user_id, today), today)
+        want = desired_events(_user_cells(db, user_id, today), today, pending_by_year=_user_pending(db, user_id, today))
         have = {(r["day"], r["part"]): r for r in db.execute(
             "SELECT day, part, kind, event_id FROM exchange_events WHERE user_id=?", (user_id,)).fetchall()}
         for key, row in list(have.items()):
-            if key[0] < today.isoformat():                       # événement passé : on le laisse dans l'agenda, on n'en suit plus
+            if key[0] < dt.date(today.year, 1, 1).isoformat():   # année précédente : on le laisse dans l'agenda, on n'en suit plus
                 db.execute("DELETE FROM exchange_events WHERE user_id=? AND day=? AND part=?", (user_id, key[0], key[1]))
                 db.commit()
                 del have[key]

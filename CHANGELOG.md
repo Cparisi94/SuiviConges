@@ -13,6 +13,12 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.5 — 2026-11-17 — Jours demandés provisoires dans Outlook, CET contrôlé avec Sedit RH
+
+- Agenda Outlook : un jour (ou une demi-journée) demandé, en attente de validation, apparaît dans l'agenda en « ABSENT » avec la disponibilité « Provisoire » ; une fois la demande validée il passe en « Absent du bureau », et refusée ou annulée il disparaît.
+- L'agenda Outlook reprend aussi les absences déjà passées de l'année en cours (et plus seulement celles à partir d'aujourd'hui).
+- Demande de congé en CET : le contrôle du solde utilise maintenant le solde de Sedit RH quand le « Solde CET (j) » de la fiche est vide, comme la synthèse (la demande de 1 jour de CET n'était plus refusée à tort avec « Solde insuffisant : il resterait -1,0 j » malgré 60 jours).
+
 ## 0.17.4 — 2026-11-17 — Report des périodes : seulement l'année suivante
 
 - Mon équipe : le bouton « Reporter les périodes en … » ne propose plus que l'année qui suit l'année en cours (2027 en 2026), et seulement pour les personnes qui n'ont pas encore cette fiche ; quand une autre année est affichée (par exemple 2027), il disparaît au lieu de proposer 2028.

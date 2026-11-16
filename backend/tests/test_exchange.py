@@ -38,12 +38,28 @@ class DesiredEventsTest(unittest.TestCase):
             ("2026-11-24", "J"): "ABSENT",
         })
 
-    def test_fenetre_aujourd_hui_fin_de_l_annee_suivante(self):
-        cells26 = {str(key(11, 13, 0)): "CA", str(key(11, 13, 1)): "CA", str(key(12, 1, 0)): "CA", str(key(12, 1, 1)): "CA"}
+    def test_fenetre_debut_de_l_annee_fin_de_l_annee_suivante(self):
+        cells26 = {str(key(1, 1, 0)): "CA", str(key(1, 1, 1)): "CA", str(key(11, 13, 0)): "CA", str(key(11, 13, 1)): "CA", str(key(12, 1, 0)): "CA", str(key(12, 1, 1)): "CA"}
         cells27 = {str(key(12, 31, 0)): "CA", str(key(12, 31, 1)): "CA"}
         cells28 = {str(key(1, 5, 0)): "CA", str(key(1, 5, 1)): "CA"}
-        out = exchange.desired_events({2026: cells26, 2027: cells27, 2028: cells28}, TODAY, absence_codes=CODES)
-        self.assertEqual(sorted(out), [("2026-12-01", "J"), ("2027-12-31", "J")])           # le passé et au-delà de fin 2027 sont ignorés
+        cells25 = {str(key(12, 31, 0)): "CA", str(key(12, 31, 1)): "CA"}
+        out = exchange.desired_events({2025: cells25, 2026: cells26, 2027: cells27, 2028: cells28}, TODAY, absence_codes=CODES)
+        self.assertEqual(sorted(out), [("2026-01-01", "J"), ("2026-11-13", "J"), ("2026-12-01", "J"), ("2027-12-31", "J")])   # l'année en cours (même passée) est reprise ; l'année précédente et au-delà de fin 2027 sont ignorées
+
+    def test_jours_demandes_en_attente_sont_provisoires(self):
+        cells = {2026: {str(key(11, 20, 0)): "CA", str(key(11, 20, 1)): "CA"}}                 # déjà posé dans la fiche
+        pending = {2026: {
+            str(key(11, 20, 0)): "CA", str(key(11, 20, 1)): "CA",                              # même jour : la fiche l'emporte
+            str(key(11, 23, 0)): "CA", str(key(11, 23, 1)): "CA",                              # journée demandée
+            str(key(11, 24, 1)): "RTT",                                                        # après-midi demandé
+            str(key(11, 25, 0)): "TT",                                                         # une demande ne porte que sur des absences
+        }}
+        out = exchange.desired_events(cells, TODAY, absence_codes=CODES, pending_by_year=pending)
+        self.assertEqual(out, {("2026-11-20", "J"): "ABSENT", ("2026-11-23", "J"): "PROV", ("2026-11-24", "A"): "PROV"})
+
+    def test_matin_pose_apres_midi_demande(self):
+        out = exchange.desired_events({2026: {str(key(11, 20, 0)): "CA"}}, TODAY, absence_codes=CODES, pending_by_year={2026: {str(key(11, 20, 1)): "CA"}})
+        self.assertEqual(out, {("2026-11-20", "M"): "ABSENT", ("2026-11-20", "A"): "PROV"})
 
     def test_cle_invalide_ignoree(self):
         out = exchange.desired_events({2026: {"abc": "CA", "13370": "CA", str(key(11, 18, 5)): "CA"}}, TODAY, absence_codes=CODES)
@@ -65,6 +81,10 @@ class PayloadTest(unittest.TestCase):
         self.assertFalse(m["isAllDay"])
         self.assertEqual((m["start"]["dateTime"], m["end"]["dateTime"]), ("2026-11-16T08:30:00", "2026-11-16T12:30:00"))
         self.assertEqual((a["start"]["dateTime"], a["end"]["dateTime"]), ("2026-11-16T13:30:00", "2026-11-16T17:30:00"))
+
+    def test_absence_demandee_est_absent_provisoire(self):
+        p = exchange.event_payload("2026-11-23", "J", "PROV")
+        self.assertEqual((p["subject"], p["showAs"], p["isAllDay"], p["sensitivity"]), ("ABSENT", "tentative", True, "private"))   # « Provisoire » dans Outlook
 
     def test_teletravail_travaille_ailleurs(self):
         p = exchange.event_payload("2026-11-19", "J", "TT")

@@ -145,6 +145,7 @@
 
 - Un agent peut demander, dans « Ma synthèse », que ses absences soient **synchronisées automatiquement avec son agenda Outlook** (décochée par défaut ; personnelle).
 - Chaque **jour d'absence** devient un événement **« ABSENT »** (disponibilité « Absent du bureau »), sans autre texte ; une **demi-journée** donne un événement sur le matin ou l'après-midi. Le **télétravail** devient un événement en disponibilité **« Travaille ailleurs »**.
-- Les absences prises en compte sont celles du **taux d'absence** (CA, RTT, CM, CP, CT, GEM, SF, JS, JB…) ; les présences, week-ends et jours fériés ne produisent aucun événement. La synchronisation couvre **d'aujourd'hui à la fin de l'année suivante**.
+- Les absences prises en compte sont celles du **taux d'absence** (CA, RTT, CM, CP, CT, GEM, SF, JS, JB…) ; les présences, week-ends et jours fériés ne produisent aucun événement. La synchronisation couvre **du 1er janvier de l'année en cours à la fin de l'année suivante** (les absences déjà passées de l'année sont donc reprises).
+- Un jour **demandé** (demande en attente de validation) est indiqué « ABSENT » en disponibilité **« Provisoire »** ; une fois validé, il passe en « Absent du bureau » ; refusé ou annulé, il disparaît.
 - L'application **ne modifie que les événements qu'elle a créés** ; décocher la case les retire de l'agenda ; les événements passés restent.
 

@@ -851,3 +851,13 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Ce qui a changé** : en affichant l'année 2027, Mon équipe proposait « Reporter les périodes en 2028 (12) ». Le bouton n'est plus proposé que pour **l'année qui suit l'année en cours** (2027 en 2026) et **uniquement pour les personnes qui n'ont pas encore cette fiche** ; quand une autre année est affichée, il disparaît. En janvier 2027, il proposera 2028.
 
 **Vérifications** : syntaxe de l'interface contrôlée ; non essayé à l'écran (aucun test automatique : c'est de l'affichage).
+
+## Version 0.17.5 — Jours demandés provisoires dans Outlook, CET contrôlé avec Sedit RH
+
+**Agenda Outlook : jours demandés en provisoire** : quand vous demandez des jours (demande en attente de validation), ils apparaissent dans votre agenda en « ABSENT » avec la disponibilité **« Provisoire »**. Dès que le valideur accepte, l'événement passe en « Absent du bureau » ; s'il refuse, ou si vous annulez, il disparaît. (Le titre reste « ABSENT » : seul l'état « Provisoire » d'Outlook change.)
+
+**Absences passées dans Outlook** : la synchronisation ne reprenait que les jours à partir d'aujourd'hui ; les absences d'octobre n'apparaissaient donc pas. Elle couvre maintenant du 1er janvier de l'année en cours à la fin de l'année suivante.
+
+**Demande de CET refusée à tort** : avec un « Solde CET (j) » vide dans la fiche, la synthèse utilisait bien le solde de Sedit RH (60 jours) mais le contrôle de la demande partait de 0 et répondait « Solde insuffisant : il resterait -1,0 j ». Le contrôle utilise maintenant le même solde que la synthèse. Si Sedit RH n'est pas joignable et qu'aucun solde n'est connu, la demande est contrôlée avec 0 comme avant.
+
+**Vérifications** : 115 tests passent (jour demandé provisoire puis validé puis refusé ; demande de CET avec et sans solde connu) ; Outlook non essayé en réel pour le provisoire.

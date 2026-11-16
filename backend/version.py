@@ -13,9 +13,20 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.4"
+VERSION = "0.17.5"
 
 VERSIONS = [
+    {
+        "version": "0.17.5",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Jours demandés provisoires dans Outlook, CET contrôlé avec Sedit RH",
+        "items": [
+            "Agenda Outlook : un jour (ou une demi-journée) demandé, en attente de validation, apparaît dans l'agenda en « ABSENT » avec la disponibilité « Provisoire » ; une fois la demande validée il passe en « Absent du bureau », et refusée ou annulée il disparaît.",
+            "L'agenda Outlook reprend aussi les absences déjà passées de l'année en cours (et plus seulement celles à partir d'aujourd'hui).",
+            "Demande de congé en CET : le contrôle du solde utilise maintenant le solde de Sedit RH quand le « Solde CET (j) » de la fiche est vide, comme la synthèse (la demande de 1 jour de CET n'était plus refusée à tort avec « Solde insuffisant : il resterait -1,0 j » malgré 60 jours).",
+        ],
+    },
     {
         "version": "0.17.4",
         "date": "2026-11-17",

@@ -1346,6 +1346,76 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_cet_request_is_checked_with_the_sedit_rh_balance_when_the_field_is_empty(self):
+        import sedit_rh
+        conn = db.get_db()
+        conn.execute("UPDATE users SET matricule='CETREQ1' WHERE id=4")
+        conn.commit()
+        agent = conn.execute("SELECT * FROM agents WHERE id=1").fetchone()
+        try:
+            with mock.patch.object(sedit_rh, "cet_cached", return_value=60.0):
+                ok, result = self.app_module._request_balance(conn, agent, [5010, 5011], "CET")
+            self.assertTrue(ok, result["solde"]["cet"])                                     # 60 j disponibles : une demi-journée de CET passe
+            self.assertEqual(result["solde"]["cet"]["initial"], 60.0)
+            with mock.patch.object(sedit_rh, "cet_cached", return_value=None), mock.patch.object(sedit_rh, "cet_balances", return_value={}):
+                ok, result = self.app_module._request_balance(conn, agent, [5010, 5011], "CET")
+            self.assertFalse(ok)                                                            # sans solde connu : 0 j, la demande est refusée comme avant
+        finally:
+            conn.execute("UPDATE users SET matricule='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_exchange_requested_days_are_provisional_until_validated(self):
+        import datetime as _dt
+        import exchange
+        today = _dt.date(2026, 11, 16)
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, email, mot_de_passe, admin, role, parent_id, actif, exchange_sync) VALUES (2160,'EXPRV','AGENT PROVISOIRE','exprv@ville.fr','x',0,'agent',2,1,1)")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) VALUES (2160, 2, 2160, 'EXPRV', 'X', '', 2, 2026, '{}', '[]')")
+        conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) VALUES (2160, 2160, 2160, 2026, 'CA', '[11230, 11231]', 1, 'en_attente', 2)")
+        conn.commit()
+        calls = []
+
+        def fake_call(method, path, body=None, params=None):
+            calls.append((method, path, body))
+            return {"id": "EV%d" % len(calls)} if method == "POST" else {}
+
+        try:
+            with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", fake_call):
+                s = exchange.sync_user(conn, 2160, today)
+                self.assertEqual((s["created"], s["error"]), (1, ""))
+                post = [c for c in calls if c[0] == "POST"][0][2]
+                self.assertEqual((post["subject"], post["showAs"], post["isAllDay"]), ("ABSENT", "tentative", True))          # demandé : « Provisoire »
+                self.assertEqual(conn.execute("SELECT kind FROM exchange_events WHERE user_id=2160").fetchone()["kind"], "PROV")
+                calls.clear()
+                # La demande est validée : les cases sont posées dans la fiche, l'événement passe en « Absent du bureau ».
+                conn.execute("UPDATE leave_requests SET status='validee' WHERE id=2160")
+                conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2160, 11230, 'CA'), (2160, 11231, 'CA')")
+                conn.commit()
+                s = exchange.sync_user(conn, 2160, today)
+                self.assertEqual((s["created"], s["deleted"]), (1, 1))
+                self.assertEqual(sorted(c[0] for c in calls), ["DELETE", "POST"])
+                self.assertEqual([c[2]["showAs"] for c in calls if c[0] == "POST"], ["oof"])
+                self.assertEqual(conn.execute("SELECT kind FROM exchange_events WHERE user_id=2160").fetchone()["kind"], "ABSENT")
+                # Une autre demande est refusée : plus rien de provisoire dans l'agenda.
+                conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) VALUES (2161, 2160, 2160, 2026, 'CA', '[11240, 11241]', 1, 'en_attente', 2)")
+                conn.commit()
+                calls.clear()
+                exchange.sync_user(conn, 2160, today)
+                self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2160 AND kind='PROV'").fetchone()["n"], 1)
+                conn.execute("UPDATE leave_requests SET status='refusee' WHERE id=2161")
+                conn.commit()
+                exchange.sync_user(conn, 2160, today)
+                self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2160 AND kind='PROV'").fetchone()["n"], 0)
+        finally:
+            conn.execute("DELETE FROM cells WHERE agent_id=2160")
+            conn.execute("DELETE FROM exchange_events WHERE user_id=2160")
+            conn.execute("DELETE FROM leave_requests WHERE agent_id=2160")
+            conn.execute("DELETE FROM agents WHERE id=2160")
+            conn.execute("DELETE FROM users WHERE id=2160")
+            conn.commit()
+            conn.close()
+
     def test_exchange_routes_need_a_mailbox_and_a_configured_module(self):
         import exchange
         conn = db.get_db()
@@ -1354,8 +1424,8 @@ class PrototypeRegressionTests(unittest.TestCase):
         conn.commit()
         conn.close()
         try:
-            with mock.patch.object(exchange, "configured", return_value=False):
-                self.assertEqual(self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True}).status_code, 503)    # module non configuré
+            with mock.patch.object(exchange, "availability", return_value=(False, "Route d'agenda absente de l'API Ville")):
+                self.assertEqual(self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True}).status_code, 503)    # route d'agenda absente de l'API Ville
                 st = self._call("GET", "/api/exchange", uid=2151).get_json()
                 self.assertEqual((st["configured"], st["enabled"]), (False, False))
             with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "sync_user_async", return_value=True) as sync, \

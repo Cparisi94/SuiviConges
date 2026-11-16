@@ -2201,6 +2201,7 @@ def _balance_restant(result, code):
 def _request_balance(db, agent, cells, code, exclude_id=None):
     """Recalcule le solde avec les absences validées + les demandes en attente."""
     params = json_loads(agent["params"])
+    params = _agent_params_with_sedit_cet(db, agent, params, fetch=True)       # solde initial de CET vide : celui de Sedit RH (comme la synthèse)
     periods = json_loads(agent["periods"]) if agent["periods"] else []
     merged = _agent_cells(db, agent["id"])
     merged.update(_pending_cells(db, agent["id"], exclude_id))
@@ -3382,6 +3383,25 @@ def _sedit_cet_default(params, matricule):
 
     solde = sedit_rh.cet_cached(matricule)
     return params if solde is None else dict(params, solde_cet=solde)
+
+
+def _agent_params_with_sedit_cet(db, agent, params, fetch=False):
+    """Paramètres d'une fiche avec le solde initial de CET de Sedit RH quand il n'est pas saisi. `fetch` : si le solde n'est pas encore connu,
+    le lire tout de suite (une demande de congé doit être contrôlée avec le même solde que la synthèse) ; une panne de Sedit RH n'est pas bloquante."""
+    if params.get("solde_cet") not in (None, "") or not agent["agent_user_id"]:
+        return params
+    row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone()
+    matricule = ((row["matricule"] if row else "") or "").strip()
+    if not matricule:
+        return params
+    import sedit_rh
+
+    if fetch and sedit_rh.cet_cached(matricule) is None:
+        try:
+            sedit_rh.cet_balances([matricule])
+        except sedit_rh.SeditError as exc:
+            app.logger.warning("Solde CET Sedit RH non lu pour le contrôle d'une demande (%s) : %s", matricule, exc)
+    return _sedit_cet_default(params, matricule)
 
 
 def _sedit_cet_default_for_agent(user, agent_id, params):
