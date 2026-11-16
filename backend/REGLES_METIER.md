@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.14.2.
+> Dernière mise à jour : version 0.14.3.
 
 ## 1. Rôles, hiérarchie et périmètre
 

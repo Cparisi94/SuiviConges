@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.14.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.14.3 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -508,7 +508,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **PLA-06** — Lien `#/planning?equipe=1&mois=M&annee=A` : planning de mon équipe, au mois et à l'année demandés.
 
 ### 14.14 Mon équipe par entité (fusion avec Mes fiches)
-- **EQP-01** — Vue **par entité** : un groupe par responsable (titre = nom de l'unité Sedit RH, à défaut le nom du compte), cartes des personnes dont le **responsable en premier** ; entités de même nom fusionnées ; sous-groupes décalés.
+- **EQP-01** — Vue **par entité** : un groupe par **unité** (Sedit RH ou locale ; à défaut l'unité du valideur ; « Sans unité »), classé par chemin hiérarchique ; dans un groupe : le **responsable d'unité** (★, `org_units.head_user_id`), puis les valideurs, puis les agents ; unités de même nom regroupées ; un titre accepte les dépôts (= sous le responsable de l'entité).
 - **EQP-02** — Carte : nom, rôle (Valideur / Agent, Admin), pastilles (délégation, effectif sous sa responsabilité, ⚠ e-mail), **période en cours** (`fiche.period` : quotité en camembert, jours travaillés L M M J V S D, durée, pénibilité, fériés « F », nombre de périodes), actions (fiche, Définir / Compléter la période, Dupliquer pour N+1, Recherche AD).
 - **EQP-03** — En-tête : **+ Nouvelle fiche** et **Dupliquer toutes les fiches pour N+1** (celles sans fiche N+1) ; glisser-déposer d'une carte sur une carte ou sur l'en-tête d'une entité (= sous le responsable de cette entité).
 - **EQP-05** — Fiche : e-mail et matricule **verrouillés** (champs désactivés ; `PUT /api/agents/<id>` conserve la valeur existante) ; case « Resp. unité » retirée de l'écran (`is_manager` reste en base pour l'existant) ; champ **Unité** : `GET/PUT /api/my-agents/<id>/unit` proposent **toutes les unités de la direction** de la personne (à défaut, celles de mon périmètre) ; Mon équipe en deux colonnes (équipe large, Sedit RH 330 px).
@@ -761,6 +761,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.14.3** | 2026-11-16 | Mon équipe : les entités d'abord, puis leurs membres. |
 | **0.14.2** | 2026-11-16 | Planning : titres de groupe par entité. |
 | **0.14.1** | 2026-11-16 | Planning : raison pour mon équipe, présence pour les autres, encadrants visibles. |
 | **0.14.0** | 2026-11-16 | Mon équipe : unité de chaque agent, unités locales et responsable d'unité. |

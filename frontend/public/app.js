@@ -5238,33 +5238,30 @@ async function viewMyAgents() {
   } catch (e) { c.innerHTML = `<h1>Mon équipe</h1><div class="form-error">${esc(e.message)}</div>`; return; }
 
   /* ---- Mon équipe par entité (comme l'ancien « Mes fiches ») : groupes = entités, cartes = personnes ---- */
-  const people = {};
-  (function reg(n) { people[n.id] = n; (n.children || []).forEach(reg); })(tree);
+  const people = {}, parentOf = {};
+  (function reg(n, parent) { people[n.id] = n; if (parent) parentOf[n.id] = parent.id; (n.children || []).forEach((c) => reg(c, n)); })(tree, null);
   const norm = (x) => String(x || "").trim().toLowerCase();
-  const groupLabel = (n) => n.unit_label || n.nom || n.login;
-  const mkGroup = (n) => {
-    const g = { owner: n, label: groupLabel(n), members: [n], groups: [] };   // le responsable passe en premier
-    (n.children || []).forEach((ch) => { if ((ch.children || []).length) g.groups.push(mkGroup(ch)); else g.members.push(ch); });
-    return g;
+  /* Entités d'abord, puis leurs membres : une entité = une unité (Sedit RH ou locale) ; son responsable est le premier, puis les valideurs, puis les agents. */
+  const unitInfo = Object.fromEntries((units || []).map((u) => [u.code, u]));
+  const unitKey = (n) => {
+    if (n.unit_code && unitInfo[n.unit_code]) return n.unit_code;
+    const par = people[parentOf[n.id]];                       // sans unité : celle de son valideur
+    return par && par.unit_code && unitInfo[par.unit_code] ? par.unit_code : "_";
   };
-  const merge = (g) => {   // entités de même nom regroupées
-    g.groups.forEach(merge);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      const seen = {}, kept = [];
-      for (const sub of g.groups) {
-        const t = norm(sub.label) === norm(g.label) ? g : seen[norm(sub.label)];
-        if (t) { t.members.push(...sub.members); t.groups.push(...sub.groups); changed = true; }
-        else { seen[norm(sub.label)] = sub; kept.push(sub); }
-      }
-      g.groups = kept;
-    }
-  };
-  const rootGroup = tree.all
-    ? { owner: tree, label: "Toute la collectivité", members: [], groups: (tree.children || []).map(mkGroup) }
-    : mkGroup(tree);
-  merge(rootGroup);
+  const groupMap = {};
+  Object.values(people).filter((n) => !(tree.all && n.id === tree.id)).forEach((n) => {
+    const k = unitKey(n);
+    const label = k === "_" ? "Sans unité" : unitInfo[k].libelle;
+    const g = groupMap[norm(label)] = groupMap[norm(label)] || { code: k, label, path: k === "_" ? "~" : unitInfo[k].path, headId: null, members: [] };   // unités de même nom regroupées
+    if (k !== "_" && unitInfo[k].path.length < g.path.length) g.path = unitInfo[k].path;
+    if (k !== "_" && unitInfo[k].head_user_id && !g.headId) g.headId = unitInfo[k].head_user_id;
+    g.members.push(n);
+  });
+  const groupList = Object.values(groupMap).sort((a, b) => a.path.localeCompare(b.path, "fr"));
+  groupList.forEach((g) => g.members.sort((a, b) => {
+    const rank = (n) => (n.unit_head ? 0 : ((n.children || []).length || n.count ? 1 : 2));
+    return rank(a) - rank(b) || String(a.nom || a.login).localeCompare(String(b.nom || b.login), "fr");
+  }));
 
   const donut = (pct) => `<svg viewBox="0 0 36 36" class="ma-donut" role="img" aria-label="Quotité ${pct} %"><title>Quotité ${pct} %</title>
       <circle cx="18" cy="18" r="15.9155" fill="none" stroke="#eadfd9" stroke-width="4.2"/>
@@ -5305,12 +5302,15 @@ async function viewMyAgents() {
         ${n.no_email && n.actif && !n.all ? `<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button>` : ""}</div>
     </div>`;
   };
-  const groupHtml = (g, level) => `<div class="ma-group" style="margin-left:${Math.min(level, 3) * 18}px">
-      <div class="ma-ghead ma-drop role-${esc(g.owner.role)}" data-id="${g.owner.id}" title="Déposer ici pour placer sous ${esc(g.owner.nom || g.owner.login)}">
+  const groupHtml = (g) => {
+    const depth = g.path === "~" ? 0 : Math.min(3, g.path.split(" › ").length - 1);
+    const target = people[g.headId] ? g.headId : ((g.members.find((m) => (m.children || []).length || m.count) || {}).id || tree.id);
+    return `<div class="ma-group" style="margin-left:${depth * 14}px">
+      <div class="ma-ghead ma-drop role-${esc((people[target] || tree).role)}" data-id="${target}" title="Déposer ici pour placer sous ${esc((people[target] || tree).nom || "")}">
         <span>${esc(g.label)}</span><span class="ma-gcount">${g.members.length} personne${g.members.length > 1 ? "s" : ""}</span></div>
-      ${g.members.length ? `<div class="ma-cards">${g.members.map((m, k) => cardHtml(m, k === 0 && m.id === g.owner.id && !tree.all, g.label)).join("")}</div>` : ""}
-      ${g.groups.map((x) => groupHtml(x, level + 1)).join("")}
+      <div class="ma-cards">${g.members.map((m) => cardHtml(m, false, g.label)).join("")}</div>
     </div>`;
+  };
   const dupIds = [];
   Object.values(people).forEach((n) => { if (n.fiche && n.fiche.complete && !n.fiche.next_exists) dupIds.push(n.fiche.id); });
 
@@ -5326,7 +5326,7 @@ async function viewMyAgents() {
     <div class="ma-layout">
       <div class="card ma-left"><div class="ma-left-head"><h3>Mon équipe (${state.maAll ? tree.count : tree.children.length}${!state.maAll && tree.count > tree.children.length ? ` sur ${tree.count} au total` : ""})</h3>
         <button type="button" class="btn btn-small" id="ma-depth">${state.maAll ? "Voir seulement mes agents directs" : "Voir toute ma ligne hiérarchique"}</button></div>
-        <div class="ma-groups">${groupHtml(rootGroup, 0)}</div></div>
+        <div class="ma-groups">${groupList.map(groupHtml).join("")}</div></div>
       <div class="card ma-right">
         <h3>Agents Sedit RH à ajouter</h3>
         <input type="search" id="ma-q" placeholder="Rechercher (nom, prénom, matricule, unité)" autocomplete="off">

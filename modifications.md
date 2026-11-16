@@ -748,3 +748,9 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Ce qui a changé** : dans le planning, Marc CHEVALIER apparaissait deux fois : dans « Encadrants — disponibilité » (sa ligne) et comme titre de groupe de son équipe. Les titres de groupe portent maintenant le nom de l'entité (par exemple « DIRECTION DES SYSTEMES D'INFORMATION »), comme dans Mon équipe ; la personne n'apparaît qu'en ligne.
 
 **Vérifications** : syntaxe vérifiée, 72 tests passent ; non revu à l'écran.
+
+## Version 0.14.3 — Mon équipe : les entités d'abord, puis leurs membres
+
+**Ce qui a changé** : Mon équipe suivait la chaîne de validation. Il est maintenant classé par **entité** (unité) : un titre par unité, puis ses membres, **le responsable en premier (★)**, puis les valideurs, puis les agents. Exemple vérifié : « CELLULE ADMINISTRATIVE ET FINANCIÈRE » → Isabelle ABBAS ★, puis Florian BRUN. Une personne sans unité est rangée dans l'unité de son valideur ; les unités de même nom sont regroupées.
+
+**Vérifications** : essai navigateur sur instance jetable (unité locale, responsable, deux groupes dans l'ordre attendu) ; 72 tests passent.

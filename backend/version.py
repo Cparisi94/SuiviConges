@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.14.2"
+VERSION = "0.14.3"
 
 VERSIONS = [
+    {
+        "version": "0.14.3",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Mon équipe : les entités d'abord, puis leurs membres",
+        "items": [
+            "Mon équipe est classé par unité (entité) puis par membres : le titre de chaque entité, son responsable (★) en premier, puis les valideurs, puis les agents (ex. « Cellule administrative et financière » : Isabelle, puis Florian). Une personne est rangée dans son unité, à défaut dans celle de son valideur ; les unités de même nom sont regroupées ; déposer sur un titre place sous le responsable de l'entité.",
+        ],
+    },
     {
         "version": "0.14.2",
         "date": "2026-11-16",

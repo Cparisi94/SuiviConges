@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.14.3 — 2026-11-16 — Mon équipe : les entités d'abord, puis leurs membres
+
+- Mon équipe est classé par unité (entité) puis par membres : le titre de chaque entité, son responsable (★) en premier, puis les valideurs, puis les agents (ex. « Cellule administrative et financière » : Isabelle, puis Florian). Une personne est rangée dans son unité, à défaut dans celle de son valideur ; les unités de même nom sont regroupées ; déposer sur un titre place sous le responsable de l'entité.
+
 ## 0.14.2 — 2026-11-16 — Planning : titres de groupe par entité
 
 - Dans le planning, les titres de groupe portent le nom de l'entité (unité) et non celui du valideur : plus de doublon « Chevalier Marc » entre le groupe des encadrants et l'en-tête de son équipe.
