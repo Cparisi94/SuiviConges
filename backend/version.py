@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.14.3"
+VERSION = "0.14.4"
 
 VERSIONS = [
+    {
+        "version": "0.14.4",
+        "date": "2026-11-16",
+        "type": "patch",
+        "titre": "Tableau de bord RH réservé aux administrateurs",
+        "items": [
+            "Le Tableau de bord RH n'est plus accessible qu'aux comptes administrateurs : l'entrée de menu est masquée pour les valideurs et les agents, et l'accès direct par l'adresse (#/hr) ou par l'API est refusé.",
+        ],
+    },
     {
         "version": "0.14.3",
         "date": "2026-11-16",

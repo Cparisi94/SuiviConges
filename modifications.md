@@ -754,3 +754,12 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Ce qui a changé** : Mon équipe suivait la chaîne de validation. Il est maintenant classé par **entité** (unité) : un titre par unité, puis ses membres, **le responsable en premier (★)**, puis les valideurs, puis les agents. Exemple vérifié : « CELLULE ADMINISTRATIVE ET FINANCIÈRE » → Isabelle ABBAS ★, puis Florian BRUN. Une personne sans unité est rangée dans l'unité de son valideur ; les unités de même nom sont regroupées.
 
 **Vérifications** : essai navigateur sur instance jetable (unité locale, responsable, deux groupes dans l'ordre attendu) ; 72 tests passent.
+
+
+## Version 0.14.4 — Tableau de bord RH réservé aux administrateurs
+
+**Ce qui a changé** : le Tableau de bord RH (taux d'absence, absences par direction et service, demandes en retard, RCH à échéance) n'était masqué que pour les agents ; les valideurs le voyaient aussi. Il est maintenant **réservé aux comptes administrateurs** : l'entrée de menu disparaît pour les autres, et l'ouvrir directement par son adresse (#/hr) ramène au tableau de bord habituel. Le contrôle est aussi fait côté serveur : un appel direct à l'API est refusé.
+
+**Impact** : les valideurs qui consultaient ce tableau ne le voient plus ; ils gardent « Tableau de bord », « Mon équipe » et le planning de leur périmètre.
+
+**Vérifications** : 73 tests passent, dont un nouveau (administrateur accepté, valideur et agent refusés) ; menu et redirection non essayés à l'écran.

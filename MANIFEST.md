@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.14.3 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.14.4 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -212,7 +212,7 @@ Les niveaux sont codés dans l'application (`ROLE_LEVELS`) ; les rendre configur
 | Approuver / refuser une annulation | non | comme la validation | oui |
 | Créer / modifier des comptes | non | périmètre : paramètres, mot de passe ; ni rôle, ni rattachement, ni identifiant | tout |
 | Paramétrage, clés API, « en tant que » | non | non | oui |
-| Tableau de bord RH | non | oui | oui |
+| Tableau de bord RH | non | **non** | oui |
 
 - **DRO-01** — Tous les contrôles sont faits **côté serveur** ; l'interface masque seulement ce qui n'est pas permis.
 - **DRO-02** — Les **tableaux de bord, listes de fiches et planning** sont automatiquement limités au périmètre du compte.
@@ -370,7 +370,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **TDB-01** — **Synthèse de l'agent** (« Ma synthèse ») : ses soldes et l'accès à sa fiche (message d'invitation si aucune fiche n'existe pour l'année).
 - **TDB-02** — **Tableau de bord du valideur** : une ligne par fiche du périmètre (case « toutes les fiches ») avec cycle, CA pris / restant, RTT, sujétions, bonification, CET, total pris / restant ;
   regroupement par responsable.
-- **TDB-03** — **Tableau de bord RH** (non-agents) : **taux d'absence** = jours d'absence ÷ capacité de travail, global, **par direction / service** et en **arbre hiérarchique** ;
+- **TDB-03** — **Tableau de bord RH** (comptes administrateurs uniquement : menu masqué, accès direct et API refusés aux autres) : **taux d'absence** = jours d'absence ÷ capacité de travail, global, **par direction / service** et en **arbre hiérarchique** ;
   **demandes en retard** (en attente depuis plus de 3 jours) ; **RCH proches de l'expiration**. Les heures d'absence sont converties en jours (7 h = 1 jour).
 - **TDB-04** — Si le calcul d'une fiche échoue (fiche incomplète), la ligne affiche l'erreur **sans casser** le tableau.
 
@@ -761,6 +761,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.14.4** | 2026-11-16 | Tableau de bord RH réservé aux administrateurs. |
 | **0.14.3** | 2026-11-16 | Mon équipe : les entités d'abord, puis leurs membres. |
 | **0.14.2** | 2026-11-16 | Planning : titres de groupe par entité. |
 | **0.14.1** | 2026-11-16 | Planning : raison pour mon équipe, présence pour les autres, encadrants visibles. |

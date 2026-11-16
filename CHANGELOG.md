@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.14.4 — 2026-11-16 — Tableau de bord RH réservé aux administrateurs
+
+- Le Tableau de bord RH n'est plus accessible qu'aux comptes administrateurs : l'entrée de menu est masquée pour les valideurs et les agents, et l'accès direct par l'adresse (#/hr) ou par l'API est refusé.
+
 ## 0.14.3 — 2026-11-16 — Mon équipe : les entités d'abord, puis leurs membres
 
 - Mon équipe est classé par unité (entité) puis par membres : le titre de chaque entité, son responsable (★) en premier, puis les valideurs, puis les agents (ex. « Cellule administrative et financière » : Isabelle, puis Florian). Une personne est rangée dans son unité, à défaut dans celle de son valideur ; les unités de même nom sont regroupées ; déposer sur un titre place sous le responsable de l'entité.

@@ -3332,11 +3332,9 @@ def dashboard():
 
 
 @app.route("/api/hr-dashboard", methods=["GET"])
-@login_required
+@admin_required
 def hr_dashboard():
-    """Indicateurs RH : absences par unité, taux, retards et RCH à échéance."""
-    if _user_role(request.user) == "agent":
-        return jsonify({"error": "Accès réservé aux valideurs et administrateurs"}), 403
+    """Indicateurs RH : absences par unité, taux, retards et RCH à échéance (comptes administrateurs uniquement)."""
     year = _request_year()
     db = get_db()
     agents = _scope_agents(db, request.user, year)

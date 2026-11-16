@@ -1168,6 +1168,22 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_hr_dashboard_is_reserved_to_administrators(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2070,'HRVALID','VALIDEUR HR','x',0,'service',2,1)")
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2071,'HRSIMPLE','AGENT HR','x',0,'agent',2070,1)")
+        conn.commit()
+        conn.close()
+        try:
+            self.assertEqual(self._call("GET", "/api/hr-dashboard?year=2026", uid=1).status_code, 200)       # administrateur
+            self.assertEqual(self._call("GET", "/api/hr-dashboard?year=2026", uid=2070).status_code, 403)    # valideur non administrateur
+            self.assertEqual(self._call("GET", "/api/hr-dashboard?year=2026", uid=2071).status_code, 403)    # agent
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM users WHERE id IN (2070, 2071)")
+            conn.commit()
+            conn.close()
+
     def test_hr_tree_uses_unit_names_with_the_responsible_first(self):
         with self._units_patch():
             self._call("GET", "/api/org-units?refresh=1", uid=1)

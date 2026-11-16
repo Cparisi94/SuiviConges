@@ -375,7 +375,7 @@ function showApp() {
   const agentsNav = document.querySelector('#main-nav a[data-nav="agents"]');
   if (agentsNav) { agentsNav.textContent = "Mes fiches"; agentsNav.classList.toggle("hidden", isAgent); }   // l'agent passe par « Mes congés »
   const hrNav = $("#nav-hr");
-  if (hrNav) hrNav.classList.toggle("hidden", isAgent);
+  if (hrNav) hrNav.classList.toggle("hidden", !isAdmin);                 // tableau de bord RH : comptes administrateurs uniquement
   if (isAgent) state.planningFilter = "all";
   $("#nav-settings").classList.toggle("hidden", !isAdmin);
   const scopeBox = $("#scope-toggle");
@@ -684,7 +684,10 @@ async function route() {
   if (hash.startsWith("#/my-agents")) return viewMyAgents();
   if (hash.startsWith("#/agents")) { location.hash = "#/my-agents"; return; }   // « Mes fiches » est fusionné dans « Mon équipe »
   if (hash.startsWith("#/requests")) return viewRequests();
-  if (hash.startsWith("#/hr")) return viewHrDashboard();
+  if (hash.startsWith("#/hr")) {
+    if (!state.user || !state.user.admin) { location.hash = "#/dashboard"; return; }   // accès direct par l'adresse : réservé aux administrateurs
+    return viewHrDashboard();
+  }
   if (hash.startsWith("#/planning")) return viewPlanning();
   if (hash.startsWith("#/settings")) return viewAdmin(hash);
   if (hash.startsWith("#/users")) {
