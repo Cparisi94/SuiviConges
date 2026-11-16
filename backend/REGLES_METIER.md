@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.15.0.
+> Dernière mise à jour : version 0.17.0.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -12,6 +12,7 @@
 - **Périmètre** : un valideur voit et gère **les personnes qu'il valide et, de proche en proche, celles que ses subordonnés valident** (fiches, planning, demandes, tableaux de bord). **Un administrateur voit lui aussi son équipe par défaut** ; l'interrupteur **« Voir tout »** de la barre du haut lui montre toute la collectivité. Un agent ne voit que sa fiche (et le planning de son équipe, motifs masqués).
 - Un utilisateur ne peut pas être son propre responsable ; un agent doit être rattaché à un valideur ; un niveau intermédiaire peut être sauté.
 - À la suppression d'un compte, ses subordonnés **remontent** au premier ancêtre valide.
+- **Valideur et responsable d'unité** : un valideur peut passer un agent de son équipe en valideur (niveau déduit de son unité, jamais au-dessus de son propre valideur ; journalisé). **Le responsable d'une unité en est automatiquement le valideur** : le désigner responsable passe un agent valideur, et il valide les agents de son unité (avant les autres valideurs de cette unité). Un agent promu valideur **valide par défaut les agents de son unité** qui avaient le même valideur que lui. Dans Mon équipe, on peut sélectionner plusieurs personnes (Ctrl + clic) et les déplacer ensemble sous un valideur ; chaque déplacement suit les règles du déplacement à l'unité. Un valideur peut être **repassé agent** : les personnes qu'il valide remontent sous son propre valideur et il n'est plus responsable d'unité (impossible pour un administrateur, pour soi-même, ou sans valideur). Le **solde de CET** (jours) est lu dans Sedit RH (solde initial + dépôts − retraits) et affiché pour chaque personne de l'équipe ; dans la fiche, **un solde initial de CET non saisi est remplacé par celui de Sedit RH** (une valeur saisie prime). **Report des périodes** : la période reportée sur l'année suivante s'arrête à la **date de fin de contrat** de Sedit RH quand il y en a une ; un contrat terminé avant l'année n'est pas reconduit ; un récapitulatif est affiché. Le **valideur actuel** d'une fiche est le délégataire quand son valideur a délégué (« par délégation de … »). La **délégation automatique est activée par défaut** pour tous les valideurs. Les **absences saisies dans Sedit RH** (CM, GEM, CT, CP, SF) sont affichées en lecture seule dans le calendrier de la fiche, sans détail médical. Quand on rattache un agent de Sedit RH sous un valideur, seules les **entités de la direction de ce valideur** sont proposées comme unité.
 - **Suppression multiple** : les comptes cochés sont supprimés un par un avec les mêmes règles que la suppression à l'unité (périmètre du valideur, jamais son propre compte) ; les refus sont signalés.
 - Un **valideur de niveau Direction est validé par un DGA** (ou un DGS) ; un DGA par un DGS ; le valideur supérieur est toujours d'un niveau plus élevé.
 - Les contrôles sont faits **côté serveur** ; l'interface masque seulement ce qui n'est pas permis.
@@ -29,10 +30,10 @@
 
 ## 2. Création des personnes et rattachement
 
-- Une personne se crée **depuis Sedit RH** (recherche prédictive par nom, prénom ou matricule) : nom, prénom, matricule et unité d'affectation sont repris ; l'**e-mail et l'identifiant** sont cherchés dans l'**Active Directory** (identifiant attendu : initiale du prénom + nom, ex. `cparisi`) ; s'il y a plusieurs comptes, on choisit ; s'il n'y en a aucun, on saisit.
+- Une personne se crée **depuis Sedit RH** (recherche prédictive par nom, prénom ou matricule) : nom, prénom, matricule et unité d'affectation sont repris (un **directeur** — poste « Directeur·trice … », hors adjoint et direction générale — est rattaché à sa **direction**, par exemple BF, et non au secteur où il est affecté, par exemple BF1) ; l'**e-mail et l'identifiant** sont cherchés dans l'**Active Directory** (identifiant attendu : initiale du prénom + nom, ex. `cparisi`) et **devient l'identifiant du compte** ; s'il y a plusieurs comptes, on choisit ; s'il n'y en a aucun, on saisit.
 - Si l'annuaire n'a pas été trouvé à la création, le bouton **« Recherche AD »** de Mon équipe cherche le compte (par le nom ou un texte libre) et reprend son e-mail et son identifiant.
 - Le **matricule** est unique ; l'**identifiant AD** n'est utilisé que par un compte.
-- **Agent** : unité d'affectation obligatoire ; il est rattaché au valideur de son unité, sinon à celui de l'unité supérieure la plus proche ; son **compte** est créé (identifiant = initiale du prénom + nom, suffixe numérique si doublon). Sa **fiche congés** n'est créée que lorsqu'on lui définit au moins une **période de paramètres** (voir section 3).
+- **Agent** : unité d'affectation obligatoire ; il est rattaché au valideur de son unité, sinon à celui de l'unité supérieure la plus proche ; son **compte** est créé (identifiant = celui de l'**Active Directory** quand il est connu, ex. `machevalier` ; à défaut initiale du prénom + nom ; suffixe numérique si doublon, casse ignorée). Sa **fiche congés** n'est créée que lorsqu'on lui définit au moins une **période de paramètres** (voir section 3).
 - **Valideur** : unité d'affectation et **unité qui le valide** (forcément supérieure à la sienne, jamais de cycle). Une direction n'a pas d'unité supérieure : elle est validée par un **DGA** choisi dans la liste des valideurs DGA/DGS. Un DGA ou un DGS se crée sans unité.
 - **Administrateur en plus** : mot de passe local de secours obligatoire ; réservé aux administrateurs.
 - Un valideur ne crée que dans son périmètre ; chaque création est inscrite au **journal d'audit** des comptes.
@@ -139,3 +140,11 @@
 - Les agents de Sedit RH ne sont lus qu'à la demande et gardés quelques minutes en mémoire ; seuls ceux que l'on crée ou rapproche sont enregistrés.
 - Le **rapprochement des matricules** se fait par nom et prénom : seules les correspondances certaines sont proposées ; les homonymes ne sont jamais rapprochés automatiquement.
 - La **date d'arrivée** issue de Sedit RH n'est reprise que si elle tombe dans l'année de la fiche.
+
+## 12. Agenda Outlook (module exchange)
+
+- Un agent peut demander, dans « Ma synthèse », que ses absences soient **synchronisées automatiquement avec son agenda Outlook** (décochée par défaut ; personnelle).
+- Chaque **jour d'absence** devient un événement **« ABSENT »** (disponibilité « Absent du bureau »), sans autre texte ; une **demi-journée** donne un événement sur le matin ou l'après-midi. Le **télétravail** devient un événement en disponibilité **« Travaille ailleurs »**.
+- Les absences prises en compte sont celles du **taux d'absence** (CA, RTT, CM, CP, CT, GEM, SF, JS, JB…) ; les présences, week-ends et jours fériés ne produisent aucun événement. La synchronisation couvre **d'aujourd'hui à la fin de l'année suivante**.
+- L'application **ne modifie que les événements qu'elle a créés** ; décocher la case les retire de l'agenda ; les événements passés restent.
+

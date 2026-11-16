@@ -91,6 +91,18 @@ HUBDSI_API_KEY = os.environ.get("HUBDSI_API_KEY", "")
 SEDITRH_API_URL = os.environ.get("SEDITRH_API_URL", "")
 SEDITRH_API_KEY = os.environ.get("SEDITRH_API_KEY", "")
 
+# --- Module « exchange » : agenda Outlook des agents, via Microsoft Graph (identifiants d'une application Entra ID / Azure AD) --- #
+# Droit d'application requis : Calendars.ReadWrite (consentement administrateur). Vide = module non configuré (la case reste masquée).
+GRAPH_TENANT_ID = os.environ.get("GRAPH_TENANT_ID", "")
+GRAPH_CLIENT_ID = os.environ.get("GRAPH_CLIENT_ID", "")
+GRAPH_CLIENT_SECRET = os.environ.get("GRAPH_CLIENT_SECRET", "")
+GRAPH_API_URL = os.environ.get("GRAPH_API_URL", "https://graph.microsoft.com/v1.0").rstrip("/")
+GRAPH_LOGIN_URL = os.environ.get("GRAPH_LOGIN_URL", "https://login.microsoftonline.com").rstrip("/")
+EXCHANGE_TIMEZONE = os.environ.get("EXCHANGE_TIMEZONE", "Europe/Paris")
+EXCHANGE_MORNING = os.environ.get("EXCHANGE_MORNING", "08:30-12:30")          # horaires des demi-journées dans l'agenda
+EXCHANGE_AFTERNOON = os.environ.get("EXCHANGE_AFTERNOON", "13:30-17:30")
+EXCHANGE_INTERVAL_MIN = int(os.environ.get("EXCHANGE_INTERVAL_MIN", "10"))    # fréquence de la synchronisation automatique
+
 # --- TLS vers les services internes (certificats auto-signés de la Ville) -- #
 VILLE_CA_FILE = os.environ.get("VILLE_CA_FILE", "")
 VILLE_ALLOW_SELF_SIGNED_CERTS = _flag("VILLE_ALLOW_SELF_SIGNED_CERTS")

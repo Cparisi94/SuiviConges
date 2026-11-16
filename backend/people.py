@@ -104,6 +104,12 @@ def unit_valideur(db, index, code):
         unit = index.get(c)
         if not unit:
             continue
+        # Le responsable de l'unité en est automatiquement le valideur (même s'il est aussi administrateur).
+        head_id = unit.get("head_user_id")
+        if head_id:
+            head = db.execute("SELECT id, login, nom, role, admin, unit_code FROM users WHERE id=? AND actif=1 AND role<>'agent'", (head_id,)).fetchone()
+            if head:
+                return row_to_dict(head)
         direct = [u for u in users if u["unit_code"] == c]
         if direct:
             return max(direct, key=lambda u: LEVEL_RANK.get(u["role"], 0))
@@ -291,10 +297,13 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
                 user_id, login = create_account(db, nom, prenom, email, matricule, parent_id, ad_login)
                 result = {"fiche_id": None}
             else:
-                base = (prenom[:1] + nom).upper()
-                base = re.sub(r"[^A-Z0-9]", "", base) or "USER"
+                # Identifiant = celui de l'Active Directory quand il est connu (cn « machevalier »), sinon initiale du prénom + nom.
+                base = re.sub(r"[^A-Za-z0-9._-]", "", ad_login) if ad_login else ""
+                if not base:
+                    base = (prenom[:1] + nom).upper()
+                    base = re.sub(r"[^A-Z0-9]", "", base) or "USER"
                 login, n = base, 2
-                while db.execute("SELECT 1 FROM users WHERE login=?", (login,)).fetchone():
+                while db.execute("SELECT 1 FROM users WHERE lower(login)=lower(?)", (login,)).fetchone():
                     login, n = "%s%d" % (base, n), n + 1
                 password = secrets.token_urlsafe(18) + "Aa1!" if config.AUTH_MODE == "ad" and profil != "administrateur" \
                     else (d.get("password") or "")

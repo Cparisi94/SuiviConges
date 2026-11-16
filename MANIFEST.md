@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.15.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.17.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -248,8 +248,8 @@ Les niveaux sont codés dans l'application (`ROLE_LEVELS`) ; les rendre configur
   (5 … 1), **date d'arrivée**, **date de départ**, **reliquat** (jours), **solde CET**.
 - **FIC-04** — **Périodes multiples** : une fiche peut comporter plusieurs périodes de paramètres dans l'année (changement de quotité, de durée…) ;
   les droits sont calculés par période puis cumulés.
-- **FIC-05** — À la création d'une fiche, un **compte agent** est créé automatiquement (identifiant = initiale du prénom + nom en majuscules,
-  suffixe numérique en cas de doublon), rattaché au propriétaire. En mode AD, l'« Identifiant AD » du compte doit correspondre à l'identifiant Ville (voir Q3).
+- **FIC-05** — À la création d'une fiche, un **compte agent** est créé automatiquement (identifiant = **identifiant Active Directory** quand il est connu, ex. « machevalier » ; à défaut initiale du prénom + nom en majuscules ;
+  suffixe numérique en cas de doublon, casse ignorée), rattaché au propriétaire. En mode AD, l'« Identifiant AD » du compte doit correspondre à l'identifiant Ville (voir Q3).
 - **FIC-06** — Un seul « responsable d'unité » par propriétaire et par année : en désigner un nouveau retire l'ancien.
 
 ### 7.2 Multi-année
@@ -594,6 +594,7 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 - **DON-02** — Les **dates** sont du texte `AAAA-MM-JJ[ HH:MM:SS]` (heure de Paris) pour l'instant (D3) ; fuseau de la session de base : `Europe/Paris`.
 - **DON-03** — **Suppression** d'un compte : supprime ses fiches (cascade) ; l'archivage à la place est noté au backlog.
 - **DON-04** — **Suppression multiple** (Paramétrage > Utilisateurs) : cases à cocher par ligne (page affichée), confirmation listant les personnes, puis une suppression par compte avec les **mêmes règles que DON-03** (périmètre du valideur, jamais son propre compte) ; les refus sont listés après l'opération.
+- **MEQ-10** — **Passer en valideur** (Mon équipe, `POST /api/my-agents/<id>/promote`) : réservé aux valideurs et administrateurs, dans leur périmètre, jamais pour soi-même ; l'agent devient valideur au niveau de son unité (plafonné sous celui de son propre valideur) ; journalisé. **Le responsable d'une unité en est automatiquement le valideur** (`org_units.head_user_id`, prioritaire sur les autres valideurs de l'unité) ; désigner un agent responsable le passe valideur ; dans les deux cas il **valide par défaut les agents de son unité** qui avaient le même valideur que lui (`adopt_unit_agents`), et un responsable resté agent est promu à l'affichage de Mon équipe. **Sélection multiple** (Ctrl/Cmd + clic sur les fiches) puis glisser-déposer : une requête `POST /api/my-agents/move` par personne, avec barre de progression. **Rattachement d'un agent Sedit RH** (glisser sur son valideur) : la liste des unités proposées est limitée aux entités de la direction du valideur (`GET /api/my-agents/<id>/unit`) ; **Repasser un valideur en agent** (`POST /api/my-agents/<id>/demote`, bouton « ↓ Agent ») : mêmes droits que la promotion ; ses subordonnés remontent sous son propre valideur, il perd la responsabilité d'unité, journalisé ; refusé pour un administrateur, pour soi-même et sans valideur. Chaque carte affiche son valideur ; une entité locale est signalée « locale ». **Période et fiche** : le bouton de la fenêtre « Définir la période » s'appelle « Créer la période » ; la carte d'une personne qui a une période porte le lien « Fiche congés » ; le report sur l'année suivante se fait uniquement pour toute l'équipe (« Reporter les périodes en N+1 »), plus par carte. **Solde de CET** (Sedit RH) : `GET /api/my-agents/cet?uids=…` (Mon équipe, personnes de mon périmètre seulement, 300 au plus) et `GET /api/agents/<id>/cet` (fiche, mêmes droits de lecture que la fiche) ; une requête `GET /api/v1/cet?matricules=…&ouvert=true` par lot de 100 matricules, résultat conservé 10 minutes ; carte « CET : N j » chargée après l'affichage de la page. **Solde initial par défaut** : si le champ « Solde CET (j) » de la fiche est vide, le solde Sedit RH en mémoire le remplace dans le calcul (`/api/compute` avec `agent_id`, résumé du tableau de bord) ; une valeur saisie prime ; la clé `SEDITRH_API_KEY` doit avoir le droit `cet:read`, sinon la synthèse garde 0. **Valideur actuel** : `valideur_delegue` dans `GET /api/agents/<id>` (délégataire du valideur de la fiche si sa délégation est active) ; l'en-tête affiche « Valideur actuel » et « par délégation de … ». **Délégation automatique par défaut** : migration `0009_delegation_auto_par_defaut.sql` (`users.delegate_auto` à 1 par défaut et pour tous les comptes). **Absences Sedit RH dans la fiche** : `GET /api/agents/<id>/absences-rh` (mêmes droits que la fiche) ; codes CM, GEM, CT, CP, SF et dates seulement (jamais la nature détaillée) ; couleur claire, lecture seule, jours ouvrés sans saisie ; droit `absences:read` sur la clé. **Report des périodes et fin de contrat** : `POST /api/agents/duplicate` lit la date de départ de l'agent dans Sedit RH (`GET /api/v1/agents/<matricule>`) : la période de l'année suivante finit à cette date, un contrat terminé avant l'année n'est pas reconduit (`skipped`), Sedit RH indisponible = année entière signalée ; la page affiche un récapitulatif après le report. si l'unité propre à l'agent est hors de cette direction, il faut en choisir une.
 - **DON-04** — **Pièces jointes** : stockées hors base, dans un volume (`/data/uploads`), sous un nom aléatoire.
 
 ---
@@ -659,6 +660,14 @@ conteneur backend sans droits d'administrateur, dépendances sans vulnérabilit�
 - **DEP-07** — Les sauvegardes de la base relèvent de la DSI ; le volume des pièces jointes est à sauvegarder avec.
 
 ---
+
+## 22 bis. Module exchange : agenda Outlook (Microsoft Graph)
+
+- **EXC-01** — **Choix de l'agent** : carte « Agenda Outlook » dans « Ma synthèse » (`GET/PUT /api/exchange`, `POST /api/exchange/sync`) ; case décochée par défaut (`users.exchange_sync`) ; personnelle (refusée en mode « en tant que ») ; masquée tant que l'administrateur n'a pas configuré les identifiants Graph.
+- **EXC-02** — **Ce qui est écrit** : pour chaque jour d'absence (codes de `ABSENCE_CODES`), un événement dont le titre est **« ABSENT »**, disponibilité « Absent du bureau » (`showAs = oof`), « privé », sans rappel, sans corps ni participants ; une demi-journée donne un événement sur le matin (`EXCHANGE_MORNING`, 08:30-12:30) ou l'après-midi (`EXCHANGE_AFTERNOON`, 13:30-17:30), une journée complète un événement « toute la journée ».
+- **EXC-03** — **Télétravail** : un jour (ou une demi-journée) `TT` devient un événement « Télétravail » en disponibilité « Travaille ailleurs » (`workingElsewhere`).
+- **EXC-04** — **Suivi** : table `exchange_events` (une ligne par événement créé) ; la synchronisation ne touche que les événements qu'elle a créés ; fenêtre d'aujourd'hui à la fin de l'année suivante ; événements passés laissés dans l'agenda. Elle s'exécute à l'activation, à la demande, puis toutes les `EXCHANGE_INTERVAL_MIN` minutes (10 par défaut) ; désactiver retire les événements.
+- **EXC-05** — **Microsoft Graph** : flux « client credentials » d'une application Entra ID avec le droit d'application `Calendars.ReadWrite` (consentement administrateur), identifiants dans `.env` (`GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`), jamais affichés ni journalisés ; boîte visée = e-mail du compte ; nouvelles tentatives sur 429/503. Une panne est mémorisée (`users.exchange_error`) et affichée à l'agent.
 
 ## 23. Organisation du code et qualité
 
@@ -762,6 +771,8 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.17.0** | 2026-11-16 | Module exchange : absences dans l'agenda Outlook. |
+| **0.16.0** | 2026-11-16 | Mon équipe : valideur, unité entière, progression ; identifiants AD ; directeur rattaché à sa direction ; connexion par l'identifiant AD. |
 | **0.15.0** | 2026-11-16 | Utilisateurs : tableau compact (case Admin en colonne, pas de mot de passe en mode AD) et suppression multiple. |
 | **0.14.4** | 2026-11-16 | Tableau de bord RH réservé aux administrateurs. |
 | **0.14.3** | 2026-11-16 | Mon équipe : les entités d'abord, puis leurs membres. |

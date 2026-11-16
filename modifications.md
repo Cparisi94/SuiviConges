@@ -772,3 +772,48 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Impact** : un compte administrateur ne peut plus changer le mot de passe local de secours d'un administrateur depuis ce tableau en mode AD (le mot de passe se fixe à la création).
 
 **Vérifications** : 73 tests passent ; essai dans un navigateur sur une instance jetable (schéma temporaire, ensuite supprimé) : colonnes sans mot de passe en mode AD, case Admin en colonne, lignes compactes, sélection de deux comptes, confirmation listant les personnes puis suppression des deux ; l'affichage avec connexion locale (colonne « Mot de passe » conservée) n'a pas été essayé à l'écran.
+
+
+## Version 0.16.0 — Mon équipe : valideur, unité entière, progression ; identifiants AD
+
+**Ce qui a changé** : en créant une personne depuis Sedit RH, l'unité proposée est l'unité d'**affectation** de l'agent. Pour un directeur, Sedit RH l'affecte au secteur de sa direction (BF1 pour la Direction des systèmes d'information) alors qu'il dirige la direction entière (BF). Un agent dont le poste est « Directeur·trice … » (hors adjoint et direction générale) est maintenant proposé dans sa **direction**. La même règle s'applique à la liste des agents à rapprocher dans Mon équipe.
+
+**Impact** : seules les nouvelles créations sont concernées ; les comptes déjà créés ne sont pas modifiés. L'unité reste modifiable dans le formulaire.
+
+**Vérifications** : 5 tests automatiques (directeur, directrice, adjoint, direction générale, autre poste) ; non essayé à l'écran avec votre compte.
+
+**Connexion par l'identifiant AD** : l'application cherchait l'identifiant saisi dans l'identifiant de l'application seul (« MCHEVALIER »), pas dans l'identifiant Active Directory (« machevalier ») : saisir son identifiant Windows échouait avec « Identifiant/mot de passe incorrect ». Les deux sont maintenant acceptés, sans tenir compte de la casse ; si un même identifiant AD est porté par deux comptes, la connexion est refusée. Le mot de passe est toujours vérifié par l'AD, inchangé. Vérifié par 2 tests automatiques.
+
+**Identifiant = identifiant AD** : à la création d'une personne, l'identifiant du compte est maintenant celui de l'Active Directory quand il est trouvé (« machevalier » et non « MCHEVALIER »). Sans identifiant AD, l'ancienne règle (initiale du prénom + nom) s'applique ; en cas de doublon, un numéro est ajouté (casse ignorée). Les comptes déjà créés ne changent pas : leur identifiant se modifie dans Paramétrage > Utilisateurs.
+
+**Mon équipe — valideur, unité entière, progression** : (1) chaque agent a un bouton « ↑ Valideur » pour le passer en valideur ; (2) le **responsable d'une unité en est automatiquement le valideur** : le désigner responsable passe un agent valideur et il valide les agents de son unité ; (3) dans « Agents Sedit RH à ajouter », une case par unité sélectionne **toute l'unité** d'un coup, puis on glisse la sélection sur une personne ; (4) un agent passé valideur (ou désigné responsable de son unité) **valide par défaut les agents de son unité** qui avaient le même valideur que lui (ex. Farouk pour le Bureau des projets) ; (5) **Ctrl + clic** sélectionne plusieurs personnes pour les glisser ensemble sous leur valideur ; (6) la création de plusieurs agents affiche une **barre de progression** (« Création 12 sur 31… ») au lieu de sembler figée.
+
+**Impact** : les valideurs peuvent promouvoir un agent sans passer par un administrateur, dans leur périmètre. Les comptes déjà responsables d'unité mais restés agents ne sont pas modifiés automatiquement.
+
+**Vérifications** : 83 tests automatiques dont 5 nouveaux (promotion, adoption de l'unité, responsable = valideur, identifiant AD) ; sélection multiple, barre de progression et case d'unité : vérifiés à l'écran sur une instance jetable (schéma temporaire, supprimé ensuite) : Ctrl + clic sur deux fiches puis glisser sur un valideur (« 2 personnes déplacées »), et « ↑ Valideur » sur un agent (badge Valideur, un collègue de l'unité rattaché sous lui). Non essayés à l'écran : la case par unité dans « Agents Sedit RH à ajouter » et la barre de progression de la création d'agents.
+
+**Rattachement d'un agent Sedit RH** : en glissant un agent de « Agents Sedit RH à ajouter » sur son valideur, la fenêtre « Créer … » ne propose plus que les **entités de la direction de ce valideur** (par exemple celles de la Direction des systèmes d'information pour Marc CHEVALIER), au lieu de toutes les unités de la collectivité. Non essayé à l'écran.
+
+**Valideur affiché, entités, retour en agent** : chaque carte de Mon équipe indique son **valideur** ; les noms d'entités ont un **fond plus pâle** et une entité créée localement porte la mention **« locale »** ; un bouton **« ↓ Agent »** repasse un valideur en agent (les personnes qu'il valide remontent sous son propre valideur, et il n'est plus responsable d'unité). Vérifié à l'écran (valideur sur les cartes, fonds, « locale », présence du bouton) et par un test automatique du retour en agent (84 tests passent) ; le clic sur « ↓ Agent » n'a pas été essayé à l'écran.
+
+**Libellés de la période** : dans la fenêtre « Définir la période », le bouton s'appelle **« Créer la période »** ; une fois la période créée, la carte affiche **« Fiche congés »** au lieu de « Fiche 2026 » ; le bouton **« Reporter en 2027 »** propre à chaque carte est supprimé (le report se fait pour toute l'équipe avec « Reporter les périodes en 2027 »). Changement de libellés et retrait d'un bouton, non essayé à l'écran.
+
+**Solde de CET** : la carte de chaque personne dans Mon équipe affiche son solde de CET (« CET : 60 j »). Dans la fiche, si le « Solde CET (j) » n'est pas saisi, **le solde de Sedit RH est utilisé comme solde initial** (affiché en grisé dans le champ) : la synthèse affiche alors initial − jours posés, comme le tableau de bord. Une valeur saisie n'est jamais remplacée. Le solde Sedit RH contient déjà les retraits que la DRH a enregistrés : un jour de CET à la fois enregistré dans Sedit RH et posé dans le calendrier serait compté deux fois. **À faire sur le serveur** : droit `cet:read` (et `absences:read`) sur la clé de l'application dans l'API Sedit RH, sinon l'affichage indique « indisponible » ou la synthèse garde 0.
+
+**Valideur actuel et délégation** : l'en-tête de la fiche indique le « Valideur actuel » et, quand le valideur a délégué (absence ou période), le délégataire avec « par délégation de … ». **La délégation automatique est maintenant activée par défaut** pour tous les valideurs (migration 0009) ; chacun peut la désactiver dans « Délégation ».
+
+**Absences de Sedit RH dans la fiche** : CM, GEM, CT, CP et SF saisis dans Sedit RH s'affichent en couleur claire dans le calendrier (jours ouvrés sans saisie), en lecture seule, sans la nature détaillée de l'arrêt. Les demi-journées de début et de fin ne sont pas distinguées : un jour est coloré en entier.
+
+**Report des périodes et fin de contrat** : « Reporter les périodes en 2027 » s'arrête maintenant à la **date de fin de contrat** de Sedit RH (date de départ de l'agent) ; un contrat déjà terminé n'est pas reconduit. Une **fenêtre récapitulative** s'affiche ensuite : périodes reconduites (jusqu'à quelle date), limitées à la fin de contrat, non reconduites, refusées. Si Sedit RH est injoignable, la période couvre l'année entière et le récapitulatif le signale.
+
+**Vérifications** : 94 tests passent ; vérification à l'écran : voir ci-dessous.
+
+## Version 0.17.0 — Module exchange : absences dans l'agenda Outlook
+
+**Ce qui a changé** : nouveau module **« exchange »**. Dans **Ma synthèse**, une carte « Agenda Outlook » propose de synchroniser automatiquement vos absences avec votre agenda. Pour chaque jour d'absence, votre agenda affiche un événement **« ABSENT »** (rien d'autre : ni motif, ni code), en disponibilité « Absent du bureau » ; une demi-journée donne un événement le matin (08:30-12:30) ou l'après-midi (13:30-17:30). Les jours de **télétravail** apparaissent en « **Travaille ailleurs** » (titre « Télétravail »). Les modifications de votre fiche passent dans l'agenda en moins de 10 minutes, ou tout de suite avec « Synchroniser maintenant » ; décocher la case retire les événements.
+
+**À faire par l'administrateur avant usage** : créer une application dans Entra ID (Azure AD) avec le droit d'application **Calendars.ReadWrite** (consentement administrateur), puis renseigner `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID` et `GRAPH_CLIENT_SECRET` dans le `.env` (voir `.env.example`). Tant que ce n'est pas fait, la carte indique que le module n'est pas activé. Il faut aussi que les agents aient une adresse e-mail sur leur compte et une boîte Exchange Online. Conseil : limiter l'application aux boîtes concernées par une stratégie d'accès d'application Exchange.
+
+**Choix à confirmer** : titre « Télétravail » pour les jours de télétravail (vous aviez demandé uniquement le mode « Travaille ailleurs ») ; horaires des demi-journées ; événements marqués « privés » ; les absences retenues sont celles du taux d'absence (y compris temps partiel TP et récupération d'heures RCH).
+
+**Vérifications** : 105 tests automatiques (calcul des événements, journée, demi-journée, télétravail, création, mise à jour, suppression, panne, désactivation, jeton et nouvelles tentatives, routes) avec un Microsoft Graph **simulé**. **Non essayé avec un vrai agenda Outlook** : aucun identifiant Graph n'est disponible ici.

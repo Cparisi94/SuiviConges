@@ -92,7 +92,7 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(roles, sorted(roles, key=lambda r: -levels.get(r, 0)))
         for role in ("agent",):
             logins = [u["login"] for u in users if u["role"] == role]
-            self.assertEqual(logins, sorted(logins))
+            self.assertEqual(logins, sorted(logins, key=str.lower))     # tri sans tenir compte de la casse (identifiants AD en minuscules)
 
     def test_account_audit_on_update(self):
         response = self._call("PUT", "/api/users/5", payload={"actif": False, "login": "AGENT2BIS"})
@@ -177,6 +177,29 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertEqual(self._login("AD1", "mdp-ad").status_code, 200)
             self.assertEqual(calls[-1], "prenom.nom")
             self.assertEqual(self._login("AD1", "secret123").status_code, 401)  # mot de passe local refusé
+
+    def test_login_accepts_the_ad_identifier(self):
+        self._make_user("MXYZ", ad_login="mxyzad")
+        self._make_user("MXYZ2", ad_login="mxyzad2")
+        calls = []
+
+        def fake_auth(username, password):
+            calls.append(username)
+            return password == "mdp-ad"
+
+        with mock.patch.object(config, "AUTH_MODE", "ad"), \
+                mock.patch.object(apm, "ad_authenticate", fake_auth):
+            self.assertEqual(self._login("MXYZ", "mdp-ad").status_code, 200)       # identifiant de l'application
+            self.assertEqual(self._login("MxyzAD", "mdp-ad").status_code, 200)     # identifiant AD, sans tenir compte de la casse
+            self.assertEqual(calls[-1], "mxyzad")
+            self.assertEqual(self._login("mxyzad", "faux").status_code, 401)       # mauvais mot de passe toujours refusé
+            self.assertEqual(self._login("inconnu-ad", "mdp-ad").status_code, 401)
+
+    def test_login_ad_identifier_ambiguous_is_refused(self):
+        self._make_user("MDUP1", ad_login="dupad")
+        self._make_user("MDUP2", ad_login="dupad")
+        with mock.patch.object(config, "AUTH_MODE", "ad"), mock.patch.object(apm, "ad_authenticate", lambda u, p: True):
+            self.assertEqual(self._login("dupad", "x").status_code, 401)
 
     def test_login_ad_mode_service_down_and_admin_fallback(self):
         self._make_user("AD2")
@@ -1130,7 +1153,7 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertIsNone(delegation.active_delegate(conn, 3))                       # rien de configuré
             conn.close()
             r = self._call("GET", "/api/delegation", uid=3).get_json()
-            self.assertEqual((r["delegate"]["login"], r["auto"], r["periods"], r["active_now"]), ("DRH", False, [], False))
+            self.assertEqual((r["delegate"]["login"], r["auto"], r["periods"], r["active_now"]), ("DRH", True, [], False))   # délégation automatique activée par défaut
             self.assertEqual([(x["agent"], x["par"], x["dates"]) for x in r["done"]],
                              [("AGENT UN", "Direction RH", ["le 1 mai 2026"])])          # validé par le délégataire, pas par moi
             # Période explicite, même sans congés.
@@ -1152,6 +1175,10 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             self.assertEqual(delegation.active_delegate(conn, 3)["id"], 2)
             conn.close()
+            self.assertEqual(self._call("PUT", "/api/delegation/auto", uid=3, payload={"auto": False}).status_code, 200)   # le valideur peut la désactiver
+            conn = db.get_db()
+            self.assertIsNone(delegation.active_delegate(conn, 3))
+            conn.close()
             # Refus : période passée, dates inversées, valideur sans responsable.
             self.assertEqual(self._call("POST", "/api/delegation/periods", uid=3, payload={"start": "2020-01-01", "end": "2020-01-05"}).status_code, 400)
             self.assertEqual(self._call("POST", "/api/delegation/periods", uid=3, payload={"start": "2030-02-01", "end": "2030-01-01"}).status_code, 400)
@@ -1164,7 +1191,294 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.execute("DELETE FROM leave_requests WHERE id=2051")
             conn.execute("DELETE FROM agents WHERE id=2050")
             conn.execute("DELETE FROM delegations WHERE user_id=3")
-            conn.execute("UPDATE users SET delegate_auto=0 WHERE id=3")
+            conn.execute("UPDATE users SET delegate_auto=1 WHERE id=3")                     # valeur par défaut
+            conn.commit()
+            conn.close()
+
+    def test_promote_agent_to_validator_from_my_team(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2090,'PRAGENT','AGENT PROMU','x',0,'agent',2,1)")
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2091,'PRAUTRE','AUTRE AGENT','x',0,'agent',2090,1)")
+        conn.commit()
+        conn.close()
+        try:
+            self.assertEqual(self._call("POST", "/api/my-agents/2091/promote", uid=2091).status_code, 403)      # un agent ne peut pas promouvoir
+            self.assertEqual(self._call("POST", "/api/my-agents/1/promote", uid=1).status_code, 400)           # jamais son propre rôle
+            r = self._call("POST", "/api/my-agents/2090/promote", uid=1)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            self.assertNotEqual(r.get_json()["role"], "agent")
+            conn = db.get_db()
+            self.assertNotEqual(conn.execute("SELECT role FROM users WHERE id=2090").fetchone()["role"], "agent")
+            self.assertTrue(conn.execute("SELECT 1 FROM user_audit WHERE target_login='PRAGENT' AND field='rôle'").fetchone())   # journalisé
+            conn.close()
+            self.assertEqual(self._call("POST", "/api/my-agents/2090/promote", uid=1).status_code, 400)        # déjà valideur
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM user_audit WHERE target_login IN ('PRAGENT','PRAUTRE')")
+            conn.execute("DELETE FROM users WHERE id IN (2090, 2091)")
+            conn.commit()
+            conn.close()
+
+    def test_cet_initial_balance_defaults_to_the_sedit_rh_balance(self):
+        import sedit_rh
+        self._seed_period_settings()
+        conn = db.get_db()
+        conn.execute("UPDATE users SET matricule='CETD1' WHERE id=4")
+        conn.commit()
+        conn.close()
+        base = {"penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5}
+
+        def initial(params):
+            r = self._call("POST", "/api/compute", uid=1, payload={"params": params, "agent_id": 1, "year": 2026, "cells": {}})
+            self.assertEqual(r.status_code, 200, r.get_json())
+            return r.get_json()["solde"]["cet"]["initial"]
+
+        try:
+            with mock.patch.object(sedit_rh, "cet_cached", return_value=59.5):
+                self.assertEqual(initial(dict(base)), 59.5)                         # champ vide : solde Sedit RH
+                self.assertEqual(initial(dict(base, solde_cet=10)), 10)             # saisi : jamais remplacé
+            with mock.patch.object(sedit_rh, "cet_cached", return_value=None):
+                self.assertEqual(initial(dict(base)), 0)                            # Sedit RH inconnu : 0 comme avant
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE users SET matricule='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_fiche_shows_absences_from_sedit_rh_and_the_current_validator(self):
+        import sedit_rh
+        conn = db.get_db()
+        conn.execute("UPDATE users SET matricule='ABSR1' WHERE id=4")
+        conn.execute("DELETE FROM delegations WHERE user_id=3")
+        conn.commit()
+        conn.close()
+        try:
+            with mock.patch.object(sedit_rh, "absences", return_value=[{"code": "CM", "libelle": "Congé maladie", "debut": "2026-02-02", "fin": "2026-02-06"}]) as ab:
+                r = self._call("GET", "/api/agents/1/absences-rh", uid=1)
+                self.assertEqual(r.status_code, 200, r.get_json())
+                self.assertEqual(r.get_json()["items"][0]["code"], "CM")
+                self.assertEqual(ab.call_args[0][0], "ABSR1")
+                conn = db.get_db()
+                conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2130,'ABSOTH','AUTRE PERSONNE','x',0,'agent',1,1)")
+                conn.commit()
+                conn.close()
+                self.assertEqual(self._call("GET", "/api/agents/1/absences-rh", uid=2130).status_code, 404)    # une autre personne ne lit pas la fiche
+            with mock.patch.object(sedit_rh, "absences", side_effect=sedit_rh.SeditError("Accès refusé", 403)):
+                r = self._call("GET", "/api/agents/1/absences-rh", uid=1)
+                self.assertEqual((r.status_code, r.get_json()["items"]), (200, []))
+                self.assertIn("Accès refusé", r.get_json()["warning"])
+            # Valideur actuel : sans délégation, aucun ; avec une période de délégation en cours, le valideur du valideur
+            self.assertIsNone(self._call("GET", "/api/agents/1", uid=1).get_json()["valideur_delegue"])
+            import datetime as _dt
+            today = _dt.date.today()
+            conn = db.get_db()
+            conn.execute("INSERT INTO delegations (user_id, start_date, end_date) VALUES (3,?,?)", ((today - _dt.timedelta(days=1)).isoformat(), (today + _dt.timedelta(days=1)).isoformat()))
+            conn.commit()
+            conn.close()
+            deleg = self._call("GET", "/api/agents/1", uid=1).get_json()["valideur_delegue"]
+            self.assertEqual(deleg["id"], 2)
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM delegations WHERE user_id=3")
+            conn.execute("DELETE FROM users WHERE id=2130")
+            conn.execute("UPDATE users SET matricule='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_exchange_sync_creates_updates_and_removes_outlook_events(self):
+        import datetime as _dt
+        import exchange
+        today = _dt.date(2026, 11, 16)
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, email, mot_de_passe, admin, role, parent_id, actif, exchange_sync) VALUES (2150,'EXAGT','AGENT EXCHANGE','ex@ville.fr','x',0,'agent',2,1,1)")
+        conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, validator_id, year, params, periods) VALUES (2150, 2, 2150, 'EXAGT', 'X', '', 2, 2026, '{}', '[]')")
+        for jour, code in ((11160, "CA"), (11161, "CA"), (11170, "CA"), (11190, "TT"), (11191, "TT")):
+            conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2150, ?, ?)", (jour, code))
+        conn.commit()
+        calls = []
+
+        def fake_graph(method, path, body=None):
+            calls.append((method, path, body))
+            return {"id": "EV%d" % len(calls)} if method == "POST" else {}
+
+        try:
+            with mock.patch.object(exchange, "_graph", fake_graph):
+                s = exchange.sync_user(conn, 2150, today)
+                self.assertEqual((s["created"], s["deleted"], s["kept"], s["error"]), (3, 0, 0, ""))
+                posts = [c for c in calls if c[0] == "POST"]
+                self.assertEqual({c[1] for c in posts}, {"/users/ex@ville.fr/events"})
+                self.assertEqual(sorted((c[2]["subject"], c[2]["showAs"], c[2]["isAllDay"]) for c in posts),
+                                 [("ABSENT", "oof", False), ("ABSENT", "oof", True), ("Télétravail", "workingElsewhere", True)])
+                self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2150").fetchone()["n"], 3)
+                self.assertTrue(conn.execute("SELECT exchange_synced_at FROM users WHERE id=2150").fetchone()["exchange_synced_at"])
+                calls.clear()
+                s = exchange.sync_user(conn, 2150, today)                                  # rien n'a changé : aucun appel
+                self.assertEqual((s["created"], s["deleted"], s["kept"], calls), (0, 0, 3, []))
+                # La fiche change : le matin du 17 est retiré, le télétravail du 19 devient une absence.
+                conn.execute("DELETE FROM cells WHERE agent_id=2150 AND jour=11170")
+                conn.execute("UPDATE cells SET code='CA' WHERE agent_id=2150 AND jour IN (11190, 11191)")
+                conn.commit()
+                s = exchange.sync_user(conn, 2150, today)
+                self.assertEqual((s["created"], s["deleted"], s["kept"]), (1, 2, 1))
+                self.assertEqual(sorted(c[0] for c in calls), ["DELETE", "DELETE", "POST"])
+                # Microsoft Graph refuse : l'erreur est mémorisée, les événements déjà suivis ne sont pas oubliés.
+                conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2150, 11200, 'CA'), (2150, 11201, 'CA')")
+                conn.commit()
+            with mock.patch.object(exchange, "_graph", side_effect=exchange.ExchangeError("Microsoft Graph : HTTP 403", 403)):
+                s = exchange.sync_user(conn, 2150, today)
+                self.assertIn("HTTP 403", s["error"])
+                self.assertIn("HTTP 403", conn.execute("SELECT exchange_error FROM users WHERE id=2150").fetchone()["exchange_error"])
+                self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2150").fetchone()["n"], 2)
+            calls.clear()
+            with mock.patch.object(exchange, "_graph", fake_graph):
+                self.assertEqual(exchange.disable_user(conn, 2150), 2)                      # la désactivation retire les événements
+            self.assertEqual(sorted(c[0] for c in calls), ["DELETE", "DELETE"])
+            row = conn.execute("SELECT exchange_sync FROM users WHERE id=2150").fetchone()
+            self.assertEqual(row["exchange_sync"], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) AS n FROM exchange_events WHERE user_id=2150").fetchone()["n"], 0)
+            self.assertEqual(exchange.sync_user(conn, 2150, today)["created"], 0)           # désactivée : plus rien n'est écrit
+        finally:
+            conn.execute("DELETE FROM cells WHERE agent_id=2150")
+            conn.execute("DELETE FROM exchange_events WHERE user_id=2150")
+            conn.execute("DELETE FROM agents WHERE id=2150")
+            conn.execute("DELETE FROM users WHERE id=2150")
+            conn.commit()
+            conn.close()
+
+    def test_exchange_routes_need_a_mailbox_and_a_configured_module(self):
+        import exchange
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, email, mot_de_passe, admin, role, parent_id, actif) VALUES (2151,'EXOK','AGENT AVEC MAIL','exok@ville.fr','x',0,'agent',2,1)")
+        conn.execute("INSERT INTO users (id, login, nom, email, mot_de_passe, admin, role, parent_id, actif) VALUES (2152,'EXNOMAIL','AGENT SANS MAIL','','x',0,'agent',2,1)")
+        conn.commit()
+        conn.close()
+        try:
+            with mock.patch.object(exchange, "configured", return_value=False):
+                self.assertEqual(self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True}).status_code, 503)    # module non configuré
+                st = self._call("GET", "/api/exchange", uid=2151).get_json()
+                self.assertEqual((st["configured"], st["enabled"]), (False, False))
+            with mock.patch.object(exchange, "configured", return_value=True), mock.patch.object(exchange, "sync_user_async", return_value=True) as sync, \
+                    mock.patch.object(exchange, "disable_user_async", return_value=True) as off:
+                self.assertEqual(self._call("PUT", "/api/exchange", uid=2152, payload={"enabled": True}).status_code, 400)    # pas d'adresse e-mail
+                r = self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": True})
+                self.assertEqual((r.status_code, r.get_json()["enabled"], r.get_json()["email"]), (200, True, "exok@ville.fr"))
+                self.assertEqual(sync.call_args[0][0], 2151)
+                self.assertEqual(self._call("POST", "/api/exchange/sync", uid=2151).status_code, 200)
+                self.assertEqual(self._call("POST", "/api/exchange/sync", uid=2152).status_code, 400)                       # pas activée
+                r = self._call("PUT", "/api/exchange", uid=2151, payload={"enabled": False})
+                self.assertEqual((r.status_code, r.get_json()["enabled"]), (200, False))
+                self.assertEqual(off.call_args[0][0], 2151)
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM users WHERE id IN (2151, 2152)")
+            conn.commit()
+            conn.close()
+
+    def test_team_cet_balances_are_limited_to_my_scope(self):
+        import sedit_rh
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, matricule, mot_de_passe, admin, role, parent_id, actif) VALUES (2120,'CETIN','AGENT DANS MON EQUIPE','CETM1','x',0,'agent',2,1)")
+        conn.execute("INSERT INTO users (id, login, nom, matricule, mot_de_passe, admin, role, parent_id, actif) VALUES (2121,'CETOUT','AGENT D UN AUTRE','CETM2','x',0,'agent',1,1)")
+        conn.commit()
+        conn.close()
+        asked = []
+
+        def fake(mats):
+            asked.extend(mats)
+            return {"CETM1": {"solde": 12.5, "comptes": 1}}
+
+        try:
+            with mock.patch.object(sedit_rh, "cet_balances", fake):
+                r = self._call("GET", "/api/my-agents/cet?uids=2120,2121", uid=2)
+                self.assertEqual(r.status_code, 200, r.get_json())
+                self.assertEqual(asked, ["CETM1"])                                               # seule la personne de mon périmètre est demandée
+                self.assertEqual(r.get_json()["items"], {"2120": {"solde": 12.5, "comptes": 1}})
+                self.assertEqual(self._call("GET", "/api/my-agents/cet?uids=2120", uid=4).status_code, 403)   # un agent n'a pas accès à l'équipe
+            with mock.patch.object(sedit_rh, "cet_balances", side_effect=sedit_rh.SeditError("Accès refusé", 403)):
+                r = self._call("GET", "/api/my-agents/cet?uids=2120", uid=2)
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(r.get_json()["items"], {})
+                self.assertIn("Accès refusé", r.get_json()["warning"])                           # message clair si la clé n'a pas le droit cet:read
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM users WHERE id IN (2120, 2121)")
+            conn.commit()
+            conn.close()
+
+    def test_demote_validator_back_to_agent_moves_his_people_up(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2110,'DMVAL','VALIDEUR REPASSE','x',0,'secteur',2,1)")
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif) VALUES (2111,'DMAGT','AGENT DU VALIDEUR','x',0,'agent',2110,1)")
+        conn.commit()
+        conn.close()
+        try:
+            self.assertEqual(self._call("POST", "/api/my-agents/2111/demote", uid=2111).status_code, 403)     # un agent ne rétrograde personne
+            self.assertEqual(self._call("POST", "/api/my-agents/1/demote", uid=1).status_code, 400)           # jamais son propre rôle
+            self.assertEqual(self._call("POST", "/api/my-agents/2111/demote", uid=1).status_code, 400)        # déjà agent
+            r = self._call("POST", "/api/my-agents/2110/demote", uid=1)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            self.assertEqual(r.get_json()["moved"], 1)
+            conn = db.get_db()
+            self.assertEqual(conn.execute("SELECT role FROM users WHERE id=2110").fetchone()["role"], "agent")
+            self.assertEqual(conn.execute("SELECT parent_id FROM users WHERE id=2111").fetchone()["parent_id"], 2)   # remonté sous le valideur de l'ancien valideur
+            self.assertTrue(conn.execute("SELECT 1 FROM user_audit WHERE target_login='DMVAL' AND field='rôle'").fetchone())
+            conn.close()
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM user_audit WHERE target_login IN ('DMVAL','DMAGT')")
+            conn.execute("DELETE FROM users WHERE id IN (2111, 2110)")
+            conn.commit()
+            conn.close()
+
+    def test_promoted_validator_validates_the_agents_of_his_unit_by_default(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        conn = db.get_db()
+        for uid_, login, parent, unit in ((2092, "PAFAROUK", 2, "S1"), (2093, "PACOLL", 2, "S1"), (2094, "PAAUTRE", 3, "S1"), (2095, "PAHORS", 2, "K1")):
+            conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif, unit_code) VALUES (?,?,?,'x',0,'agent',?,1,?)",
+                         (uid_, login, login, parent, unit))
+        conn.commit()
+        conn.close()
+        try:
+            r = self._call("POST", "/api/my-agents/2092/promote", uid=1)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            self.assertGreaterEqual(r.get_json()["adopted"], 1)      # (d'autres agents de l'unité S1 peuvent exister dans la base d'essai)
+            conn = db.get_db()
+            parents = {row["id"]: row["parent_id"] for row in conn.execute("SELECT id, parent_id FROM users WHERE id IN (2092,2093,2094,2095)").fetchall()}
+            conn.close()
+            self.assertEqual(parents[2093], 2092)      # collègue de l'unité, même valideur : validé par le nouveau valideur
+            self.assertEqual(parents[2094], 3)         # autre valideur : inchangé
+            self.assertEqual(parents[2095], 2)         # autre unité : inchangé
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE users SET parent_id=2 WHERE parent_id=2092")                  # agents d'autres tests rattachés au nouveau valideur : rétablis
+            conn.execute("DELETE FROM user_audit WHERE target_login IN ('PAFAROUK','PACOLL','PAAUTRE','PAHORS')")
+            conn.execute("DELETE FROM users WHERE id IN (2092, 2093, 2094, 2095)")
+            conn.commit()
+            conn.close()
+
+    def test_unit_head_becomes_its_validator(self):
+        with self._units_patch():
+            self._call("GET", "/api/org-units?refresh=1", uid=1)
+        conn = db.get_db()
+        conn.execute("INSERT INTO users (id, login, nom, mot_de_passe, admin, role, parent_id, actif, unit_code) VALUES (2100,'HDAGENT','AGENT RESPONSABLE','x',0,'agent',2,1,'S1')")
+        conn.commit()
+        conn.close()
+        try:
+            r = self._call("PUT", "/api/my-agents/2100/unit", uid=1, payload={"unit_code": "S1", "head": True})
+            self.assertEqual(r.status_code, 200, r.get_json())
+            conn = db.get_db()
+            self.assertNotEqual(conn.execute("SELECT role FROM users WHERE id=2100").fetchone()["role"], "agent")   # désigné responsable : passe valideur
+            from people import unit_index, load_units, unit_valideur
+            index = unit_index(load_units(conn))
+            self.assertEqual(unit_valideur(conn, index, "S1")["id"], 2100)                                          # et valide son unité
+            conn.close()
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE org_units SET head_user_id=NULL WHERE head_user_id=2100")
+            conn.execute("UPDATE users SET parent_id=2 WHERE parent_id=2100")                  # agents d'autres tests rattachés au responsable : rétablis
+            conn.execute("DELETE FROM user_audit WHERE target_login='HDAGENT'")
+            conn.execute("DELETE FROM users WHERE id=2100")
             conn.commit()
             conn.close()
 
@@ -1307,6 +1621,44 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_duplicate_stops_the_period_at_the_contract_end_from_sedit_rh(self):
+        per = [{"start": "2026-01-01", "end": "2026-12-31", "penibilite": "Modérée", "duree_hebdo": "38 heures", "quotite": "100%", "jours_hebdo": 5}]
+        conn = db.get_db()
+        for uid_, login, mat in ((2140, "CTAGT1", "CTR01"), (2141, "CTAGT2", "CTR02"), (2142, "CTAGT3", "CTR03"), (2143, "CTAGT4", "CTR04")):
+            conn.execute("INSERT INTO users (id, login, nom, matricule, mot_de_passe, admin, role, parent_id, actif) VALUES (?,?,?,?,'x',0,'agent',2,1)", (uid_, login, login, mat))
+            conn.execute("INSERT INTO agents (id, user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, periods) "
+                         "VALUES (?,2,?,?,'X','',?,2,2026,'{}',?)", (uid_, uid_, login, mat, json.dumps(per)))
+        conn.commit()
+        conn.close()
+        ends = {"CTR01": "2027-06-30", "CTR02": "2026-10-15", "CTR03": None}
+
+        def fake_end(matricule):
+            if matricule == "CTR04":
+                raise sedit_rh.SeditError("Sedit RH injoignable")
+            return ends[matricule]
+
+        try:
+            with mock.patch.object(sedit_rh, "contract_end", fake_end):
+                r = self._call("POST", "/api/agents/duplicate", uid=1, payload={"ids": [2140, 2141, 2142, 2143], "year": 2027}).get_json()
+            by_nom = {c["nom"]: c for c in r["created"]}
+            self.assertEqual(sorted(by_nom), ["CTAGT1", "CTAGT3", "CTAGT4"])
+            self.assertEqual((by_nom["CTAGT1"]["period_end"], by_nom["CTAGT1"]["truncated"], by_nom["CTAGT1"]["contract_end"]), ("2027-06-30", True, "2027-06-30"))
+            self.assertEqual((by_nom["CTAGT3"]["period_end"], by_nom["CTAGT3"]["truncated"]), ("2027-12-31", False))          # pas de fin de contrat : toute l'année
+            self.assertEqual((by_nom["CTAGT4"]["period_end"], by_nom["CTAGT4"]["contract_check"]), ("2027-12-31", "indisponible"))   # Sedit RH en panne : année entière, signalé
+            self.assertEqual([(s["nom"], "15/10/2026" in s["reason"]) for s in r["skipped"]], [("CTAGT2", True)])             # contrat terminé avant 2027 : rien
+            conn = db.get_db()
+            new = conn.execute("SELECT periods, params FROM agents WHERE agent_user_id=2140 AND year=2027").fetchone()
+            self.assertEqual([(p["start"], p["end"]) for p in json.loads(new["periods"])], [("2027-01-01", "2027-06-30")])
+            self.assertEqual(json.loads(new["params"])["date_depart"], "2027-06-30")
+            self.assertIsNone(conn.execute("SELECT 1 FROM agents WHERE agent_user_id=2141 AND year=2027").fetchone())          # aucune fiche 2027
+            conn.close()
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM agents WHERE agent_user_id IN (2140,2141,2142,2143)")
+            conn.execute("DELETE FROM users WHERE id IN (2140,2141,2142,2143)")
+            conn.commit()
+            conn.close()
+
     def test_units_include_teams_carried_by_agents_but_missing_from_the_tree(self):
         tree = {"data": [{"code": "BF", "libelle": "DSI", "services": [{"code": "BF1", "libelle": "DSI", "secteurs": []}]}]}
         agents = [{"matricule": "1", "direction": {"code": "BF"}, "service": {"code": "BF1", "libelle": "DSI"},
@@ -1337,15 +1689,23 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertEqual(ok.status_code, 200, ok.get_json())
             unit = [u for u in self._call("GET", "/api/my-agents/4/unit", uid=1).get_json()["units"] if u["code"] == code][0]
             self.assertEqual((unit["local"], unit["head_user_id"], unit["level"]), (True, 4, "secteur"))
+            conn = db.get_db()
+            self.assertNotEqual(conn.execute("SELECT role FROM users WHERE id=4").fetchone()["role"], "agent")     # le responsable d'une unité devient valideur
+            conn.close()
             # La synchronisation Sedit RH ne supprime pas les unités locales.
             with self._units_patch():
                 self._call("GET", "/api/org-units?refresh=1", uid=1)
             self.assertIn(code, [u["code"] for u in self._call("GET", "/api/org-units", uid=1).get_json()])
+            conn = db.get_db()
+            conn.execute("UPDATE users SET role='agent' WHERE id=4")                                            # redevenu agent pour vérifier qu'un agent ne crée pas d'unité
+            conn.commit()
+            conn.close()
             self.assertEqual(self._call("POST", "/api/my-agents/units", uid=4, payload={"libelle": "Y", "parent_code": "S1"}).status_code, 403)   # un agent ne crée pas d'unité
         finally:
             conn = db.get_db()
             conn.execute("DELETE FROM org_units WHERE local=1")
-            conn.execute("UPDATE users SET unit_code='' WHERE id=4")
+            conn.execute("UPDATE users SET unit_code='', role='agent' WHERE id=4")                              # le responsable était devenu valideur : on le rétablit
+            conn.execute("DELETE FROM user_audit WHERE target_login='AGENT1' AND field='rôle'")
             conn.commit()
             conn.close()
 

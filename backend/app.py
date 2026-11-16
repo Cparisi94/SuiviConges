@@ -594,6 +594,10 @@ def login():
         # Identifiant insensible à la casse (AD : « cparisi », comptes créés depuis Sedit RH : « CPARISI ») ; ambigu = refusé.
         same = db.execute("SELECT * FROM users WHERE lower(login)=lower(?)", (login_name,)).fetchall()
         user = same[0] if len(same) == 1 else None
+        if not user and not same:
+            # Identifiant Active Directory saisi à la place de l'identifiant de l'application (« machevalier » pour « MCHEVALIER ») ; ambigu = refusé.
+            by_ad = db.execute("SELECT * FROM users WHERE ad_login<>'' AND lower(ad_login)=lower(?)", (login_name,)).fetchall()
+            user = by_ad[0] if len(by_ad) == 1 else None
     db.close()
     if not user:
         ratelimit.record(bucket)
@@ -1187,13 +1191,18 @@ def _normalize_periods(raw, params, year):
     return out
 
 
-def _agent_login(db, prenom, nom):
-    """Identifiant : première lettre du prénom + nom, en majuscules."""
-    base = (prenom.strip()[:1] + nom.strip()).upper()
-    base = re.sub(r"[^A-Z0-9]", "", base) or "AGENT"
+def _agent_login(db, prenom, nom, ad_login=""):
+    """Identifiant du compte : celui de l'Active Directory (cn, ex. « machevalier ») quand il est connu,
+    sinon première lettre du prénom + nom, en majuscules. Suffixe numérique si l'identifiant existe déjà (casse ignorée)."""
+    ad = re.sub(r"[^A-Za-z0-9._-]", "", (ad_login or "").strip())
+    if ad:
+        base = ad
+    else:
+        base = (prenom.strip()[:1] + nom.strip()).upper()
+        base = re.sub(r"[^A-Z0-9]", "", base) or "AGENT"
     login = base
     suffix = 2
-    while db.execute("SELECT 1 FROM users WHERE login=?", (login,)).fetchone():
+    while db.execute("SELECT 1 FROM users WHERE lower(login)=lower(?)", (login,)).fetchone():
         login = "%s%d" % (base, suffix)
         suffix += 1
     return login
@@ -1205,7 +1214,7 @@ def _agent_password():
 
 def _create_agent_account(db, nom, prenom, email, matricule, owner_id, ad_login=""):
     """Crée le compte d'un agent (sans fiche) rattaché à `owner_id`. Retourne (id du compte, identifiant)."""
-    login = _agent_login(db, prenom, nom)
+    login = _agent_login(db, prenom, nom, ad_login)
     full_name = ("%s %s" % (nom, prenom)).strip()
     cur = db.execute(
         "INSERT INTO users (login, ad_login, nom, nom_famille, prenom, email, matricule, mot_de_passe, admin, role, parent_id, actif) "
@@ -1319,6 +1328,53 @@ def agents_create():
     return jsonify(payload)
 
 
+@app.route("/api/agents/<int:aid>/absences-rh", methods=["GET"])
+@login_required
+def agents_absences_rh(aid):
+    """Absences saisies dans Sedit RH (CM, GEM, CT, CP, SF) de la personne d'une fiche, pour l'année de la fiche : mêmes droits de lecture
+    que la fiche ; chargées à part (Sedit RH est lent) et affichées en lecture seule dans le calendrier."""
+    import sedit_rh
+
+    db = get_db()
+    agent = _agent_by_id(db, aid)
+    if not agent or not _can_view_agent(db, request.user, agent):
+        db.close()
+        return jsonify({"error": "Fiche introuvable"}), 404
+    row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone() if agent["agent_user_id"] else None
+    year = int(agent["year"])
+    db.close()
+    matricule = ((row["matricule"] if row else "") or "").strip()
+    if not matricule:
+        return jsonify({"items": [], "year": year, "warning": "Matricule inconnu : les absences de Sedit RH ne peuvent pas être lues"})
+    try:
+        return jsonify({"items": sedit_rh.absences(matricule, year), "year": year})
+    except sedit_rh.SeditError as exc:
+        return jsonify({"items": [], "year": year, "warning": str(exc)})
+
+
+@app.route("/api/agents/<int:aid>/cet", methods=["GET"])
+@login_required
+def agents_cet(aid):
+    """Solde de CET (en jours) de la personne d'une fiche : mêmes droits de lecture que la fiche ; chargé à part (Sedit RH est lent)."""
+    import sedit_rh
+
+    db = get_db()
+    agent = _agent_by_id(db, aid)
+    if not agent or not _can_view_agent(db, request.user, agent):
+        db.close()
+        return jsonify({"error": "Fiche introuvable"}), 404
+    row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone() if agent["agent_user_id"] else None
+    db.close()
+    matricule = ((row["matricule"] if row else "") or "").strip()
+    if not matricule:
+        return jsonify({"cet": None, "warning": "Matricule inconnu : le solde de CET ne peut pas être lu"})
+    try:
+        found = sedit_rh.cet_balances([matricule]).get(matricule)
+    except sedit_rh.SeditError as exc:
+        return jsonify({"cet": None, "warning": str(exc)})
+    return jsonify({"cet": found, "matricule": matricule})
+
+
 @app.route("/api/agents/<int:aid>", methods=["GET"])
 @login_required
 def agents_get(aid):
@@ -1332,6 +1388,11 @@ def agents_get(aid):
     payload.update(_agent_flags(db, request.user, agent))
     payload["can_change_owner"] = _can_change_owner(db, request.user, agent)
     payload["owner_options"] = _owner_options(db, request.user, agent)
+    # Valideur actuel : si le valideur de la fiche délègue aujourd'hui (absence ou période de délégation), c'est son propre valideur.
+    import delegation
+
+    deleg = delegation.active_delegate(db, agent["user_id"])
+    payload["valideur_delegue"] = {"id": deleg["id"], "nom": deleg["nom"] or deleg["login"]} if deleg else None
     db.close()
     return jsonify(payload)
 
@@ -1611,6 +1672,12 @@ def agents_clone(aid):
     return jsonify(payload)
 
 
+def _fr_date(iso):
+    """AAAA-MM-JJ -> JJ/MM/AAAA (inchangé si le format est inattendu)."""
+    parts = (iso or "")[:10].split("-")
+    return "%s/%s/%s" % (parts[2], parts[1], parts[0]) if len(parts) == 3 else (iso or "")
+
+
 @app.route("/api/agents/duplicate", methods=["POST"])
 @login_required
 def agents_duplicate():
@@ -1624,8 +1691,10 @@ def agents_duplicate():
     if not isinstance(raw_ids, list) or not raw_ids:
         return jsonify({"error": "Aucune fiche sélectionnée"}), 400
     target = data.get("year")
+    import sedit_rh
+
     db = get_db()
-    created, errors = [], []
+    created, errors, skipped = [], [], []
     for raw in raw_ids:
         try:
             aid = int(raw)
@@ -1658,6 +1727,26 @@ def agents_duplicate():
         params["date_arrivee"] = ""
         params["date_depart"] = ""
         params = _normalize_params(params)
+        # Fin de contrat dans Sedit RH : la période ne dépasse jamais cette date ; contrat terminé avant l'année : rien n'est reconduit.
+        matricule = (source["matricule"] or "").strip()
+        if not matricule and source["agent_user_id"]:
+            mrow = db.execute("SELECT matricule FROM users WHERE id=?", (source["agent_user_id"],)).fetchone()
+            matricule = ((mrow["matricule"] if mrow else "") or "").strip()
+        contract_end, verified = None, "non_verifie"
+        if matricule and sedit_rh.configured():
+            try:
+                contract_end, verified = sedit_rh.contract_end(matricule), "verifie"
+            except sedit_rh.SeditError as exc:
+                app.logger.warning("Fin de contrat Sedit RH non lue (%s) : %s", matricule, exc)
+                verified = "indisponible"
+        period_end, truncated = "%04d-12-31" % year, False
+        if contract_end and contract_end < "%04d-01-01" % year:
+            skipped.append({"id": raw, "nom": source["nom"], "prenom": source["prenom"], "year": year, "contract_end": contract_end,
+                            "reason": "Contrat terminé le %s : aucune période n'est reconduite en %d" % (_fr_date(contract_end), year)})
+            continue
+        if contract_end and contract_end < period_end:
+            period_end, truncated = contract_end, True
+            params["date_depart"] = contract_end
         new_periods = []
         if params.get("penibilite") and params.get("quotite") and params.get("jours_hebdo") not in (None, ""):
             try:
@@ -1666,7 +1755,7 @@ def agents_duplicate():
                 jours = None
             days = _clean_work_days(params.get("jours_travailles"), jours) or _clean_work_days(None, jours)
             params["jours_travailles"] = days
-            new_periods = [{"start": "%04d-01-01" % year, "end": "%04d-12-31" % year, "penibilite": params["penibilite"],
+            new_periods = [{"start": "%04d-01-01" % year, "end": period_end, "penibilite": params["penibilite"],
                             "duree_hebdo": params.get("duree_hebdo") or "", "quotite": params["quotite"], "jours_hebdo": jours,
                             "jours_travailles": days, "ferie_travaille": bool(params.get("ferie_travaille"))}]
         cur = db.execute(
@@ -1684,10 +1773,13 @@ def agents_duplicate():
         created.append({
             "id": cur.lastrowid, "nom": source["nom"], "prenom": source["prenom"],
             "year": year, "can_edit": True,
+            "period_start": "%04d-01-01" % year if new_periods else None, "period_end": period_end if new_periods else None,
+            "contract_end": contract_end, "truncated": truncated and bool(new_periods), "contract_check": verified,
+            "has_period": bool(new_periods),
         })
     db.commit()
     db.close()
-    return jsonify({"created": created, "errors": errors})
+    return jsonify({"created": created, "errors": errors, "skipped": skipped})
 
 
 # --------------------------------------------------------------------------- #
@@ -3267,6 +3359,7 @@ def api_compute():
     if periods:
         normalized = _normalize_periods(periods, params, year)
         periods = normalized if normalized is not None else []
+    params = _sedit_cet_default_for_agent(request.user, data.get("agent_id"), params)    # solde initial de CET vide : celui de Sedit RH
     agent_for_rules = dict(params)
     agent_for_rules["periods"] = periods
     cassages = data.get("cassages") or []
@@ -3281,6 +3374,55 @@ def api_compute():
 # --------------------------------------------------------------------------- #
 #  Tableau de bord global
 # --------------------------------------------------------------------------- #
+def _sedit_cet_default(params, matricule):
+    """Solde initial de CET : celui saisi dans la fiche ; vide, celui lu dans Sedit RH (déjà en mémoire, sans appel réseau)."""
+    if not matricule or params.get("solde_cet") not in (None, ""):
+        return params
+    import sedit_rh
+
+    solde = sedit_rh.cet_cached(matricule)
+    return params if solde is None else dict(params, solde_cet=solde)
+
+
+def _sedit_cet_default_for_agent(user, agent_id, params):
+    """Idem pour une fiche demandée par l'interface (`agent_id`) : seulement si l'utilisateur a le droit de lire cette fiche."""
+    if params.get("solde_cet") not in (None, "") or not agent_id:
+        return params
+    try:
+        agent_id = int(agent_id)
+    except (TypeError, ValueError):
+        return params
+    db = get_db()
+    try:
+        agent = _agent_by_id(db, agent_id)
+        if not agent or not agent["agent_user_id"] or not _can_view_agent(db, user, agent):
+            return params
+        row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone()
+    finally:
+        db.close()
+    return _sedit_cet_default(params, ((row["matricule"] if row else "") or "").strip())
+
+
+def _warm_sedit_cet(agent_rows):
+    """Lit en une requête les soldes Sedit RH des fiches dont le solde initial de CET est vide (le résultat reste 10 minutes en mémoire)."""
+    import sedit_rh
+
+    ids = [r["agent_user_id"] for r in agent_rows
+           if r["agent_user_id"] and json_loads(r["params"]).get("solde_cet") in (None, "")]
+    if not ids or not sedit_rh.configured():
+        return
+    db = get_db()
+    try:
+        marks = ",".join("?" for _ in ids)
+        mats = [(m["matricule"] or "").strip() for m in db.execute("SELECT matricule FROM users WHERE id IN (%s)" % marks, tuple(ids)).fetchall()]
+    finally:
+        db.close()
+    try:
+        sedit_rh.cet_balances([m for m in mats if m])
+    except sedit_rh.SeditError as exc:
+        app.logger.warning("Solde CET Sedit RH indisponible : %s", exc)
+
+
 def _agent_summary_for_row(agent_row, settings):
     """Synthèse des soldes d'une fiche (ligne `agents` + `proprietaire`) ; {"error": …} si le calcul échoue."""
     params = json_loads(agent_row["params"])
@@ -3289,7 +3431,9 @@ def _agent_summary_for_row(agent_row, settings):
     cassages = _agent_cassages(db, agent_row["id"])
     hourly = _agent_hourly(db, agent_row["id"])
     recoveries = _agent_recoveries(db, agent_row["id"])
+    mat_row = db.execute("SELECT matricule FROM users WHERE id=?", (agent_row["agent_user_id"],)).fetchone() if agent_row["agent_user_id"] else None
     db.close()
+    params = _sedit_cet_default(params, (mat_row["matricule"] if mat_row else "") or "")     # solde initial de CET vide : celui de Sedit RH
     cells = {str(c["jour"]): c["code"] for c in cells_rows}
     agent_for_rules = dict(params)
     agent_for_rules["periods"] = json_loads(agent_row["periods"]) if agent_row["periods"] else []
@@ -3328,6 +3472,7 @@ def dashboard():
     db.close()
 
     settings = _settings_for_year(load_settings(), year)
+    _warm_sedit_cet(agents)
     return jsonify([_agent_summary_for_row(agent_row, settings) for agent_row in agents])
 
 
@@ -3826,6 +3971,65 @@ people.init_people(app, login_required, _can_manage_users, _scope_ids, _create_a
                    _clean_matricule, _matricule_holder, _normalize_params, _valid_email, _request_year, ROLE_LEVELS)
 
 
+import exchange  # noqa: E402
+
+exchange.set_absence_codes(ABSENCE_CODES)
+
+
+@app.route("/api/exchange", methods=["GET"])
+@login_required
+def exchange_status():
+    """État de la synchronisation Outlook de l'utilisateur (module « exchange », carte de « Ma synthèse »)."""
+    db = get_db()
+    try:
+        return jsonify(exchange.status(db, request.user["id"]))
+    finally:
+        db.close()
+
+
+@app.route("/api/exchange", methods=["PUT"])
+@login_required
+def exchange_set():
+    """Active ou désactive la synchronisation des absences avec l'agenda Outlook ; désactiver retire les événements créés."""
+    if getattr(request, "real_user", None):
+        return jsonify({"error": "Impossible en mode « en tant que » : la synchronisation d'agenda est personnelle"}), 403
+    enabled = bool((request.get_json(force=True) or {}).get("enabled"))
+    uid = request.user["id"]
+    db = get_db()
+    try:
+        if enabled:
+            if not exchange.configured():
+                return jsonify({"error": "Le module Exchange n'est pas configuré par l'administrateur"}), 503
+            if not (request.user.get("email") or "").strip():
+                return jsonify({"error": "Aucune adresse e-mail sur votre compte : l'agenda Outlook ne peut pas être joint"}), 400
+            db.execute("UPDATE users SET exchange_sync=1, exchange_error='' WHERE id=?", (uid,))
+            db.commit()
+            exchange.sync_user_async(uid)
+        else:
+            db.execute("UPDATE users SET exchange_sync=0 WHERE id=?", (uid,))
+            db.commit()
+            exchange.disable_user_async(uid)
+        return jsonify(exchange.status(db, uid))
+    finally:
+        db.close()
+
+
+@app.route("/api/exchange/sync", methods=["POST"])
+@login_required
+def exchange_sync_now():
+    """Relance tout de suite la synchronisation (sinon elle a lieu toutes les EXCHANGE_INTERVAL_MIN minutes)."""
+    if getattr(request, "real_user", None):
+        return jsonify({"error": "Impossible en mode « en tant que » : la synchronisation d'agenda est personnelle"}), 403
+    db = get_db()
+    try:
+        if not db.execute("SELECT exchange_sync FROM users WHERE id=?", (request.user["id"],)).fetchone()["exchange_sync"]:
+            return jsonify({"error": "La synchronisation Outlook n'est pas activée"}), 400
+        exchange.sync_user_async(request.user["id"])
+        return jsonify(exchange.status(db, request.user["id"]))
+    finally:
+        db.close()
+
+
 def bootstrap():
     init_db()
     try:
@@ -3856,7 +4060,10 @@ def bootstrap():
             print("[boot] Mot de passe initial (affiché une seule fois) : %s" % admin_password)
         print("[boot] Pensez à changer ce mot de passe dans l'onglet Paramétrage > Utilisateurs.")
     db.close()
+    import sedit_rh
+    sedit_rh.start_warmup()
     start_reminder_scheduler()
+    exchange.start_exchange_scheduler()
 
 
 if __name__ == "__main__":

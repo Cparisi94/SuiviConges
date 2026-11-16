@@ -69,7 +69,26 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             stack.extend(c["id"] for c in kids.get(i, []))
         return out
 
-    def promote(db, parent, child_unit, users_by_id, index):
+    def adopt_unit_agents(db, validator, users_by_id):
+        """Un valideur désigné dans une unité valide par défaut les agents de cette unité : ceux qui avaient le même valideur que lui
+        (ses collègues du groupe) passent sous lui. Retourne le nombre d'agents rattachés."""
+        unit, old_parent = validator.get("unit_code"), validator.get("parent_id")
+        if not unit or not old_parent:
+            return 0
+        n = 0
+        for u in list(users_by_id.values()):
+            if (u["role"] == "agent" and u["actif"] and u["id"] != validator["id"] and u["unit_code"] == unit
+                    and u["parent_id"] == old_parent and in_scope(db, u["id"])):
+                db.execute("UPDATE users SET parent_id=? WHERE id=?", (validator["id"], u["id"]))
+                db.execute("UPDATE agents SET user_id=?, validator_id=? WHERE agent_user_id=?", (validator["id"], validator["id"], u["id"]))
+                audit_user(db, u["id"], u["login"], request.user, "modification", "responsable",
+                           (users_by_id.get(old_parent) or {}).get("login", ""), validator["login"],
+                           "Validé par défaut par le valideur de son unité")
+                u["parent_id"] = validator["id"]
+                n += 1
+        return n
+
+    def promote(db, parent, child_unit, users_by_id, index, why="Devient valideur (agent rattaché sous lui)"):
         """Fait de `parent` un valideur : niveau déduit de son unité, plafonné sous celui de son propre valideur."""
         parent = dict(parent)
         if not parent["unit_code"] and child_unit:
@@ -85,7 +104,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             new_role = rank_name[rank]
             db.execute("UPDATE users SET role=? WHERE id=?", (new_role, parent["id"]))
             audit_user(db, parent["id"], parent["login"], request.user, "modification", "rôle", "agent", new_role,
-                       "Devient valideur (agent rattaché sous lui)")
+                       why)
             parent["role"] = new_role
         return parent
 
@@ -137,6 +156,15 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             units = load_units(db)
             index = people.unit_index(units)
             by_id, kids = children_map(db)
+            # Le responsable d'une unité en est le valideur : un responsable resté agent est promu (niveau déduit de son unité).
+            healed = False
+            for unit in units:
+                head = by_id.get(unit.get("head_user_id"))
+                if head and head["actif"] and head["role"] == "agent":
+                    head["role"] = promote(db, head, "", by_id, index, "Devient valideur (responsable de son unité)")["role"]
+                    healed = True
+            if healed:
+                db.commit()
             try:
                 year = int(request.args.get("year") or request_year())
             except (TypeError, ValueError):
@@ -160,6 +188,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
                 out = {"delegated": u["id"] in delegating and level == 1, "fiche": fiches.get(u["id"]), "year": year, "id": u["id"], "nom": u["nom"], "login": u["login"], "matricule": u["matricule"],
                        "role": u["role"], "admin": u["admin"], "actif": u["actif"], "no_email": not (u["email"] or "").strip(),
                        "profil": "agent" if u["role"] == "agent" else "valideur",
+                       "valideur": ((by_id.get(u["parent_id"]) or {}).get("nom") or (by_id.get(u["parent_id"]) or {}).get("login") or ""),
                        "unit_code": u["unit_code"], "unit_label": (index.get(u["unit_code"]) or {}).get("libelle", ""),
                        "unit_head": bool(u["unit_code"] and (index.get(u["unit_code"]) or {}).get("head_user_id") == u["id"]),
                        "children": []}
@@ -186,6 +215,35 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             return jsonify(node(me, {me["id"]}))
         finally:
             db.close()
+
+    # ------------------------------------------------------------------ solde de CET de l'équipe
+    @bp.route("/cet", methods=["GET"])
+    @login_required
+    def team_cet():
+        """Soldes de CET (jours) des personnes demandées (`uids` séparés par des virgules, 300 au plus) : seulement celles de mon périmètre ;
+        chargé à part par la page Mon équipe car Sedit RH est lent."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        try:
+            uids = [int(x) for x in (request.args.get("uids") or "").split(",") if x.strip()][:300]
+        except ValueError:
+            return error("Liste de personnes invalide", 400)
+        db = get_db()
+        try:
+            allowed = set(scope_ids(db, request.user)) | {request.user["id"]}
+            by_id, _kids = children_map(db)
+            mats = {}
+            for i in uids:
+                u = by_id.get(i)
+                if u and (request.user.get("admin") or i in allowed) and (u.get("matricule") or "").strip():
+                    mats[i] = u["matricule"].strip()
+        finally:
+            db.close()
+        try:
+            found = sedit_rh.cet_balances(mats.values())
+        except sedit_rh.SeditError as exc:
+            return jsonify({"items": {}, "warning": str(exc)})
+        return jsonify({"items": {str(i): found[m] for i, m in mats.items() if m in found}, "asked": len(mats)})
 
     # ------------------------------------------------------------------ agents Sedit RH
     @bp.route("/sirh", methods=["GET"])
@@ -402,15 +460,89 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
                 return error("Choisissez une unité de la même direction (liste proposée)", 400)
             db.execute("UPDATE users SET unit_code=? WHERE id=?", (code, uid))
             audit_user(db, uid, user["login"], request.user, "modification", "unité", current, code, "Unité modifiée depuis la fiche")
+            adopted = 0
             if "head" in body:   # responsable de l'unité : un compte ne dirige qu'une unité
                 if body["head"]:
                     db.execute("UPDATE org_units SET head_user_id=NULL WHERE head_user_id=?", (uid,))
                     db.execute("UPDATE org_units SET head_user_id=? WHERE code=?", (uid, code))
                     audit_user(db, uid, user["login"], request.user, "modification", "responsable d'unité", "", code, "Responsable de l'unité")
+                    if user["role"] == "agent":   # le responsable d'une unité en est le valideur : il passe valideur (niveau déduit de l'unité)
+                        head = promote(db, dict(user, unit_code=code), "", by_id, people.unit_index(load_units(db)),
+                                       "Devient valideur (responsable de son unité)")
+                        by_id[uid] = head
+                        adopted = adopt_unit_agents(db, head, by_id)
                 else:
                     db.execute("UPDATE org_units SET head_user_id=NULL WHERE code=? AND head_user_id=?", (code, uid))
             db.commit()
-            return jsonify({"unit_code": code})
+            return jsonify({"unit_code": code, "adopted": adopted})
+        finally:
+            db.close()
+
+    @bp.route("/<int:uid>/promote", methods=["POST"])
+    @login_required
+    def promote_user(uid):
+        """Passe un agent de mon équipe au rôle de valideur : niveau déduit de son unité, plafonné sous celui de son propre valideur."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        if uid == request.user["id"]:
+            return error("Impossible de modifier votre propre rôle", 400)
+        db = get_db()
+        try:
+            by_id, _kids = children_map(db)
+            user = by_id.get(uid)
+            if not user or not in_scope(db, uid):
+                return error("Cette personne n'est pas dans votre périmètre", 403)
+            if not user["actif"]:
+                return error("Ce compte est désactivé", 400)
+            if user["role"] != "agent":
+                return error("Cette personne est déjà valideur", 400)
+            index = people.unit_index(load_units(db))
+            promoted = promote(db, user, "", by_id, index, "Passé valideur depuis Mon équipe")
+            by_id[uid] = promoted
+            adopted = adopt_unit_agents(db, promoted, by_id)      # il valide par défaut les agents de son unité
+            db.commit()
+            return jsonify({"id": uid, "role": promoted["role"], "unit_code": promoted["unit_code"] or "", "adopted": adopted})
+        finally:
+            db.close()
+
+    @bp.route("/<int:uid>/demote", methods=["POST"])
+    @login_required
+    def demote_user(uid):
+        """Repasse un valideur de mon équipe au rôle d'agent : les personnes qu'il validait remontent sous son propre valideur ;
+        s'il était responsable d'une unité, il ne l'est plus."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        if uid == request.user["id"]:
+            return error("Impossible de modifier votre propre rôle", 400)
+        db = get_db()
+        try:
+            by_id, kids = children_map(db)
+            user = by_id.get(uid)
+            if not user or not in_scope(db, uid):
+                return error("Cette personne n'est pas dans votre périmètre", 403)
+            if user["role"] == "agent":
+                return error("Cette personne est déjà agent", 400)
+            if user["role"] == "administrateur" or user["admin"]:
+                return error("Compte administrateur : son rôle se change dans Paramétrage > Utilisateurs", 400)
+            new_parent = user["parent_id"]
+            if not new_parent or new_parent not in by_id:
+                return error("Cette personne n'a pas de valideur : ses agents n'auraient plus de responsable", 400)
+            moved = 0
+            for child in list(kids.get(uid, [])):
+                db.execute("UPDATE users SET parent_id=? WHERE id=?", (new_parent, child["id"]))
+                db.execute("UPDATE agents SET user_id=?, validator_id=? WHERE agent_user_id=?", (new_parent, new_parent, child["id"]))
+                audit_user(db, child["id"], child["login"], request.user, "modification", "responsable",
+                           user["login"], by_id[new_parent]["login"], "Remonte sous le valideur de %s (repassé agent)" % (user["nom"] or user["login"]))
+                moved += 1
+            lost = db.execute("SELECT code FROM org_units WHERE head_user_id=?", (uid,)).fetchall()
+            if lost:
+                db.execute("UPDATE org_units SET head_user_id=NULL WHERE head_user_id=?", (uid,))
+                audit_user(db, uid, user["login"], request.user, "modification", "responsable d'unité",
+                           ", ".join(r["code"] for r in lost), "", "Plus responsable de l'unité (repassé agent)")
+            db.execute("UPDATE users SET role='agent' WHERE id=?", (uid,))
+            audit_user(db, uid, user["login"], request.user, "modification", "rôle", user["role"], "agent", "Repasse agent depuis Mon équipe")
+            db.commit()
+            return jsonify({"id": uid, "role": "agent", "moved": moved, "head_removed": len(lost)})
         finally:
             db.close()
 

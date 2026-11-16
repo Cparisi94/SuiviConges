@@ -13,6 +13,33 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.0 — 2026-11-16 — Module exchange : absences dans l'agenda Outlook
+
+- Nouveau module « exchange » : dans « Ma synthèse », une case permet de synchroniser automatiquement vos absences avec votre agenda Outlook (via Microsoft Graph). Chaque jour d'absence est indiqué « ABSENT » dans l'agenda, sans autre texte ; une demi-journée donne un événement sur le matin ou l'après-midi.
+- Exchange : le télétravail (TT) apparaît dans l'agenda en « Travaille ailleurs ». Les événements suivent vos modifications de fiche (toutes les 10 minutes, ou tout de suite avec « Synchroniser maintenant ») ; décocher la case les retire de l'agenda.
+
+## 0.16.0 — 2026-11-16 — Mon équipe : valideur, unité entière, progression ; identifiants AD
+
+- Fiche congés : l'en-tête indique le « Valideur actuel » ; quand le valideur de la fiche a délégué (absence ou période de délégation en cours), il affiche le délégataire avec la mention « par délégation de … ».
+- Délégation automatique activée par défaut pour tous les valideurs (quand le valideur est absent une journée complète, son propre valideur est prévenu et trace ses validations) ; chacun peut la désactiver dans « Délégation ».
+- Fiche congés : les absences saisies dans Sedit RH (CM maladie, GEM garde d'enfant malade, CT maternité-paternité-adoption, CP présence parentale, SF soins à la famille) apparaissent en couleur claire dans le calendrier, sur les jours ouvrés sans saisie, en lecture seule ; seuls le code et les dates sont repris, jamais la nature détaillée de l'arrêt.
+- Report des périodes : si Sedit RH indique une date de fin de contrat, la période reportée s'arrête à cette date ; un contrat déjà terminé n'est pas reconduit ; une fenêtre récapitulative liste, après le report, ce qui a été reconduit (et jusqu'à quelle date), limité à la fin de contrat, non reconduit ou refusé.
+- Solde de CET : Mon équipe affiche « CET : 60 j » sur la carte de chaque personne ; dans la fiche, le « Solde CET (j) » (solde initial du CET) vide est remplacé par le solde de Sedit RH (affiché en grisé dans le champ) : la synthèse et le tableau de bord le prennent en compte (initial − jours de CET posés). Le solde vient de l'API Sedit RH (solde initial + dépôts − retraits des comptes ouverts) ; la clé de l'API doit avoir le droit cet:read. Une valeur saisie n'est jamais remplacée.
+- Mon équipe, définir la période : le bouton devient « Créer la période » ; une fois une période créée, le lien de la carte s'appelle « Fiche congés » (et non « Fiche 2026 ») ; le bouton « Reporter en 2027 » de chaque carte disparaît (le report se fait pour toute l'équipe avec « Reporter les périodes en 2027 »).
+- Mon équipe : chaque carte indique le valideur de la personne (« Valideur : … »), les noms d'entités ont un fond plus pâle, et une entité créée localement porte la mention « locale ».
+- Mon équipe : un bouton « ↓ Agent » repasse un valideur en agent ; les personnes qu'il validait remontent sous son propre valideur, et s'il était responsable d'une unité il ne l'est plus. Refusé pour un compte administrateur, pour soi-même et sans valideur.
+- Mon équipe : en glissant un agent de « Agents Sedit RH à ajouter » sur son valideur, la liste des unités proposées se limite aux entités de la direction de ce valideur (la même liste que « ✎ Unité »).
+- Mon équipe : quand un agent est passé valideur (bouton « ↑ Valideur » ou désigné responsable de son unité), il valide par défaut les agents de son unité qui avaient le même valideur que lui (ex. Bureau des projets) ; le nombre d'agents rattachés est annoncé.
+- Mon équipe : un responsable d'unité qui était resté « Agent » est promu valideur à l'affichage, et le badge affiche bien « Valideur ».
+- Mon équipe : Ctrl (ou Cmd) + clic sélectionne plusieurs personnes ; en les glissant sur leur valideur, elles sont toutes déplacées d'un coup, avec une barre de progression et la liste des refus éventuels.
+- Mon équipe : un bouton « ↑ Valideur » sur chaque agent le passe en valideur (niveau déduit de son unité, jamais au-dessus de son propre valideur) ; l'action est journalisée.
+- Mon équipe : le responsable d'une unité en est automatiquement le valideur ; désigner un agent responsable de son unité le passe valideur, et il valide les agents de cette unité.
+- Mon équipe, agents Sedit RH à ajouter : une case par unité sélectionne toute l'unité d'un coup (état partiel si une partie seulement) ; on glisse ensuite la sélection sur une personne.
+- Création de plusieurs agents : une barre de progression indique « Création 12 sur 31 : nom prénom… » ; les échecs éventuels sont comptés puis listés.
+- Création d'une personne depuis Sedit RH : un directeur (poste « Directeur·trice … », hors adjoint et direction générale) est proposé dans sa direction (ex. BF) et non plus dans le secteur où il est affecté (ex. BF1). La même règle s'applique à la liste des agents à rapprocher dans Mon équipe.
+- Connexion : l'identifiant Active Directory (ex. « machevalier ») est accepté à la place de l'identifiant de l'application (ex. « MCHEVALIER »), sans tenir compte de la casse ; un identifiant AD porté par plusieurs comptes est refusé.
+- Création d'une personne : l'identifiant du compte est celui de l'Active Directory quand il est trouvé (ex. « machevalier »), et non plus « initiale du prénom + nom » (« MCHEVALIER »).
+
 ## 0.15.0 — 2026-11-16 — Utilisateurs : tableau compact et suppression multiple
 
 - Utilisateurs : le tableau est plus compact (lignes moins hautes) ; la case « Admin » devient une colonne à part ; la colonne « Mot de passe » disparaît quand la connexion se fait par l'Active Directory.

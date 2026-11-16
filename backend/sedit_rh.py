@@ -10,6 +10,7 @@ donnée personnelle n'est lue. La liste des agents en poste (`/api/v1/agents`, d
 demande de l'administrateur (organisation RH, matricules, création d'agents) et seulement gardée en mémoire.
 """
 import threading
+import re
 import time
 
 import requests
@@ -60,6 +61,126 @@ def _get(path, params=None, timeout=30):
     if resp.status_code == 403:
         raise SeditError("Accès refusé par l'API Sedit RH%s" % (" : " + detail if detail else ""), 403)
     raise SeditError("Erreur de l'API Sedit RH (HTTP %s)%s" % (resp.status_code, " : " + detail if detail else ""), resp.status_code)
+
+
+_CET_TTL = 600                # un solde est conservé 10 minutes
+_cet_cache = {}               # matricule -> (instant, {"solde", "comptes"} ou None s'il n'a pas de CET)
+
+
+def cet_balances(matricules):
+    """Soldes de CET (en jours) des matricules donnés : {matricule: {"solde": float, "comptes": int}} ; un agent sans CET est absent.
+
+    Le solde est `solde_calcule` de l'API Sedit RH (solde initial + dépôts - retraits) pour les comptes ouverts. Droit `cet:read` requis
+    sur la clé ; une seule requête par lot de 100 matricules ; résultat conservé 10 minutes."""
+    mats = sorted({(m or "").strip() for m in matricules if (m or "").strip()})
+    out, todo, now = {}, [], time.monotonic()
+    with _lock:
+        for m in mats:
+            hit = _cet_cache.get(m)
+            if hit and now - hit[0] < _CET_TTL:
+                if hit[1] is not None:
+                    out[m] = hit[1]
+            else:
+                todo.append(m)
+    for i in range(0, len(todo), 100):
+        batch = todo[i:i + 100]
+        data = _get("/api/v1/cet", {"matricules": ",".join(batch), "ouvert": "true", "limit": 500}, timeout=120)
+        found = {}
+        for compte in data.get("data") or []:
+            m = (compte.get("matricule") or "").strip()
+            s = found.setdefault(m, {"solde": 0.0, "comptes": 0})
+            s["solde"] += float(compte.get("solde_calcule") or 0)
+            s["comptes"] += 1
+        with _lock:
+            stamp = time.monotonic()
+            for m in batch:
+                _cet_cache[m] = (stamp, found.get(m))
+        out.update(found)
+    return out
+
+
+def start_warmup(period=240):
+    """Garde en mémoire l'organisation et la liste des agents de Sedit RH (rafraîchies toutes les 4 minutes, avant l'expiration du cache de
+    5 minutes) : une page ne reste plus bloquée, avec une connexion PostgreSQL occupée, le temps d'un appel lent à Sedit RH."""
+    if not configured():
+        return
+
+    def loop():
+        while True:
+            for fn in (organisation_units, all_agents):
+                try:
+                    fn(force=True)
+                except Exception as exc:  # noqa: BLE001 — l'application reste utilisable sans Sedit RH
+                    print("[sedit-rh] préchauffage impossible (%s) : %s" % (fn.__name__, exc))
+            time.sleep(period)
+
+    threading.Thread(target=loop, daemon=True, name="sedit-warmup").start()
+
+
+_end_cache = {}               # matricule -> (instant, date de fin de contrat ISO ou None)
+
+
+def contract_end(matricule):
+    """Date de fin de contrat (AAAA-MM-JJ) d'un agent dans Sedit RH (champ « date de départ » de sa fiche), ou None s'il n'en a pas.
+
+    Interroge la fiche de l'agent (même s'il n'est plus en poste) ; résultat conservé 10 minutes. Lève SeditError si Sedit RH est injoignable."""
+    matricule = (matricule or "").strip()
+    if not matricule:
+        return None
+    with _lock:
+        hit = _end_cache.get(matricule)
+    if hit and time.monotonic() - hit[0] < _CET_TTL:
+        return hit[1]
+    try:
+        data = _get("/api/v1/agents/" + matricule, timeout=60)
+    except SeditError as exc:
+        if exc.status == 404:
+            data = {"data": {}}                      # agent inconnu de Sedit RH : pas de date connue
+        else:
+            raise
+    fin = ((data.get("data") or {}).get("date_depart") or "")[:10] or None
+    with _lock:
+        _end_cache[matricule] = (time.monotonic(), fin)
+    return fin
+
+
+ABSENCE_LABELS = {"CM": "Congé maladie", "GEM": "Garde d'enfant malade", "CT": "Maternité, paternité, adoption",
+                  "CP": "Présence parentale", "SF": "Soins à un membre de la famille"}
+_abs_cache = {}               # (matricule, année) -> (instant, liste)
+
+
+def absences(matricule, year):
+    """Absences saisies dans Sedit RH pour une personne et une année civile : [{"code", "libelle", "debut", "fin"}].
+
+    Seuls le code du calendrier (CM, GEM, CT, CP, SF), son libellé court et les dates sont repris : jamais la nature détaillée de l'arrêt
+    (longue maladie, ALD, accident…). Droit `absences:read` requis sur la clé ; résultat conservé 10 minutes."""
+    matricule = (matricule or "").strip()
+    key = (matricule, int(year))
+    with _lock:
+        hit = _abs_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _CET_TTL:
+        return hit[1]
+    data = _get("/api/v1/absences", {"matricule": matricule, "du": "%d-01-01" % int(year), "au": "%d-12-31" % int(year), "limit": 500}, timeout=120)
+    out = []
+    for a in data.get("data") or []:
+        code = ((a.get("famille") or {}).get("code_app") or "").strip()
+        debut = (a.get("date_debut") or "")[:10]
+        if code not in ABSENCE_LABELS or not debut:
+            continue
+        out.append({"code": code, "libelle": ABSENCE_LABELS[code], "debut": debut, "fin": (a.get("date_fin") or debut)[:10]})
+    out.sort(key=lambda x: (x["debut"], x["code"]))
+    with _lock:
+        _abs_cache[key] = (time.monotonic(), out)
+    return out
+
+
+def cet_cached(matricule):
+    """Solde de CET (jours) déjà lu pour ce matricule, sans appel réseau ; None s'il n'est pas en mémoire ou si l'agent n'a pas de CET."""
+    with _lock:
+        hit = _cet_cache.get((matricule or "").strip())
+    if hit and time.monotonic() - hit[0] < _CET_TTL and hit[1] is not None:
+        return hit[1]["solde"]
+    return None
 
 
 def headcount():
@@ -119,15 +240,35 @@ def _fold(value):
     return " ".join(text.replace("-", " ").replace("'", " ").split())
 
 
+_DIRECTEUR = re.compile(r"^\s*DIRECT(EUR|RICE)\b")
+_NON_DIRECTEUR = re.compile(r"ADJOINT|GENERAL")
+
+
+def _est_directeur(a):
+    """Poste de directeur d'une direction (« DIRECTEUR·TRICE DES SYSTEMES D'INFORMATION ») : ni adjoint, ni direction générale."""
+    import unicodedata
+    poste = unicodedata.normalize("NFKD", ((a.get("poste") or {}).get("libelle") or "").replace("·", " ")).encode("ascii", "ignore").decode().upper()
+    return bool(_DIRECTEUR.search(poste)) and not _NON_DIRECTEUR.search(poste)
+
+
+def _unite_agent(a):
+    """Unité d'un agent : son affectation, sauf pour un directeur, rattaché à sa direction (BF) et non au secteur où il est affecté (BF1)."""
+    aff = a.get("affectation") or {}
+    direction = a.get("direction") or {}
+    if _est_directeur(a) and (direction.get("code") or "").strip():
+        return (direction.get("code") or "").strip(), (direction.get("libelle") or "").strip()
+    return aff.get("code") or "", (aff.get("libelle") or "").strip()
+
+
 def _agent_summary(a):
     """Champs utiles à la création d'une personne (jamais l'enregistrement complet)."""
     def lab(key):
         return ((a.get(key) or {}).get("libelle") or "").strip()
 
-    aff = a.get("affectation") or {}
+    unit_code, unit_libelle = _unite_agent(a)
     return {
         "matricule": a.get("matricule") or "", "nom": (a.get("nom") or "").strip(), "prenom": (a.get("prenom") or "").strip(),
-        "unit_code": aff.get("code") or "", "unit_libelle": (aff.get("libelle") or "").strip(),
+        "unit_code": unit_code, "unit_libelle": unit_libelle,
         "direction": lab("direction"), "service": lab("service"), "secteur": lab("secteur"),
         "statut": lab("statut"), "fonction": lab("fonction"), "date_arrivee": (a.get("date_arrivee") or "")[:10],
         "date_depart": (a.get("date_depart") or "")[:10],

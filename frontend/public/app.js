@@ -722,6 +722,7 @@ async function viewAgentDashboard() {
         method: "POST",
         body: JSON.stringify({
           params: f.params,
+          agent_id: f.id,
           periods: f.periods || [],
           cells: f.cells,
           year: f.year,
@@ -856,9 +857,58 @@ async function viewAgentDashboard() {
 
     const hoursBtn = $("#agent-hours-detail");
     if (hoursBtn) hoursBtn.addEventListener("click", openHoursDetailModal);
+    setupExchangeCard(c);
   } catch (err) {
     c.innerHTML = `<h1>Ma synthèse ${state.year || ""}</h1><div class="form-error">${esc(err.message)}</div>`;
   }
+}
+
+/* Module « exchange » : carte de « Ma synthèse » pour synchroniser les absences avec l'agenda Outlook (Microsoft Graph) */
+async function setupExchangeCard(c) {
+  const anchor = c.querySelector(".agent-account-card");
+  if (!anchor) return;
+  let st;
+  try { st = await api("/api/exchange"); } catch (_) { return; }
+  anchor.insertAdjacentHTML("afterend", `<div class="card exchange-card" id="exchange-card"></div>`);
+  const card = $("#exchange-card");
+  const fmtDate = (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)} à ${s.slice(11, 16)}` : "");
+  let timer = null;
+  const draw = (s) => {
+    st = s;
+    if (!s.configured) {
+      card.innerHTML = `<h3>Agenda Outlook</h3><p class="muted">La synchronisation avec Outlook n'est pas encore activée par l'administrateur de l'application.</p>`;
+      return;
+    }
+    const line = s.error ? `<div class="form-error">${esc(s.error)}</div>`
+      : s.running ? `<p class="muted">Synchronisation en cours…</p>`
+      : s.enabled ? `<p class="muted">${s.synced_at ? `Dernière synchronisation le ${esc(fmtDate(s.synced_at))} — ` : ""}${s.events} événement(s) dans votre agenda.</p>` : "";
+    card.innerHTML = `<h3>Agenda Outlook</h3>
+      <label class="inline exchange-toggle"><input type="checkbox" id="ex-enabled" ${s.enabled ? "checked" : ""}> Synchroniser automatiquement mes absences avec mon agenda Outlook</label>
+      <p class="muted exchange-help">Chaque jour d'absence — ou demi-journée (${esc(s.morning)} le matin, ${esc(s.afternoon)} l'après-midi) — est indiqué « <b>ABSENT</b> » dans votre agenda, sans autre texte. Le télétravail apparaît en « <b>Travaille ailleurs</b> ». Décocher retire ces événements de votre agenda.</p>
+      ${line}
+      ${s.enabled ? `<button type="button" class="btn btn-small" id="ex-sync" ${s.running ? "disabled" : ""}>Synchroniser maintenant</button>` : ""}`;
+    $("#ex-enabled").addEventListener("change", async (e) => {
+      e.target.disabled = true;
+      try { draw(await api("/api/exchange", { method: "PUT", body: JSON.stringify({ enabled: e.target.checked }) })); poll(); }
+      catch (err) { draw(st); card.insertAdjacentHTML("beforeend", `<div class="form-error">${esc(err.message)}</div>`); }
+    });
+    const b = $("#ex-sync");
+    if (b) b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { draw(await api("/api/exchange/sync", { method: "POST" })); poll(); } catch (err) { b.disabled = false; card.insertAdjacentHTML("beforeend", `<div class="form-error">${esc(err.message)}</div>`); }
+    });
+  };
+  // Tant qu'une synchronisation est en cours, on revient voir l'état toutes les 3 secondes (la page peut avoir changé entre-temps)
+  const poll = () => {
+    clearTimeout(timer);
+    if (!$("#exchange-card")) return;
+    timer = setTimeout(async () => {
+      if (!$("#exchange-card")) return;
+      try { const s = await api("/api/exchange"); draw(s); if (s.running) poll(); } catch (_) { /* nouvel essai au prochain affichage */ }
+    }, 3000);
+  };
+  draw(st);
+  if (st.running) poll();
 }
 
 
@@ -2280,7 +2330,9 @@ function renderFiche() {
         <input type="text" id="f-nom" value="${esc(f.nom)}"${dis}></label>
       <label class="fiche-name-field">Prénom
         <input type="text" id="f-prenom" value="${esc(f.prenom || "")}"${dis}></label>
-      ${f.user_id !== state.user.id ? `<span class="fiche-owner">Valideur : ${esc(f.proprietaire || "—")}</span>` : ""}
+      ${f.valideur_delegue
+        ? `<span class="fiche-owner">Valideur actuel : <b>${esc(f.valideur_delegue.nom)}</b> <span class="ma-deleg" title="${esc(f.proprietaire || "Le valideur")} a délégué ses validations (absence ou période de délégation en cours)">par délégation de ${esc(f.proprietaire || "—")}</span></span>`
+        : (f.user_id !== state.user.id ? `<span class="fiche-owner">Valideur actuel : <b>${esc(f.proprietaire || "—")}</b></span>` : "")}
       <span id="save-ind" style="color:var(--muted);font-size:12px"></span>
       <button class="btn" id="f-print">Imprimer</button>
       ${ro ? "" : `<button class="btn btn-danger" id="f-del">Supprimer</button>`}
@@ -2304,7 +2356,7 @@ function renderFiche() {
           <label>Reliquat (j)
             <input type="number" step="0.5" min="0" max="100" id="p-rel" value="${esc(p.reliquat)}"${dis}></label>
           <label>Solde CET (j)
-            <input type="number" step="0.5" min="0" max="70" id="p-cet" value="${esc(p.solde_cet)}"${dis}></label>
+            <input type="number" step="0.5" min="0" max="70" id="p-cet" value="${esc(p.solde_cet)}" title="Solde initial du CET, en jours. Laissé vide, il est repris de Sedit RH."${dis}></label>
         </div>
       </div>
 
@@ -2323,6 +2375,7 @@ function renderFiche() {
         <h3>Calendrier ${f.year || (s.general ? s.general.year : "")}<span class="no-print"> — ${state.requestMode ? "sélectionnez les demi-journées puis choisissez le code pour envoyer une demande" : (ro ? "lecture seule" : "cliquez ou glissez pour sélectionner une ou plusieurs demi-journées")}</span></h3>
           <div class="calendar-wrap"><div class="calendar" id="calendar"></div></div>
           <div class="legend" id="legend"></div>
+          <div class="muted rh-abs-note hidden" id="rh-abs-note"></div>
       </div>
 
       <div class="soldes-panel" id="soldes">
@@ -2447,6 +2500,46 @@ function renderFiche() {
   renderPeriodsEditor();
 
   $("#f-print").addEventListener("click", () => window.print());
+  /* Absences saisies dans Sedit RH (CM, GEM, CT, CP, SF) : affichées en lecture seule dans le calendrier, sur les jours ouvrés sans saisie */
+  (async () => {
+    if (!f.id) return;
+    try {
+      const r = await api(`/api/agents/${f.id}/absences-rh`);
+      if (state.fiche !== f) return;
+      const cells = {};
+      (r.items || []).forEach((a) => {
+        const d0 = new Date(a.debut + "T12:00:00"), d1 = new Date(a.fin + "T12:00:00");
+        for (let d = d0; d <= d1; d = new Date(d.getTime() + 86400000)) {
+          if (d.getFullYear() !== f.year || d.getDay() === 0 || d.getDay() === 6) continue;     // l'année de la fiche, jours ouvrés seulement
+          [0, 1].forEach((half) => { cells[cellKey(d.getMonth() + 1, d.getDate(), half)] = a; });
+        }
+      });
+      f.rh_cells = cells;
+      f.rh_count = (r.items || []).length;
+      paintCalendar();
+      const note = $("#rh-abs-note");
+      if (note) {
+        note.classList.toggle("hidden", !Object.keys(cells).length && !r.warning);
+        note.textContent = r.warning ? "Absences de Sedit RH indisponibles : " + r.warning
+          : `${f.rh_count} absence(s) saisie(s) dans Sedit RH sont affichées en couleur claire (CM, GEM, CT, CP, SF), sans être reprises dans la fiche.`;
+      }
+    } catch (e) { /* affichage facultatif : la fiche reste utilisable sans */ }
+  })();
+
+  /* Solde initial de CET : s'il n'est pas saisi, c'est celui de Sedit RH (chargé à part, Sedit RH est lent) : il est affiché en grisé
+     dans le champ puis la synthèse est recalculée avec lui. */
+  (async () => {
+    const el = $("#p-cet");
+    if (!el || !f.id) return;
+    try {
+      const r = await api(`/api/agents/${f.id}/cet`);
+      if (!r.cet) { if (r.warning) el.title = "Solde Sedit RH indisponible : " + r.warning; return; }
+      const v = Number(r.cet.solde);
+      el.placeholder = v.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+      el.title = `Solde initial du CET, en jours. Vide = solde de Sedit RH (${el.placeholder} j).`;
+      if (el.value === "" && state.fiche === f) runCompute();       // la synthèse tient maintenant compte du solde Sedit RH
+    } catch (e) { el.title = "Solde Sedit RH indisponible : " + e.message; }
+  })();
 
   const cassageBtn = $("#req-cassage-btn");
   if (cassageBtn) cassageBtn.addEventListener("click", openCassageModal);
@@ -2554,11 +2647,13 @@ function paintCalendar() {
   const f = state.fiche;
   const codes = codeColorMap();
   const pending = f.pending_cells || {};
+  const rh = f.rh_cells || {};              // absences saisies dans Sedit RH (lecture seule), pour les jours sans saisie dans la fiche
   $$("#calendar .cal-cell").forEach((el) => {
     const k = el.dataset.k;
     const code = f.cells[k] || "";
     const pendingCode = pending[k] || "";
-    el.classList.remove("pending");
+    const rhAbs = rh[k];
+    el.classList.remove("pending", "rh-abs");
     el.removeAttribute("title");
     if (code) {
       const hex = codes[code] || "F2F2F2";
@@ -2571,6 +2666,12 @@ function paintCalendar() {
       el.style.color = "#4a2118";
       el.classList.add("pending");
       el.title = "Demande en attente : " + pendingCode;
+    } else if (rhAbs) {
+      el.textContent = rhAbs.code;
+      el.style.background = mixColor(codes[rhAbs.code] || "F2F2F2", 0.45);
+      el.style.color = "#4a2118";
+      el.classList.add("rh-abs");
+      el.title = `Saisi dans Sedit RH : ${rhAbs.libelle} (non repris dans la fiche)`;
     } else {
       el.textContent = "";
       el.style.background = "";
@@ -3449,6 +3550,7 @@ async function runCompute() {
       method: "POST",
       body: JSON.stringify({
         params: f.params,
+        agent_id: f.id,
         periods: f.periods || [],
         cells: f.cells,
         year: f.year,
@@ -5213,7 +5315,7 @@ $("#year-select").addEventListener("change", async (e) => {
       const list = await api(`/api/my-agents/${state.fiche.agent_user_id}/years`);
       const target = list.find((x) => x.year === y);
       if (target) { await flushPendingSave(); state.year = y; localStorage.setItem(YEAR_KEY, String(y)); renderYearSelect(); location.hash = "#/agent/" + target.id + (m[2] || ""); return; }
-      toast(`Pas de fiche ${y} pour cette personne (« Reporter en ${y} » dans Mon équipe).`, true);
+      toast(`Pas de fiche ${y} pour cette personne (« Reporter les périodes en ${y} » dans Mon équipe).`, true);
     } catch (err) { toast(err.message, true); }
     renderYearSelect();
     return;
@@ -5322,15 +5424,16 @@ async function viewMyAgents() {
   };
   // Une fiche congés n'existe que lorsque la personne a au moins une période de paramètres.
   const ficheHtml = (n) => (n.fiche && n.fiche.complete
-    ? `<a class="ma-fiche-link" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir la fiche ${esc(n.year)}">Fiche ${esc(n.year)}</a>
-      ${n.fiche.next_exists ? `<span class="muted" title="La fiche ${esc(n.year + 1)} existe déjà">✓ ${esc(n.year + 1)}</span>`
-        : `<button type="button" class="btn btn-small ma-dup" data-fid="${n.fiche.id}" title="Reporte la période en vigueur (quotité, jours travaillés…) sur ${esc(n.year + 1)} : crée la fiche ${esc(n.year + 1)} ; les congés posés ne sont pas copiés">Reporter en ${esc(n.year + 1)}</button>`}`
+    ? `<a class="ma-fiche-link" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir la fiche congés ${esc(n.year)}">Fiche congés</a>
+      ${n.fiche.next_exists ? `<span class="muted" title="La fiche ${esc(n.year + 1)} existe déjà">✓ ${esc(n.year + 1)}</span>` : ""}`
     : `<button type="button" class="btn btn-small ma-period" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
   const cardHtml = (n, resp, groupName) => {
     const me = n.id === state.user.id;
     return `<div class="ma-card ma-drop${resp ? " ma-resp" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
       <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}</span>${resp || n.unit_head ? `<span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</div>
       ${n.unit_label && norm(n.unit_label) !== norm(groupName) ? `<div class="muted ma-cunit" title="Unité de la personne">${esc(n.unit_label)}</div>` : ""}
+      ${n.valideur && !n.all ? `<div class="ma-cvalid" title="Valideur de cette personne">Valideur : <strong>${esc(n.valideur)}</strong></div>` : ""}
+      ${n.matricule && !n.all ? `<div class="ma-cvalid ma-cet" data-cet="${n.id}" title="Solde du compte épargne temps, en jours">CET : …</div>` : ""}
       <div class="ma-card-badges">
         <span class="badge-role role-${esc(n.role)}">${esc(PROFIL_LABELS[n.profil] || n.profil)}${n.admin ? " · Admin" : ""}</span>
         ${n.delegated ? `<span class="ma-deleg" title="Délégation en cours : cette personne vous délègue ses validations">délégation</span>` : ""}
@@ -5340,6 +5443,8 @@ async function viewMyAgents() {
       ${periodHtml(n)}
       <div class="ma-card-actions">${ficheHtml(n)}
         <button type="button" class="btn btn-small ma-unit-edit" data-uid="${n.id}" title="Définir l'unité de cette personne (liste), et si elle en est la responsable">✎ Unité</button>
+        ${n.profil === "agent" && n.actif && !me ? `<button type="button" class="btn btn-small ma-promote" data-uid="${n.id}" title="Passer cette personne en valideur : elle pourra valider les demandes de ses agents (niveau déduit de son unité)">↑ Valideur</button>` : ""}
+        ${n.profil === "valideur" && n.role !== "administrateur" && !n.admin && n.actif && !me && !n.all ? `<button type="button" class="btn btn-small ma-demote" data-uid="${n.id}" title="Repasser cette personne en agent : les personnes qu'elle valide remontent sous son propre valideur">↓ Agent</button>` : ""}
         ${n.no_email && n.actif && !n.all ? `<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button>` : ""}</div>
     </div>`;
   };
@@ -5348,7 +5453,7 @@ async function viewMyAgents() {
     const target = people[g.headId] ? g.headId : ((g.members.find((m) => (m.children || []).length || m.count) || {}).id || tree.id);
     return `<div class="ma-group" style="margin-left:${depth * 14}px">
       <div class="ma-ghead ma-drop role-${esc((people[target] || tree).role)}" data-id="${target}" title="Déposer ici pour placer sous ${esc((people[target] || tree).nom || "")}">
-        <span>${esc(g.label)}</span><span class="ma-gcount">${g.members.length} personne${g.members.length > 1 ? "s" : ""}</span></div>
+        <span>${esc(g.label)}${g.code !== "_" && (unitInfo[g.code] || {}).local ? ` <span class="ma-local" title="Entité locale : créée dans l'application, elle n'existe pas dans Sedit RH">locale</span>` : ""}</span><span class="ma-gcount">${g.members.length} personne${g.members.length > 1 ? "s" : ""}</span></div>
       <div class="ma-cards">${g.members.map((m) => cardHtml(m, false, g.label)).join("")}</div>
     </div>`;
   };
@@ -5367,6 +5472,8 @@ async function viewMyAgents() {
     <div class="ma-layout">
       <div class="card ma-left"><div class="ma-left-head"><h3>Mon équipe (${state.maAll ? tree.count : tree.children.length}${!state.maAll && tree.count > tree.children.length ? ` sur ${tree.count} au total` : ""})</h3>
         <button type="button" class="btn btn-small" id="ma-depth">${state.maAll ? "Voir seulement mes agents directs" : "Voir toute ma ligne hiérarchique"}</button></div>
+        <p class="muted ma-pick-hint">Ctrl + clic pour sélectionner plusieurs personnes, puis glissez-les ensemble sous leur valideur.</p>
+        <div id="ma-pick-bar" class="users-bulk hidden"><span id="ma-pick-count"></span><button type="button" class="btn btn-small" id="ma-pick-clear">Désélectionner</button></div>
         <div class="ma-groups">${groupList.map(groupHtml).join("")}</div></div>
       <div class="card ma-right">
         <h3>Agents Sedit RH à ajouter</h3>
@@ -5400,15 +5507,30 @@ async function viewMyAgents() {
       el.classList.toggle("ma-selected", on);
       el.querySelector("input").checked = on;
     });
+    // Case de chaque unité : cochée si tous ses agents le sont, indéterminée si une partie seulement
+    $("#ma-sirh-list").querySelectorAll(".ma-unit-sel").forEach((box) => {
+      const mats = items.filter((a) => (a.unit_libelle || "(sans unité)") === box.dataset.unit).map((a) => a.matricule);
+      const n = mats.filter((m) => selected.has(m)).length;
+      box.checked = mats.length > 0 && n === mats.length;
+      box.indeterminate = n > 0 && n < mats.length;
+    });
   };
   const drawList = () => {
     const groups = {};
     items.forEach((a) => { (groups[a.unit_libelle || "(sans unité)"] = groups[a.unit_libelle || "(sans unité)"] || []).push(a); });
     $("#ma-sirh-list").innerHTML = items.length ? Object.entries(groups).map(([unit, list]) => `
-      <div class="ma-unit-title">${esc(unit)}</div>
+      <label class="ma-unit-title" title="Cocher pour sélectionner toute l'unité, puis glisser la sélection sur une personne"><input type="checkbox" class="ma-unit-sel" data-unit="${esc(unit)}"> ${esc(unit)} <span class="ma-unit-count">(${list.length})</span></label>
       ${list.map((a) => `<div class="ma-sirh" draggable="true" data-m="${esc(a.matricule)}"><input type="checkbox" tabindex="-1"><span><strong>${esc(a.nom)} ${esc(a.prenom)}</strong>
         <span class="muted">${esc(a.matricule)}${a.fonction ? " — " + esc(a.fonction) : ""}</span></span></div>`).join("")}`).join("")
       : `<p class="muted">Aucun agent à afficher.</p>`;
+    $("#ma-sirh-list").querySelectorAll(".ma-unit-sel").forEach((box) => {
+      box.addEventListener("change", () => {
+        items.filter((a) => (a.unit_libelle || "(sans unité)") === box.dataset.unit).forEach((a) => {
+          if (box.checked) selected.add(a.matricule); else selected.delete(a.matricule);
+        });
+        updateSel();
+      });
+    });
     $("#ma-sirh-list").querySelectorAll(".ma-sirh").forEach((el) => {
       el.addEventListener("click", () => {
         if (selected.has(el.dataset.m)) selected.delete(el.dataset.m); else selected.add(el.dataset.m);
@@ -5439,21 +5561,38 @@ async function viewMyAgents() {
   };
   $("#ma-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(loadList, 300); });
   $("#ma-all").addEventListener("change", loadList);
-  c.querySelectorAll(".ma-dup").forEach((b) => {
-    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
-    b.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      b.disabled = true;
-      try {
-        const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: [Number(b.dataset.fid)], year: state.year + 1 }) });
-        if ((res.created || []).length) { toast(`Période reportée en ${state.year + 1}`); viewMyAgents(); }
-        else { b.disabled = false; msg(((res.errors || [])[0] || {}).error || "Duplication impossible"); }
-      } catch (e) { b.disabled = false; msg(e.message); }
-    });
-  });
   c.querySelectorAll(".ma-unit-edit").forEach((b) => {
     b.addEventListener("click", (ev) => { ev.stopPropagation(); askUnit(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
     b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  });
+  c.querySelectorAll(".ma-promote").forEach((b) => {
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const name = nodeName(b.dataset.uid);
+      if (!confirm(`Passer ${name} en valideur ?\n\nCette personne pourra valider les demandes des agents placés sous elle. Son niveau est déduit de son unité.`)) return;
+      b.disabled = true;
+      try {
+        const r = await api(`/api/my-agents/${b.dataset.uid}/promote`, { method: "POST" });
+        toast(`${name} est maintenant valideur (${ROLE_LABELS[r.role] || r.role})` + (r.adopted ? ` et valide par défaut ${r.adopted} agent(s) de son unité` : ""));
+        viewMyAgents();
+      } catch (e) { b.disabled = false; msg(e.message); }
+    });
+  });
+  c.querySelectorAll(".ma-demote").forEach((b) => {
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const name = nodeName(b.dataset.uid), n = people[b.dataset.uid] || {};
+      const subs = n.count ? `\n\nLes ${n.count} personne(s) qu'il valide remontent sous son propre valideur.` : "";
+      if (!confirm(`Repasser ${name} en agent ?${subs}`)) return;
+      b.disabled = true;
+      try {
+        const r = await api(`/api/my-agents/${b.dataset.uid}/demote`, { method: "POST" });
+        toast(`${name} est repassé(e) agent` + (r.moved ? ` — ${r.moved} personne(s) remontée(s) sous son valideur` : "") + (r.head_removed ? " — il n'est plus responsable de son unité" : ""));
+        viewMyAgents();
+      } catch (e) { b.disabled = false; msg(e.message); }
+    });
   });
   c.querySelectorAll(".ma-ad").forEach((b) => {
     b.addEventListener("click", (ev) => { ev.stopPropagation(); askAd(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
@@ -5465,22 +5604,113 @@ async function viewMyAgents() {
   });
   loadList();
 
+  /* Solde de CET de chaque personne : chargé à part, Sedit RH est lent */
+  (async () => {
+    const ids = Object.keys(people).filter((id) => people[id].matricule && !people[id].all);
+    const fmt = (v) => Number(v).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+    const cells = [...c.querySelectorAll("[data-cet]")];
+    if (!ids.length || !cells.length) return;
+    try {
+      const r = await api("/api/my-agents/cet?uids=" + ids.join(","));
+      cells.forEach((el) => {
+        const it = (r.items || {})[el.dataset.cet];
+        if (r.warning) { el.textContent = "CET : indisponible"; el.title = r.warning; }
+        else if (it) { el.innerHTML = `CET : <strong>${esc(fmt(it.solde))} j</strong>`; el.title = "Solde du compte épargne temps (initial + dépôts − retraits), en jours"; }
+        else { el.textContent = "CET : —"; el.title = "Pas de compte épargne temps ouvert"; }
+      });
+    } catch (e) { cells.forEach((el) => { el.textContent = "CET : indisponible"; el.title = e.message; }); }
+  })();
+
   /* Dépôts sur l'arbre */
   const nodeName = (id) => { const n = people[id]; return n ? (n.nom || n.login) : ""; };
   const newBtn = $("#ma-new-fiche");
   if (newBtn) newBtn.addEventListener("click", openNewFicheModal);
   const dupAll = $("#ma-dup-all");
+  /* Récapitulatif du report : ce qui a été reconduit (jusqu'à quelle date), limité à la fin de contrat, non reconduit ou refusé */
+  const showDupRecap = (res, year) => {
+    const fd = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+    const created = res.created || [], skipped = res.skipped || [], errors = res.errors || [];
+    const truncated = created.filter((x) => x.truncated);
+    const nameOfFiche = (id) => { const n = Object.values(people).find((p) => p.fiche && p.fiche.id === Number(id)); return n ? (n.nom || n.login) : "Fiche " + id; };
+    const line = (cls, who, text) => `<tr class="${cls}"><td><strong>${esc(who)}</strong></td><td>${text}</td></tr>`;
+    const rows = [
+      ...created.map((x) => {
+        const who = `${x.nom} ${x.prenom || ""}`.trim();
+        if (!x.has_period) return line("dup-warn", who, `Fiche ${year} créée <em>sans période</em> (paramètres de la période précédente incomplets)`);
+        const end = x.truncated ? `<strong>${esc(fd(x.period_end))}</strong> <span class="dup-tag">fin de contrat</span>` : esc(fd(x.period_end));
+        const check = x.contract_check === "indisponible" ? ` <span class="muted">· fin de contrat non vérifiée (Sedit RH indisponible)</span>` : "";
+        return line(x.truncated ? "dup-cut" : "dup-ok", who, `Période du ${esc(fd(x.period_start))} au ${end}${check}`);
+      }),
+      ...skipped.map((x) => line("dup-skip", `${x.nom} ${x.prenom || ""}`.trim(), `Non reconduite : ${esc(x.reason)}`)),
+      ...errors.map((x) => line("dup-err", nameOfFiche(x.id), `Refusée : ${esc(x.error)}`)),
+    ];
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card dup-recap" role="dialog" aria-label="Récapitulatif du report">
+      <h3>Report des périodes en ${esc(year)}</h3>
+      <p><strong>${created.length}</strong> période(s) reconduite(s)${truncated.length ? `, dont <strong>${truncated.length}</strong> limitée(s) à la fin de contrat` : ""}${skipped.length ? `, <strong>${skipped.length}</strong> non reconduite(s)` : ""}${errors.length ? `, <strong>${errors.length}</strong> refusée(s)` : ""}.</p>
+      <p class="muted">Un contrat qui se termine dans l'année (date de départ dans Sedit RH) limite la période à cette date ; un contrat déjà terminé n'est pas reconduit.</p>
+      <div class="dup-scroll"><table class="data dup-table"><tbody>${rows.join("")}</tbody></table></div>
+      <div class="ma-dialog-actions"><button class="btn btn-primary" id="dup-close">Fermer</button></div></div>`;
+    document.body.appendChild(ov);
+    const close = () => { ov.remove(); viewMyAgents(); };
+    $("#dup-close").addEventListener("click", close);
+    ov.addEventListener("mousedown", (ev) => { if (ev.target === ov) close(); });
+  };
   if (dupAll) dupAll.addEventListener("click", async () => {
     dupAll.disabled = true;
     try {
       const res = await api("/api/agents/duplicate", { method: "POST", body: JSON.stringify({ ids: dupIds, year: state.year + 1 }) });
-      toast(`${(res.created || []).length} période(s) reportée(s) en ${state.year + 1}`);
-      viewMyAgents();
+      showDupRecap(res, state.year + 1);
     } catch (e) { dupAll.disabled = false; msg(e.message); }
   });
+  /* Sélection multiple des fiches (Ctrl / Cmd + clic) : on les glisse ensemble sous leur valideur */
+  const picked = new Set();
+  const updatePicked = () => {
+    c.querySelectorAll(".ma-card[draggable]").forEach((el) => el.classList.toggle("ma-picked", picked.has(Number(el.dataset.id))));
+    $("#ma-pick-bar").classList.toggle("hidden", picked.size === 0);
+    $("#ma-pick-count").textContent = `${picked.size} personne(s) sélectionnée(s) — glissez-les sur leur valideur`;
+  };
+  $("#ma-pick-clear").addEventListener("click", () => { picked.clear(); updatePicked(); });
+  c.querySelectorAll(".ma-card[draggable]").forEach((el) => {
+    el.addEventListener("click", (ev) => {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.target.closest("button, input, select, a")) return;
+      ev.preventDefault();
+      const id = Number(el.dataset.id);
+      if (picked.has(id)) picked.delete(id); else picked.add(id);
+      updatePicked();
+    });
+  });
+  /* Déplace plusieurs personnes sous un valideur, une par une, avec une barre de progression */
+  const moveMany = async (ids, parentId) => {
+    const ov = document.createElement("div");
+    ov.className = "ma-dialog-overlay";
+    ov.innerHTML = `<div class="ma-dialog card"><h3>Déplacement de ${ids.length} personnes sous ${esc(nodeName(parentId))}</h3>
+      <div class="ma-progress" role="status" aria-live="polite"><progress id="mv-bar" max="${ids.length}" value="0"></progress><div id="mv-text" class="muted"></div></div>
+      <div id="mv-err"></div><div class="ma-dialog-actions"><button class="btn btn-primary hidden" id="mv-close">Fermer</button></div></div>`;
+    document.body.appendChild(ov);
+    const failed = [];
+    let done = 0;
+    for (let i = 0; i < ids.length; i++) {
+      $("#mv-bar").value = i;
+      $("#mv-text").textContent = `Déplacement ${i + 1} sur ${ids.length} : ${nodeName(ids[i])}…`;
+      try { await api("/api/my-agents/move", { method: "POST", body: JSON.stringify({ user_id: ids[i], parent_id: parentId }) }); done++; }
+      catch (e) { failed.push(`${nodeName(ids[i])} : ${e.message}`); }
+    }
+    $("#mv-bar").value = ids.length;
+    picked.clear();
+    if (!failed.length) { ov.remove(); toast(`${done} personnes déplacées`); viewMyAgents(); return; }
+    $("#mv-text").textContent = `${done} déplacée(s), ${failed.length} refusée(s) :`;
+    $("#mv-err").innerHTML = `<div class="form-error">${failed.map(esc).join("<br>")}</div>`;
+    $("#mv-close").classList.remove("hidden");
+    $("#mv-close").addEventListener("click", () => { ov.remove(); viewMyAgents(); });
+  };
   c.querySelectorAll(".ma-drop").forEach((el) => {
     if (el.getAttribute("draggable")) el.addEventListener("dragstart", (ev) => {
-      ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "user", id: Number(el.dataset.id) }));
+      // Glisser une fiche sélectionnée emmène toute la sélection ; une fiche non sélectionnée part seule.
+      const id = Number(el.dataset.id);
+      const ids = picked.has(id) ? [...picked] : [id];
+      ev.dataTransfer.setData("text/plain", JSON.stringify({ type: "user", id, ids }));
       ev.dataTransfer.effectAllowed = "move";
       ev.stopPropagation();
     });
@@ -5495,6 +5725,8 @@ async function viewMyAgents() {
       msg("");
       if (data.type === "user") {
         if (data.id === parentId) return;
+        const ids = (data.ids || [data.id]).filter((i) => i !== parentId);
+        if (ids.length > 1) { moveMany(ids, parentId); return; }
         try {
           await api("/api/my-agents/move", { method: "POST", body: JSON.stringify({ user_id: data.id, parent_id: parentId }) });
           toast("Personne déplacée");
@@ -5543,9 +5775,9 @@ async function viewMyAgents() {
     });
     $("#mu-ok").addEventListener("click", async () => {
       try {
-        await api(`/api/my-agents/${uid}/unit`, { method: "PUT", body: JSON.stringify({ unit_code: $("#mu-unit").value, head: $("#mu-head").checked }) });
+        const r = await api(`/api/my-agents/${uid}/unit`, { method: "PUT", body: JSON.stringify({ unit_code: $("#mu-unit").value, head: $("#mu-head").checked }) });
         ov.remove();
-        toast("Unité enregistrée");
+        toast("Unité enregistrée" + (r.adopted ? ` — le responsable valide par défaut ${r.adopted} agent(s) de son unité` : ""));
         viewMyAgents();
       } catch (e) { $("#mu-err").innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
     });
@@ -5609,7 +5841,7 @@ async function viewMyAgents() {
       </div>
       <div class="mp-days"><span>Jours travaillés</span> <span id="mp-days">${daysCheckboxes(defaultDays(5), "data-mpd", false)}</span>
         <label class="wd"><input type="checkbox" id="mp-ferie"> travaille les jours fériés</label></div>
-      <div class="ma-dialog-actions"><button class="btn" id="mp-cancel">Annuler</button><button class="btn btn-primary" id="mp-ok">Créer la fiche</button></div>
+      <div class="ma-dialog-actions"><button class="btn" id="mp-cancel">Annuler</button><button class="btn btn-primary" id="mp-ok">Créer la période</button></div>
       <div id="mp-err"></div></div>`;
     document.body.appendChild(ov);
     const fillDuree = () => {
@@ -5635,7 +5867,7 @@ async function viewMyAgents() {
           jours_travailles: [...ov.querySelectorAll("[data-mpd]:checked")].map((b) => Number(b.dataset.mpd)),
           ferie_travaille: $("#mp-ferie").checked }) });
         ov.remove();
-        toast("Fiche créée");
+        toast("Période créée — la fiche congés est disponible");
         location.hash = "#/agent/" + r.fiche_id;
       } catch (e) {
         $("#mp-ok").disabled = false;
@@ -5645,8 +5877,14 @@ async function viewMyAgents() {
   }
 
   /* Dialogue : unité (celle de Sedit RH de chaque agent, ou une unité commune), puis création un par un */
-  function askUnitAndAttach(list, parentId) {
+  async function askUnitAndAttach(list, parentId) {
     const one = list.length === 1 ? list[0] : null;
+    // Seules les entités de la direction du valideur sont proposées (même liste que « ✎ Unité » de sa fiche) ; sans unité connue : toutes.
+    let dirUnits = units;
+    try {
+      const r = await api(`/api/my-agents/${parentId}/unit`);
+      if (r && r.units && r.units.length && r.unit_code) dirUnits = r.units;
+    } catch (_) { /* repli : liste complète */ }
     const ov = document.createElement("div");
     ov.className = "ma-dialog-overlay";
     ov.innerHTML = `<div class="ma-dialog card">
@@ -5656,13 +5894,17 @@ async function viewMyAgents() {
       <label>Unité ${one ? "de l'agent" : "des agents"}
         <input type="search" id="mad-filter" placeholder="Filtrer les unités…" style="margin-bottom:4px">
         <select id="mad-unit"></select></label>
+      <div id="mad-progress" class="ma-progress hidden" role="status" aria-live="polite">
+        <progress id="mad-bar" max="${list.length}" value="0"></progress>
+        <div id="mad-progress-text" class="muted"></div>
+      </div>
       <div class="ma-dialog-actions"><button class="btn" id="mad-cancel">Annuler</button><button class="btn btn-primary" id="mad-ok">Créer</button></div>
       <div id="mad-err"></div></div>`;
     document.body.appendChild(ov);
     const fill = () => {
       const q = ($("#mad-filter").value || "").toLowerCase();
       const cur = $("#mad-unit").value || (one ? one.unit_code : "__own");
-      $("#mad-unit").innerHTML = (one ? `<option value="">— Choisir —</option>` : `<option value="__own">Unité Sedit RH de chaque agent</option>`) + units
+      $("#mad-unit").innerHTML = (one ? `<option value="">— Choisir —</option>` : `<option value="__own">Unité Sedit RH de chaque agent</option>`) + dirUnits
         .filter((u) => !q || u.path.toLowerCase().includes(q) || u.code === cur)
         .map((u) => `<option value="${esc(u.code)}" ${u.code === cur ? "selected" : ""}>${esc(u.path)} (${esc(u.code)})</option>`).join("");
     };
@@ -5671,15 +5913,29 @@ async function viewMyAgents() {
     $("#mad-cancel").addEventListener("click", () => ov.remove());
     $("#mad-ok").addEventListener("click", async () => {
       $("#mad-ok").disabled = true;
+      $("#mad-cancel").disabled = true;                       // pas d'annulation en cours de route : les agents déjà créés le restent
       const choice = $("#mad-unit").value;
       const done = [], failed = [];
+      const bar = $("#mad-bar"), txt = $("#mad-progress-text");
+      bar.max = list.length;
+      $("#mad-progress").classList.remove("hidden");
+      const showProgress = (i, a) => {
+        bar.value = i;
+        txt.textContent = i < list.length
+          ? `Création ${i + 1} sur ${list.length} : ${a.nom} ${a.prenom}…${failed.length ? ` (${failed.length} en échec)` : ""}`
+          : `${list.length} sur ${list.length} traités.`;
+      };
+      let index = 0;
       for (const a of list) {
+        showProgress(index++, a);
         try {
           const r = await api("/api/my-agents/attach", { method: "POST", body: JSON.stringify({
             matricule: a.matricule, parent_id: parentId, unit_code: choice === "__own" ? "" : choice }) });
           done.push({ a, r });
         } catch (e) { failed.push(`${a.nom} ${a.prenom} : ${e.message}`); }
       }
+      showProgress(list.length, null);
+      $("#mad-cancel").disabled = false;
       done.forEach(({ a }) => selected.delete(a.matricule));
       if (!failed.length) {
         ov.remove();
