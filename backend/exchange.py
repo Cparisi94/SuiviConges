@@ -237,6 +237,15 @@ def _delete_event(mailbox, event_id):
             raise
 
 
+def _remote_ids(mailbox, today):
+    """Identifiants des événements présents dans l'agenda (fenêtre de synchronisation), ou None si l'API Ville ne sait pas les lister."""
+    try:
+        data = _call("GET", config.EXCHANGE_APM_EVENTS_PATH, params={"mailbox": mailbox, "start": "%d-01-01" % today.year, "end": "%d-12-31" % (today.year + 1)})
+    except ExchangeError:
+        return None                            # route de lecture absente (API Ville pas encore à jour) ou panne : on garde le suivi local
+    return {e.get("id") for e in (data.get("events") or []) if e.get("id")}
+
+
 def sync_user(db, user_id, today=None):
     """Aligne l'agenda Outlook de l'agent sur sa fiche. Retourne {"created", "deleted", "kept", "error"} ; l'état est mémorisé dans users."""
     today = today or dt.date.today()
@@ -259,6 +268,13 @@ def sync_user(db, user_id, today=None):
                 db.execute("DELETE FROM exchange_events WHERE user_id=? AND day=? AND part=?", (user_id, key[0], key[1]))
                 db.commit()
                 del have[key]
+        remote = _remote_ids(mailbox, today) if have else None
+        if remote is not None:
+            for key, row in list(have.items()):                  # supprimé à la main dans Outlook : on l'oublie, il sera recréé plus bas
+                if row["event_id"] not in remote:
+                    db.execute("DELETE FROM exchange_events WHERE user_id=? AND day=? AND part=?", (user_id, key[0], key[1]))
+                    db.commit()
+                    del have[key]
         for key, row in have.items():                            # supprimés ou modifiés (autre nature)
             if want.get(key) != row["kind"]:
                 _delete_event(mailbox, row["event_id"])

@@ -1703,3 +1703,7 @@ tr.row-off td { color: #888; }
 .mu-head { margin: 8px 0; }
 .mu-new { margin: 8px 0; font-size: 12px; }
 .mu-new summary { cursor: pointer; color: #8a3b25; }
+
+.agent-balance-prev { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.agent-balance-prev b { color: var(--text); }
+.agent-balance-prev b.neg { color: var(--danger, #b42318); }

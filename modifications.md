@@ -861,3 +861,11 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Demande de CET refusée à tort** : avec un « Solde CET (j) » vide dans la fiche, la synthèse utilisait bien le solde de Sedit RH (60 jours) mais le contrôle de la demande partait de 0 et répondait « Solde insuffisant : il resterait -1,0 j ». Le contrôle utilise maintenant le même solde que la synthèse. Si Sedit RH n'est pas joignable et qu'aucun solde n'est connu, la demande est contrôlée avec 0 comme avant.
 
 **Vérifications** : 115 tests passent (jour demandé provisoire puis validé puis refusé ; demande de CET avec et sans solde connu) ; Outlook non essayé en réel pour le provisoire.
+
+## Version 0.17.6 — Agenda Outlook à jour à chaque demande, soldes prévisionnels
+
+**Agenda Outlook** : plus besoin d'attendre la synchronisation périodique. Dès que vous (ou votre valideur) faites, validez, refusez ou annulez une demande, votre agenda est mis à jour en arrière-plan. Si vous supprimez un rendez-vous « ABSENT » dans Outlook, il est recréé à la synchronisation suivante. Cette détection demande la nouvelle version de l'API Ville (route de lecture des événements) : tant qu'elle n'est pas déployée, l'application continue comme avant.
+
+**Soldes prévisionnels** : dans la synthèse, chaque solde (congés annuels, RTT, sujétion, bonification, CET, total) affiche en plus le « restant prévisionnel », c'est-à-dire ce qu'il resterait si vos demandes en attente étaient validées. La ligne n'apparaît que si vous avez des demandes en attente.
+
+**Vérifications** : tests automatiques (mise à jour de l'agenda après une demande, recréation d'un événement supprimé, soldes prévisionnels). Non essayé en réel : la lecture des événements Outlook (API Ville à redéployer) et l'affichage dans le navigateur.

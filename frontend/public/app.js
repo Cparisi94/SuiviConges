@@ -772,12 +772,17 @@ async function viewAgentDashboard() {
     };
     const recent = (requests || []).slice(0, 5);
     const hourRows = [["CAH", s.cah], ["RTTH", s.rth], ["RCH", s.rch]];
+    const pvSolde = (calc.prevision && calc.prevision.solde) || null;          // soldes si les demandes en attente étaient validées
     const balanceCard = (title, code, value, negative = false) => {
+      const pk = {CA: "ca", RTT: "rtt", JS: "js", JB: "jb", CET: "cet"}[code];
+      const pvLine = pvSolde && pk && pvSolde[pk]
+        ? `<div class="agent-balance-prev" title="Si les demandes en attente sont validées">prévisionnel : <b class="${pvSolde[pk].restant < 0 ? "neg" : ""}">${fmt(pvSolde[pk].restant)} ${dayWord(pvSolde[pk].restant)}</b></div>` : "";
       const hex = codeColorMap()[code] || "#b4553f";
       const style = `--sb-tint:linear-gradient(180deg, ${mixColor(hex, 0.18)}, ${mixColor(hex, 0.06)}); --sb-line:${cssColor(hex)}; --sb-ink:${shadeColor(hex, 0.55)};`;
       return `<div class="agent-balance-card" style="${style}">
         <div class="agent-balance-label">${title}</div>
         <div class="agent-balance-value${negative ? " neg" : ""}">${value}</div>
+        ${pvLine}
       </div>`;
     };
 
@@ -3684,6 +3689,8 @@ function renderSoldes(r) {
 
   const cls = (v) => (v < 0 ? "restant neg" : "restant");
   const s = r.solde;
+  const pv = r.prevision && r.prevision.solde;                    // soldes si les demandes en attente étaient validées
+  const prev = (key) => (pv && pv[key] ? [["Restant prévisionnel", `<span class="${cls(pv[key].restant)}" title="Si les demandes en attente sont validées">${fmt(pv[key].restant)} j</span>`]] : []);
   const bonif = r.bonif || {};
   const cet = r.cet_info || {};
 
@@ -3700,7 +3707,7 @@ function renderSoldes(r) {
         ["Droits (année)", `<span title="Droit initial ${fmt(r.ca_droit)} j − ${fmt(s.ca.casse || 0)} j cassés">${fmt(r.ca_droit - (s.ca.casse || 0))} j</span>`],
         ["Reliquat reporté", fmt(r.reliquat_restant) + " j" + (r.reliquat_mode ? " (" + r.reliquat_mode + ")" : "")],
         ["CA pris", fmt(s.ca.pris_ca ?? s.ca.pris) + " j"],
-      ].concat((s.ca.casse || 0) > 0 ? [["Cassé en heures", fmt(s.ca.casse) + " j"]] : []))}
+      ].concat((s.ca.casse || 0) > 0 ? [["Cassé en heures", fmt(s.ca.casse) + " j"]] : []).concat(prev("ca")))}
 
       ${(r.cah_credit > 0 || r.cah_used > 0) ? block("Congés en heures restants", `<span class="${cls(s.cah.restant)}">${fmtHours(s.cah.restant)}</span>`, [
         ["Congés en heures pris", fmtHours(s.cah.used_year)],
@@ -3710,7 +3717,7 @@ function renderSoldes(r) {
         ["Généré à ce jour", fmt(r.rtt_genere - (s.rtt.casse || 0)) + " j / " + fmt(r.rtt_total - (s.rtt.casse || 0)) + " j"],
         ["RTT Pris", fmt(s.rtt.pris_rtt ?? s.rtt.pris) + " j"],
         ["Déduction (absences)", fmt(s.rtt.deduction) + " j"],
-      ].concat((s.rtt.casse || 0) > 0 ? [["Cassé en heures", fmt(s.rtt.casse) + " j"]] : []))}
+      ].concat((s.rtt.casse || 0) > 0 ? [["Cassé en heures", fmt(s.rtt.casse) + " j"]] : []).concat(prev("rtt")))}
 
       ${(r.rth_credit > 0 || r.rth_used > 0) ? block("RTT en heures restants", `<span class="${cls(s.rth.restant)}">${fmtHours(s.rth.restant)}</span>`, [
         ["RTT en heures pris", fmtHours(s.rth.used_year)],
@@ -3724,22 +3731,23 @@ function renderSoldes(r) {
         ["Généré à ce jour", fmt(r.js_genere) + " j / " + fmt(r.js_total) + " j"],
         ["Pris", fmt(s.js.pris) + " j"],
         ["Déduction (absences)", fmt(s.js.deduction) + " j"],
-      ], r.suj_interval ? `<div class="cet-hint">1 jour généré tous les <b>${fmt(r.suj_interval)}</b> jours</div>` : "")}
+      ].concat(prev("js")), r.suj_interval ? `<div class="cet-hint">1 jour généré tous les <b>${fmt(r.suj_interval)}</b> jours</div>` : "")}
 
       ${block("Bonification", `<span class="${cls(s.jb.restant)}">${fmt(s.jb.restant)} j</span>`, [
         ["Généré", fmt(r.jb_genere) + " j"],
         ["Pris", fmt(s.jb.pris) + " j"],
-      ], `<div class="cet-hint">CA pics (Jan–Avr, Nov–Déc) : <b>${fmt(bonif.peak)}</b> j dont <b>${fmt(bonif.peak_ca)}</b> j de CA</div>`)}
+      ].concat(prev("jb")), `<div class="cet-hint">CA pics (Jan–Avr, Nov–Déc) : <b>${fmt(bonif.peak)}</b> j dont <b>${fmt(bonif.peak_ca)}</b> j de CA</div>`)}
 
       ${block("CET", `<span class="${cls(s.cet.restant)}">${fmt(s.cet.restant)} j</span>`, [
         ["Solde initial", fmt(s.cet.initial) + " j"],
         ["Utilisé", fmt(s.cet.pris) + " j"],
-      ], `<div class="cet-hint">Dépôt possible : <b>${typeof cet.ca_eligible === "number" ? fmt(cet.ca_eligible) + " j de CA" : cet.ca_eligible}</b> · <b>${typeof cet.rtt_eligible === "number" ? fmt(cet.rtt_eligible) + " j de RTT" : cet.rtt_eligible}</b></div>`)}
+      ].concat(prev("cet")), `<div class="cet-hint">Dépôt possible : <b>${typeof cet.ca_eligible === "number" ? fmt(cet.ca_eligible) + " j de CA" : cet.ca_eligible}</b> · <b>${typeof cet.rtt_eligible === "number" ? fmt(cet.rtt_eligible) + " j de RTT" : cet.rtt_eligible}</b></div>`)}
 
       <div class="solde-block total">
         <h4><span>TOTAL</span></h4>
         <div class="vals"><span class="lbl">Pris</span><span class="v">${fmt(s.total.pris)} j</span></div>
         <div class="vals"><span class="lbl">Restant</span><span class="v ${cls(s.total.restant)}">${fmt(s.total.restant)} j</span></div>
+        ${prev("total").map(([l, v]) => `<div class="vals"><span class="lbl">${l}</span><span class="v">${v}</span></div>`).join("")}
       </div>
       </div>
     </div>`;

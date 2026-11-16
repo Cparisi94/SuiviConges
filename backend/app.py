@@ -3369,7 +3369,35 @@ def api_compute():
     result = rule_compute(agent_for_rules, cells, settings,
                           cassages=cassages, hourly=hourly,
                           recoveries=recoveries)
+    prevision = _forecast_balances(request.user, data.get("agent_id"), data.get("cells") or {}, agent_for_rules, settings, cassages, hourly, recoveries)
+    if prevision is not None:
+        result["prevision"] = prevision
     return jsonify(result)
+
+
+def _forecast_balances(user, agent_id, cells, agent_for_rules, settings, cassages, hourly, recoveries):
+    """Soldes prévisionnels : ce qu'il resterait si toutes les demandes en attente de la fiche étaient validées.
+    None quand la fiche n'a aucune demande en attente (ou n'est pas lisible par l'utilisateur)."""
+    try:
+        agent_id = int(agent_id)
+    except (TypeError, ValueError):
+        return None
+    db = get_db()
+    try:
+        agent = _agent_by_id(db, agent_id)
+        if not agent or not _can_view_agent(db, user, agent):
+            return None
+        pending = _pending_cells(db, agent_id)
+        cass_all = _agent_cassages(db, agent_id, include_pending=True)
+        hour_all = _agent_hourly(db, agent_id, include_pending=True)
+        if not pending and len(cass_all) <= len(cassages) and len(hour_all) <= len(hourly):
+            return None
+        merged = {str(k): v for k, v in dict(cells).items()}
+        merged.update(pending)
+        result = rule_compute(agent_for_rules, cells_to_list(merged), settings, cassages=cass_all, hourly=hour_all, recoveries=recoveries)
+        return {"solde": result.get("solde"), "jours": len(pending) / 2.0}
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -3992,6 +4020,42 @@ people.init_people(app, login_required, _can_manage_users, _scope_ids, _create_a
 
 
 import exchange  # noqa: E402
+
+
+_EXCHANGE_PATHS = re.compile(r"^/api/(requests(/(\d+)/[a-z-]+)?|agents(/(\d+)(/clone)?)?|hourly/(\d+))$")
+
+
+@app.after_request
+def _exchange_after_change(resp):
+    """Après une demande, une validation, un refus, une annulation ou une modification de fiche : met à jour en arrière-plan
+    l'agenda Outlook de l'agent concerné (s'il a activé la synchronisation)."""
+    try:
+        m = _EXCHANGE_PATHS.match(request.path or "")
+        if m and request.method in ("POST", "PUT", "DELETE") and resp.status_code < 400:
+            db = get_db()
+            try:
+                uids = set()
+                if m.group(3):                                   # /api/requests/<id>/<action>
+                    r = db.execute("SELECT a.agent_user_id FROM leave_requests r JOIN agents a ON a.id=r.agent_id WHERE r.id=?", (int(m.group(3)),)).fetchone()
+                    uids.add(r["agent_user_id"] if r else None)
+                elif m.group(4) and m.group(5) is None:          # /api/agents/<id>
+                    r = db.execute("SELECT agent_user_id FROM agents WHERE id=?", (int(m.group(4)),)).fetchone()
+                    uids.add(r["agent_user_id"] if r else None)
+                elif m.group(6):                                 # /api/hourly/<id>
+                    r = db.execute("SELECT a.agent_user_id FROM hourly_absences h JOIN agents a ON a.id=h.agent_id WHERE h.id=?", (int(m.group(6)),)).fetchone()
+                    uids.add(r["agent_user_id"] if r else None)
+                elif request.path == "/api/requests" and request.method == "POST":
+                    body = resp.get_json(silent=True) or {}
+                    r = db.execute("SELECT a.agent_user_id FROM leave_requests r JOIN agents a ON a.id=r.agent_id WHERE r.id=?", (int(body.get("id") or 0),)).fetchone()
+                    uids.add(r["agent_user_id"] if r else None)
+                for uid in uids:
+                    if uid and db.execute("SELECT 1 FROM users WHERE id=? AND exchange_sync=1", (uid,)).fetchone():
+                        exchange.sync_user_async(uid)
+            finally:
+                db.close()
+    except Exception:  # noqa: BLE001 — la synchronisation ne doit jamais faire échouer une demande
+        pass
+    return resp
 
 exchange.set_absence_codes(ABSENCE_CODES)
 

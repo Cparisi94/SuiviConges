@@ -1296,10 +1296,17 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (2150, ?, ?)", (jour, code))
         conn.commit()
         calls = []
+        outlook = set()                                                                     # événements réellement présents dans l'agenda
 
         def fake_call(method, path, body=None, params=None):
+            if method == "GET":                                                             # lecture de l'agenda : pas comptée comme une écriture
+                return {"events": [{"id": i} for i in sorted(outlook)]}
             calls.append((method, path, body or params))
-            return {"id": "EV%d" % len(calls)} if method == "POST" else {}
+            if method == "POST":
+                outlook.add("EV%d" % len(calls))
+                return {"id": "EV%d" % len(calls)}
+            outlook.discard(path.rsplit("/", 1)[-1])
+            return {}
 
         try:
             with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", fake_call):
@@ -1315,6 +1322,14 @@ class PrototypeRegressionTests(unittest.TestCase):
                 calls.clear()
                 s = exchange.sync_user(conn, 2150, today)                                  # rien n'a changé : aucun appel
                 self.assertEqual((s["created"], s["deleted"], s["kept"], calls), (0, 0, 3, []))
+                # Un événement supprimé à la main dans Outlook est recréé à la synchronisation suivante.
+                outlook.discard(sorted(outlook)[0])
+                calls.clear()
+                s = exchange.sync_user(conn, 2150, today)
+                self.assertEqual((s["created"], s["deleted"], s["kept"]), (1, 0, 2))
+                self.assertEqual([c[0] for c in calls], ["POST"])
+                self.assertEqual(len(outlook), 3)
+                calls.clear()
                 # La fiche change : le matin du 17 est retiré, le télétravail du 19 devient une absence.
                 conn.execute("DELETE FROM cells WHERE agent_id=2150 AND jour=11170")
                 conn.execute("UPDATE cells SET code='CA' WHERE agent_id=2150 AND jour IN (11190, 11191)")
@@ -1343,6 +1358,51 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.execute("DELETE FROM exchange_events WHERE user_id=2150")
             conn.execute("DELETE FROM agents WHERE id=2150")
             conn.execute("DELETE FROM users WHERE id=2150")
+            conn.commit()
+            conn.close()
+
+    def test_exchange_sync_starts_in_background_after_a_request_change(self):
+        import exchange
+        conn = db.get_db()
+        conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) VALUES (2180, 1, 4, 2026, 'CA', '[6010, 6011]', 1, 'en_attente', 3)")
+        conn.execute("UPDATE users SET exchange_sync=1 WHERE id=4")
+        conn.commit()
+        try:
+            with mock.patch.object(exchange, "sync_user_async") as sync:
+                self.assertEqual(self._call("POST", "/api/requests/2180/cancel", uid=4).status_code, 200)
+            sync.assert_called_once_with(4)                                                  # l'agenda de l'agent concerné est mis à jour
+            conn.execute("UPDATE users SET exchange_sync=0 WHERE id=4")
+            conn.execute("UPDATE leave_requests SET status='en_attente' WHERE id=2180")
+            conn.commit()
+            with mock.patch.object(exchange, "sync_user_async") as sync:
+                self.assertEqual(self._call("POST", "/api/requests/2180/cancel", uid=4).status_code, 200)
+            sync.assert_not_called()                                                         # synchronisation non activée : rien à faire
+        finally:
+            conn.execute("DELETE FROM leave_request_events WHERE request_id=2180")
+            conn.execute("DELETE FROM leave_requests WHERE id=2180")
+            conn.execute("UPDATE users SET exchange_sync=0 WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_compute_gives_forecast_balances_with_pending_requests(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO leave_requests (id, agent_id, user_id, year, code, cells, days, status, validator_id) VALUES (2170, 1, 4, 2026, 'CA', '[6010, 6011, 6020, 6021]', 2, 'en_attente', 3)")
+        conn.commit()
+        try:
+            payload = {"params": {"duree_hebdo": "35", "jours_hebdo": "5", "quotite": "100", "penibilite": "non"}, "agent_id": 1, "year": 2026, "cells": {}}
+            res = self._call("POST", "/api/compute", uid=4, payload=payload)
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertIn("prevision", data)
+            self.assertAlmostEqual(data["solde"]["ca"]["restant"] - data["prevision"]["solde"]["ca"]["restant"], 2.0)      # 2 j demandés
+            self.assertEqual(data["prevision"]["jours"], 2.0)
+            conn.execute("UPDATE leave_requests SET status='validee' WHERE id=2170")
+            conn.commit()
+            self.assertNotIn("prevision", self._call("POST", "/api/compute", uid=4, payload=payload).get_json())            # plus rien en attente
+            payload["agent_id"] = None
+            self.assertNotIn("prevision", self._call("POST", "/api/compute", uid=4, payload=payload).get_json())
+        finally:
+            conn.execute("DELETE FROM leave_requests WHERE id=2170")
             conn.commit()
             conn.close()
 
@@ -1376,9 +1436,17 @@ class PrototypeRegressionTests(unittest.TestCase):
         conn.commit()
         calls = []
 
+        outlook = set()
+
         def fake_call(method, path, body=None, params=None):
+            if method == "GET":
+                return {"events": [{"id": i} for i in sorted(outlook)]}
             calls.append((method, path, body))
-            return {"id": "EV%d" % len(calls)} if method == "POST" else {}
+            if method == "POST":
+                outlook.add("EV%d" % len(calls))
+                return {"id": "EV%d" % len(calls)}
+            outlook.discard(path.rsplit("/", 1)[-1])
+            return {}
 
         try:
             with mock.patch.object(exchange, "availability", return_value=(True, "")), mock.patch.object(exchange, "_call", fake_call):

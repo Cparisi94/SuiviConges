@@ -13,9 +13,20 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.5"
+VERSION = "0.17.6"
 
 VERSIONS = [
+    {
+        "version": "0.17.6",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Agenda Outlook à jour à chaque demande, soldes prévisionnels",
+        "items": [
+            "Agenda Outlook : dès qu'une demande est faite, validée, refusée ou annulée (ou qu'une fiche est modifiée), l'agenda de l'agent concerné est mis à jour en arrière-plan, sans attendre la synchronisation périodique.",
+            "Agenda Outlook : un rendez-vous supprimé à la main dans Outlook est recréé à la synchronisation suivante (nécessite la nouvelle version de l'API Ville, qui sait lister les événements d'un agenda).",
+            "Synthèse : à côté de chaque solde (congés annuels, RTT, sujétion, bonification, CET, total), un « restant prévisionnel » indique ce qu'il resterait si les demandes en attente étaient validées.",
+        ],
+    },
     {
         "version": "0.17.5",
         "date": "2026-11-17",
