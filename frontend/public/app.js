@@ -775,7 +775,7 @@ async function viewAgentDashboard() {
     const pvSolde = (calc.prevision && calc.prevision.solde) || null;          // soldes si les demandes en attente étaient validées
     const balanceCard = (title, code, value, negative = false) => {
       const pk = {CA: "ca", RTT: "rtt", JS: "js", JB: "jb", CET: "cet"}[code];
-      const pvLine = pvSolde && pk && pvSolde[pk]
+      const pvLine = pvSolde && pk && pvSolde[pk] && Math.abs(pvSolde[pk].restant - (s[pk] || {}).restant) > 1e-9
         ? `<div class="agent-balance-prev" title="Si les demandes en attente sont validées">prévisionnel : <b class="${pvSolde[pk].restant < 0 ? "neg" : ""}">${fmt(pvSolde[pk].restant)} ${dayWord(pvSolde[pk].restant)}</b></div>` : "";
       const hex = codeColorMap()[code] || "#b4553f";
       const style = `--sb-tint:linear-gradient(180deg, ${mixColor(hex, 0.18)}, ${mixColor(hex, 0.06)}); --sb-line:${cssColor(hex)}; --sb-ink:${shadeColor(hex, 0.55)};`;
@@ -3679,18 +3679,25 @@ function renderSoldes(r) {
     const vars = hex
       ? ` style="--sb-tint:linear-gradient(180deg, ${mixColor(hex, 0.18)}, ${mixColor(hex, 0.06)}); --sb-ink:${shadeColor(hex, 0.55)}; --sb-line:${cssColor(hex)};"`
       : "";
+    // Compact : titre + restant sur une ligne, restant prévisionnel en sous-titre, détail replié (clic sur le titre pour le déplier).
+    const prevRow = rows.find((x) => x[0] === "Restant prévisionnel");
+    const detail = rows.filter((x) => x !== prevRow);
+    const open = (state.soldeOpen = state.soldeOpen || new Set()).has(title);
     return `
-    <div class="solde-block${kind ? " sb-" + kind : ""}"${vars}>
-      <h4><span>${title}</span><span>${right}</span></h4>
-      ${rows.map(([l, v, cls]) => `<div class="vals"><span class="lbl">${l}</span><span class="v ${cls || ""}">${v}</span></div>`).join("")}
-      ${extra}
+    <div class="solde-block${kind ? " sb-" + kind : ""}${open ? " open" : ""}" data-sb="${esc(title)}"${vars}>
+      <h4 class="sb-head" title="Afficher ou masquer le détail"><span>${title}</span><span>${right}</span></h4>
+      ${prevRow ? `<div class="sb-prev">Prévisionnel <span>${prevRow[1]}</span></div>` : ""}
+      <div class="sb-rows">
+        ${detail.map(([l, v, cls]) => `<div class="vals"><span class="lbl">${l}</span><span class="v ${cls || ""}">${v}</span></div>`).join("")}
+        ${extra}
+      </div>
     </div>`;
   };
 
   const cls = (v) => (v < 0 ? "restant neg" : "restant");
   const s = r.solde;
   const pv = r.prevision && r.prevision.solde;                    // soldes si les demandes en attente étaient validées
-  const prev = (key) => (pv && pv[key] ? [["Restant prévisionnel", `<span class="${cls(pv[key].restant)}" title="Si les demandes en attente sont validées">${fmt(pv[key].restant)} j</span>`]] : []);
+  const prev = (key) => (pv && pv[key] && Math.abs(pv[key].restant - s[key].restant) > 1e-9 ? [["Restant prévisionnel", `<span class="${cls(pv[key].restant)}" title="Si les demandes en attente sont validées">${fmt(pv[key].restant)} j</span>`]] : []);
   const bonif = r.bonif || {};
   const cet = r.cet_info || {};
 
@@ -3743,14 +3750,20 @@ function renderSoldes(r) {
         ["Utilisé", fmt(s.cet.pris) + " j"],
       ].concat(prev("cet")), `<div class="cet-hint">Dépôt possible : <b>${typeof cet.ca_eligible === "number" ? fmt(cet.ca_eligible) + " j de CA" : cet.ca_eligible}</b> · <b>${typeof cet.rtt_eligible === "number" ? fmt(cet.rtt_eligible) + " j de RTT" : cet.rtt_eligible}</b></div>`)}
 
-      <div class="solde-block total">
-        <h4><span>TOTAL</span></h4>
-        <div class="vals"><span class="lbl">Pris</span><span class="v">${fmt(s.total.pris)} j</span></div>
-        <div class="vals"><span class="lbl">Restant</span><span class="v ${cls(s.total.restant)}">${fmt(s.total.restant)} j</span></div>
-        ${prev("total").map(([l, v]) => `<div class="vals"><span class="lbl">${l}</span><span class="v">${v}</span></div>`).join("")}
+      <div class="solde-block total${(state.soldeOpen = state.soldeOpen || new Set()).has("TOTAL") ? " open" : ""}" data-sb="TOTAL">
+        <h4 class="sb-head" title="Afficher ou masquer le détail"><span>TOTAL restant</span><span class="${cls(s.total.restant)}">${fmt(s.total.restant)} j</span></h4>
+        ${prev("total").map(([l, v]) => `<div class="sb-prev">Prévisionnel <span>${v}</span></div>`).join("")}
+        <div class="sb-rows"><div class="vals"><span class="lbl">Pris</span><span class="v">${fmt(s.total.pris)} j</span></div></div>
       </div>
       </div>
     </div>`;
+  el.querySelectorAll(".sb-head").forEach((h) => {
+    h.onclick = () => {
+      const b = h.closest(".solde-block");
+      b.classList.toggle("open");
+      if (b.classList.contains("open")) state.soldeOpen.add(b.dataset.sb); else state.soldeOpen.delete(b.dataset.sb);
+    };
+  });
 }
 
 /* ==========================================================================

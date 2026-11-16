@@ -13,6 +13,11 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.17.7 — 2026-11-17 — Panneau de synthèse compact
+
+- Synthèse de la fiche : une ligne par solde (titre et restant), le détail se déplie d'un clic sur le titre ; le panneau est moins haut et plus lisible.
+- Le restant prévisionnel (si les demandes en attente étaient validées) n'apparaît que lorsqu'il diffère du solde actuel, dans la fiche comme dans « Ma synthèse ».
+
 ## 0.17.6 — 2026-11-17 — Agenda Outlook à jour à chaque demande, soldes prévisionnels
 
 - Agenda Outlook : dès qu'une demande est faite, validée, refusée ou annulée (ou qu'une fiche est modifiée), l'agenda de l'agent concerné est mis à jour en arrière-plan, sans attendre la synchronisation périodique.

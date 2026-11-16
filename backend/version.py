@@ -13,9 +13,19 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.17.6"
+VERSION = "0.17.7"
 
 VERSIONS = [
+    {
+        "version": "0.17.7",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Panneau de synthèse compact",
+        "items": [
+            "Synthèse de la fiche : une ligne par solde (titre et restant), le détail se déplie d'un clic sur le titre ; le panneau est moins haut et plus lisible.",
+            "Le restant prévisionnel (si les demandes en attente étaient validées) n'apparaît que lorsqu'il diffère du solde actuel, dans la fiche comme dans « Ma synthèse ».",
+        ],
+    },
     {
         "version": "0.17.6",
         "date": "2026-11-17",

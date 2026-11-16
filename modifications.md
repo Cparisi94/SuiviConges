@@ -869,3 +869,9 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Soldes prévisionnels** : dans la synthèse, chaque solde (congés annuels, RTT, sujétion, bonification, CET, total) affiche en plus le « restant prévisionnel », c'est-à-dire ce qu'il resterait si vos demandes en attente étaient validées. La ligne n'apparaît que si vous avez des demandes en attente.
 
 **Vérifications** : tests automatiques (mise à jour de l'agenda après une demande, recréation d'un événement supprimé, soldes prévisionnels). Non essayé en réel : la lecture des événements Outlook (API Ville à redéployer) et l'affichage dans le navigateur.
+
+## Version 0.17.7 — Panneau de synthèse compact
+
+**Synthèse de la fiche** : le panneau de droite était trop grand. Chaque solde tient maintenant sur une ligne (titre et restant) ; un clic sur le titre déplie le détail (droits, reliquat, pris, déduction…), et il reste déplié tant que vous ne le repliez pas. Le « restant prévisionnel » n'est affiché que s'il est différent du solde actuel, c'est-à-dire seulement quand des demandes sont en attente. À l'impression, tous les détails sont dépliés.
+
+**Vérifications** : syntaxe du JavaScript et tests de version ; l'affichage n'a pas été contrôlé dans un navigateur (connexion non disponible dans l'instance d'essai).
