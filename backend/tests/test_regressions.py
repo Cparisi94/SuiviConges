@@ -714,6 +714,61 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_activation_sms_are_journaled_without_the_one_time_code(self):
+        import re
+        self._make_user("SANSAD3")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='SANSAD3'").fetchone()["id"]
+        conn.execute("UPDATE users SET matricule='ACT0777', ad_login='', actif=1, role='agent', email='' WHERE id=?", (uid,))
+        conn.execute("DELETE FROM mail_logs WHERE template='sms'")
+        conn.commit()
+        conn.close()
+        code = self._call("POST", "/api/users/%d/activation" % uid, uid=1).get_json()["code"]
+        client = self.app_module.app.test_client()
+        sent = []
+        self.assertEqual(client.post("/api/activation/start", json={"matricule": "ACT0777", "code": code}).status_code, 200)
+        with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: sent.append(message)):
+            self.assertEqual(client.post("/api/activation/sms", json={"mobile": "0698765432"}).status_code, 200)
+        otp = re.search("[0-9]{6}", sent[0]).group(0)
+        conn = db.get_db()
+        rows = [dict(r) for r in conn.execute("SELECT to_addr, subject, status, body FROM mail_logs WHERE template='sms'").fetchall()]
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["to_addr"], rows[0]["status"]), ("06 ** ** ** 32", "envoye"))       # numéro masqué
+        self.assertIn("activation", rows[0]["subject"])
+        self.assertNotIn(otp, rows[0]["subject"] + rows[0]["body"])                                      # le code à usage unique n'est jamais journalisé
+        # un SMS qui échoue est journalisé comme tel
+        conn = db.get_db()
+        conn.execute("UPDATE activations SET otp_dernier_envoi=NULL WHERE user_id=?", (uid,))
+        conn.commit()
+        conn.close()
+        with mock.patch.object(apm, "send_sms", side_effect=apm.ApmError("API Ville hors service")):
+            self.assertEqual(client.post("/api/activation/sms", json={"mobile": "0698765432"}).status_code, 502)
+        conn = db.get_db()
+        failed = conn.execute("SELECT status, error FROM mail_logs WHERE template='sms' AND status='echec'").fetchone()
+        conn.close()
+        self.assertIsNotNone(failed)
+        self.assertIn("hors service", failed["error"])
+
+    def test_admin_password_change_cuts_the_remembered_sessions(self):
+        self._make_user("MEMOIRE9", password="Secret12345")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='MEMOIRE9'").fetchone()["id"]
+        conn.close()
+        client = self.app_module.app.test_client()
+        with mock.patch.object(config, "AUTH_MODE", "local"):                                   # le .env du poste peut imposer le mode AD
+            r = client.post("/api/auth/login", json={"login": "MEMOIRE9", "password": "Secret12345", "remember": True})
+            self.assertEqual(r.status_code, 200, r.get_json())
+            self.assertIn("conges_remember=", r.headers.get("Set-Cookie", ""), r.headers)
+            with client.session_transaction() as s:                 # la session expire : seule la connexion mémorisée reste
+                s.clear()
+            self.assertEqual(client.get("/api/me").status_code, 200)
+            changed = self._call("PUT", "/api/users/%d" % uid, uid=1, payload={"password": "Nouveau12345"})   # changement par un administrateur
+            self.assertEqual(changed.status_code, 200, changed.get_json())
+            with client.session_transaction() as s:
+                s.clear()
+            self.assertEqual(client.get("/api/me").status_code, 401)                                          # connexion mémorisée coupée
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)

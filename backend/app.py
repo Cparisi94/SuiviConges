@@ -994,6 +994,7 @@ def users_update(uid):
     password = data.get("password")
     if password:
         db.execute("UPDATE users SET mot_de_passe=? WHERE id=?", (generate_password_hash(password), uid))
+        remember.revoke_all(db, uid)                      # les connexions mémorisées (« se souvenir de moi ») de la personne sont coupées
     changes = []
     if login_name != user["login"]:
         changes.append(("login", user["login"], login_name))

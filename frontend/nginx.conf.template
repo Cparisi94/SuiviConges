@@ -16,6 +16,7 @@ map "${MOBILE_TEST}:$host" $mobile_test {
 
 # Freine les tentatives de connexion répétées (en plus de la limite applicative).
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=act:10m rate=12r/m;      # activation d'un compte sans AD (4 étapes, SMS) : plus strict que l'API courante
 
 server {
     listen 80;
@@ -60,6 +61,16 @@ server {
     location = /mobile/api/auth/login {
         if ($mobile_test = 0) { return 404; }
         limit_req zone=login burst=5 nodelay;
+        limit_req_status 429;
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $mobile_up ${MOBILE_BACKEND_URL};
+        rewrite ^/mobile/(.*)$ /$1 break;
+        proxy_pass $mobile_up;
+        include /etc/nginx/proxy_params_conges;
+    }
+    location ^~ /mobile/api/activation/ {
+        if ($mobile_test = 0) { return 404; }
+        limit_req zone=act burst=6 nodelay;
         limit_req_status 429;
         resolver 127.0.0.11 valid=10s ipv6=off;
         set $mobile_up ${MOBILE_BACKEND_URL};

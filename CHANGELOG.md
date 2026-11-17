@@ -13,6 +13,13 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.21.2 — 2026-11-17 — Durcissement : journal des SMS, limites d'activation sur toutes les entrées, connexions mémorisées coupées
+
+- Journal des SMS complet : les SMS d'activation, de contrôle du smartphone, de réinitialisation du mot de passe et de prévenance sont maintenant inscrits dans le journal des e-mails (canal « sms », numéro masqué, envoyé ou échec) ; le code à usage unique n'y figure jamais.
+- Un mot de passe modifié par un administrateur dans Utilisateurs coupe aussi les connexions mémorisées (« se souvenir de moi ») de la personne, comme le font déjà son propre changement, l'activation et la réinitialisation.
+- Les routes de première connexion (code d'activation, SMS, mot de passe) sont limitées à 12 requêtes par minute et par adresse sur toutes les entrées : DMZ mobile, adresse de test /mobile/ et ancienne DMZ de l'application complète (en plus des limites du backend).
+- Backend mobile : le contrôle de santé du conteneur vérifie que la page est servie (un dossier de page vide est signalé « unhealthy » au déploiement) et un message clair est écrit au démarrage si la page manque.
+
 ## 0.21.1 — 2026-11-17 — Version mobile : corrections après essai sur téléphone
 
 - Version mobile : l'agenda affiche aussi les absences saisies dans Sedit RH (maladie, garde d'enfant malade, congés parentaux…) en lecture seule, en couleur claire, avec une légende.

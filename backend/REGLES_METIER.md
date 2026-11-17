@@ -129,6 +129,7 @@
 - **Mode local** : mots de passe de l'application (8 caractères minimum). **Mode AD** : le mot de passe est celui du compte Ville ; le compte doit exister dans l'application. Les **administrateurs** gardent un mot de passe local de secours.
 - L'**identifiant** de connexion est insensible aux majuscules et minuscules.
 - Le bouton « Mot de passe » n'est pas proposé en mode AD (le mot de passe est celui du compte Ville, administrateurs compris). Le mot de passe local de secours d'un administrateur est **facultatif** à la création en mode AD (obligatoire en mode local).
+- Les **connexions mémorisées** (« se souvenir de moi ») d'une personne sont coupées dès que son mot de passe change, que ce soit par elle, par l'activation ou la réinitialisation, ou par un administrateur. Tous les **SMS** envoyés par l'application (activation, contrôle du smartphone, réinitialisation, confirmations de demandes) sont inscrits dans le journal des e-mails, avec le numéro masqué ; le code à usage unique n'y est jamais enregistré.
 - Session de 10 h ; **8 échecs en 15 minutes** par adresse bloquent les essais ; même message pour un compte inconnu et un mauvais mot de passe.
 - Chaque connexion, échec, déconnexion et « se connecter en tant que » est journalisé. Un administrateur peut se connecter **en tant que** un autre compte (bandeau d'identité, tout est tracé).
 

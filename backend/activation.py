@@ -106,6 +106,18 @@ def _log(event, user, success, reason=""):
     audit_logs.log_login(event, (user["login"] if user else ""), (user["id"] if user else None), success, reason, "activation")
 
 
+def _sms(mobile, text, subject, log_text=None):
+    """Envoie un SMS par l'APM et le journalise dans le journal des e-mails (canal « sms », numéro masqué, état envoyé ou échec).
+    Le code à usage unique n'est JAMAIS enregistré : le journal ne garde que l'objet (ou `log_text`, jamais le message qui contient le code)."""
+    masked = mask_mobile(mobile)
+    try:
+        apm.send_sms(mobile, text)
+    except apm.ApmError as exc:
+        audit_logs.log_mail(masked, subject, "sms", "echec", str(exc), log_text or subject)
+        raise
+    audit_logs.log_mail(masked, subject, "sms", "envoye", "", log_text or subject)
+
+
 def _open_activation(db, user_id):
     """Activation en cours (ni utilisée, ni annulée, ni expirée) d'un compte."""
     return db.execute(
@@ -214,7 +226,8 @@ def init_activation(app, login_required, can_manage, scope_ids, audit_user):
                        (mobile, _hash(act["id"], "otp", otp), _now() + dt.timedelta(minutes=OTP_MINUTES), _now(), act["id"]))
             db.commit()
             try:
-                apm.send_sms(mobile, "Suivi des congés : votre code de vérification est %s (valable %d minutes). Ne le communiquez à personne." % (otp, OTP_MINUTES))
+                _sms(mobile, "Suivi des congés : votre code de vérification est %s (valable %d minutes). Ne le communiquez à personne." % (otp, OTP_MINUTES),
+                     "SMS d'activation : code de contrôle du smartphone")
             except apm.ApmError as exc:
                 app.logger.error("Activation : SMS non envoyé : %s", exc)
                 return error("Le SMS n'a pas pu être envoyé, réessayez dans un instant", 502)
@@ -344,8 +357,9 @@ def init_activation(app, login_required, can_manage, scope_ids, audit_user):
                     db.execute("UPDATE activations SET otp_hash=? WHERE id=?", (_hash(aid, "otp", otp), aid))
                     db.commit()
                     try:
-                        apm.send_sms(user["mobile"], "Suivi congés : code de réinitialisation de votre mot de passe : %s (valable %d minutes). "
-                                                     "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message." % (otp, OTP_MINUTES))
+                        _sms(user["mobile"], "Suivi congés : code de réinitialisation de votre mot de passe : %s (valable %d minutes). "
+                                             "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message." % (otp, OTP_MINUTES),
+                             "SMS de réinitialisation : code de vérification")
                         _log("activation", user, True, "reinit_sms_envoye")
                     except apm.ApmError as exc:
                         app.logger.error("Mot de passe oublié : SMS non envoyé : %s", exc)
@@ -402,7 +416,7 @@ def init_activation(app, login_required, can_manage, scope_ids, audit_user):
                     app.logger.warning("Réinitialisation : e-mail non envoyé : %s", exc)
             else:
                 try:
-                    apm.send_sms(user["mobile"], notice)
+                    _sms(user["mobile"], notice, "SMS de prévenance : mot de passe réinitialisé", notice)
                 except apm.ApmError as exc:
                     app.logger.warning("Réinitialisation : SMS de prévenance non envoyé : %s", exc)
             return jsonify({"ok": True, "matricule": user["matricule"] or user["login"]})

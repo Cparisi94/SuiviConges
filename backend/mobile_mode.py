@@ -54,6 +54,9 @@ def apply(app, force=False):
     if (MODE != "mobile" and not force) or app.extensions.get("mobile_mode"):
         return bool(app.extensions.get("mobile_mode"))
     app.extensions["mobile_mode"] = True
+    if not (public_dir() / "index.html").is_file():
+        # dossier monté vide ou absent (docker crée un dossier vide si la source du volume n'existe pas) : la page ne pourrait pas être servie
+        app.logger.error("Backend mobile : page introuvable (%s/index.html). Le dossier conges-mobile-dmz/public est-il présent sur le serveur ?", public_dir())
     app.config["SESSION_COOKIE_NAME"] = "conges_mobile"
     cookie_path = os.environ.get("CONGES_COOKIE_PATH", "").strip()
     if cookie_path:

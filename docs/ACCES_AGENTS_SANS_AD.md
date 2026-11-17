@@ -71,12 +71,12 @@ Les SMS partent par l'API Ville, en arrière-plan : une panne n'empêche jamais 
 |---|---|
 | Code d'activation | 50 bits, sans caractères ambigus, 7 jours, usage unique, **5 essais** puis verrouillage |
 | Réponse aux échecs | message unique « Informations incorrectes ou code expiré » |
-| Limites | 10 échecs / 15 min par adresse ; 6 / 15 min par matricule ; 12 requêtes / minute par adresse au nginx |
+| Limites | 10 échecs / 15 min par adresse ; 6 / 15 min par matricule ; 12 requêtes / minute par adresse au nginx, **sur toutes les entrées** (DMZ mobile, adresse de test `/mobile/`, ancienne DMZ complète) ; seul le port 8115 direct du backend mobile n'a que les limites du backend |
 | SMS de contrôle | 6 chiffres, **10 minutes**, **3 envois** par activation, 1 minute entre deux, **5 essais** ; un numéro déjà contrôlé sur un autre compte est refusé |
 | Mot de passe oublié | 6 chiffres, 10 minutes, 5 essais, 3 SMS par heure, 4 demandes / 15 min par identifiant |
 | Mot de passe | 10 caractères, lettres et chiffres, sans identifiant / matricule / numéro ; haché comme les autres |
-| Session | 10 h ; « se souvenir de moi » : 30 jours, jeton haché, révoqué au changement de mot de passe |
-| Traçabilité | journal des connexions (événement `activation`), journal d'audit du compte, journal des SMS |
+| Session | 10 h ; « se souvenir de moi » : 30 jours, jeton haché, révoqué à tout changement de mot de passe (par la personne, l'activation, la réinitialisation **ou un administrateur**) |
+| Traçabilité | journal des connexions (événement `activation`), journal d'audit du compte, **journal des SMS** : tous les SMS (activation, contrôle, réinitialisation, prévenance, confirmations de demandes) sont dans le journal des e-mails, canal « sms », numéro masqué, état envoyé ou échec ; le code à usage unique n'y est jamais enregistré |
 | Notification | e-mail (ou SMS) à l'agent à l'activation et à la réinitialisation |
 
 ## 5. Données et exploitation
