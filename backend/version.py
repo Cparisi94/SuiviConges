@@ -13,9 +13,22 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.18.2"
+VERSION = "0.19.0"
 
 VERSIONS = [
+    {
+        "version": "0.19.0",
+        "date": "2026-11-17",
+        "type": "minor",
+        "titre": "Version mobile en DMZ (frontend dédié) et nom du valideur unifié",
+        "items": [
+            "Version mobile : un frontend dédié, séparé de l'application complète (dossier conges-mobile-dmz, déployé en DMZ uniquement), limité aux fonctions de base : compteurs, demandes en cours (en attente ou validées), demande simple « du … au … » (premier et dernier jour à la demi-journée) et agenda du mois. Il ne relaie que douze routes d'API ; tout le reste y est refusé.",
+            "Version mobile : l'agenda écrit le type de congé (CA, RTT…) sur chaque demi-journée avec une légende des types du mois ; en demandant des jours, on répartit le total entre les types (congés annuels, RTT, CET, sujétion…) avec des boutons − et + jusqu'à ce que tous les jours soient couverts, dans la limite du solde de chaque type ; une demande est créée par type.",
+            "Version mobile : on peut annuler une demande non validée (immédiat) ou demander l'annulation d'une demande validée (le valideur doit l'accepter) ; ces annulations ne concernent que ses propres demandes.",
+            "Version mobile : abonnement à l'agenda du téléphone (iCalendar/ICS) — un lien personnel et secret publie en lecture seule les congés avec leur état (✅ validé, ⏳ en attente) ; aucun motif sensible n'y figure (maladie, congés familiaux… s'affichent « Absence ») ; un appui sur « iPhone », « Google Agenda » ou « Outlook » suffit pour s'abonner ; le lien se remplace ou s'arrête à tout moment.",
+            "Nom du valideur unifié : partout (cartes de Mon équipe, tableau de bord, fiches, demandes, e-mails, recherche administrateur), une personne s'affiche au même format « Prénom NOM » (nom Active Directory remis dans cet ordre, à défaut son prénom et son nom de famille) ; les noms AD déjà enregistrés ont été convertis.",
+        ],
+    },
     {
         "version": "0.18.2",
         "date": "2026-11-17",

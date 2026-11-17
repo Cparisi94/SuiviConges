@@ -38,7 +38,7 @@ def active_delegate(db, validator_id, day=None):
     row = db.execute("SELECT id, parent_id, delegate_auto FROM users WHERE id=?", (validator_id,)).fetchone()
     if not row or not row["parent_id"]:
         return None
-    parent = db.execute("SELECT id, login, nom, email, actif FROM users WHERE id=?", (row["parent_id"],)).fetchone()
+    parent = db.execute("SELECT id, login, nom, nom_ad, nom_famille, prenom, email, actif FROM users WHERE id=?", (row["parent_id"],)).fetchone()
     if not parent or not parent["actif"]:
         return None
     iso = day.isoformat()

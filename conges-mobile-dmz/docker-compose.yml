@@ -1,0 +1,12 @@
+# Conteneur DMZ de la version mobile du suivi des congés. Port et adresse du backend LAN sont PARAMÉTRÉS : rien n'est écrit en dur.
+services:
+  conges-mobile-dmz:
+    build: { context: ., dockerfile: Dockerfile }
+    restart: always
+    ports: ["${MOBILE_DMZ_PORT:-8113}:80"]
+    environment:
+      BACKEND_HOST: ${MOBILE_BACKEND_HOST:?adresse du backend Suivi des congés sur le LAN}
+      BACKEND_PORT: ${MOBILE_BACKEND_PORT:-8110}
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run, /tmp, /etc/nginx/conf.d]
+    security_opt: ["no-new-privileges:true"]

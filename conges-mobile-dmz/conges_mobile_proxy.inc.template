@@ -1,0 +1,10 @@
+# Relais vers le backend interne (inclus par chaque route de la liste blanche de nginx.conf.template).
+proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
+proxy_http_version 1.1;
+proxy_connect_timeout 5s;           # backend injoignable : répondre 502 tout de suite
+proxy_read_timeout 60s;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $fwd_proto;
+proxy_set_header X-Scope "";

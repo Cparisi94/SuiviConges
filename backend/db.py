@@ -29,6 +29,44 @@ def row_to_dict(row):
     return {k: row[k] for k in row.keys()}
 
 
+def ad_display(name):
+    """Nom Active Directory présenté « Prénom NOM » : l'AD fournit « NOM Prénom » (« GAULTIER Djamel » -> « Djamel GAULTIER ») ;
+    un nom déjà dans cet ordre, ou dont l'ordre n'est pas reconnaissable, reste tel quel."""
+    name = (name or "").strip()
+    parts = name.split()
+
+    def upper(word):
+        letters = [c for c in word if c.isalpha()]
+        return len(letters) >= 2 and all(c.isupper() for c in letters)
+
+    i = 0
+    while i < len(parts) and upper(parts[i]):
+        i += 1
+    if 0 < i < len(parts):
+        return " ".join(parts[i:] + parts[:i])
+    return name
+
+
+def user_label(row):
+    """Nom d'affichage unique d'un compte, partout dans l'application, au format « Prénom NOM » : le nom Active Directory s'il est connu,
+    sinon le prénom et le nom de famille, sinon le nom enregistré, sinon l'identifiant."""
+    def get(key):
+        try:
+            return (row[key] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            return ""
+    if get("nom_ad"):
+        return ad_display(get("nom_ad"))
+    if get("nom_famille") and get("prenom"):
+        return "%s %s" % (get("prenom").title(), get("nom_famille").upper())
+    return get("nom") or get("login")
+
+
+# Même règle en SQL (alias de la table users : `u`)
+USER_LABEL_SQL = ("coalesce(nullif(u.nom_ad,''), nullif(trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || "
+                  "coalesce(upper(nullif(u.nom_famille,'')),'')),''), nullif(u.nom,''), u.login)")
+
+
 def public_user(row):
     """Ligne user sans le hash du mot de passe."""
     d = row_to_dict(row)

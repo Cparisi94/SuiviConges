@@ -23,7 +23,7 @@ from werkzeug.security import generate_password_hash
 import apm
 import config
 import sedit_rh
-from db import get_db, row_to_dict
+from db import ad_display, get_db, row_to_dict, user_label
 from http_utils import error
 
 bp = Blueprint("people", __name__, url_prefix="/api")
@@ -200,12 +200,28 @@ def fetch_ad_name(ad_login):
     except apm.ApmError:
         return None
     exact = [h for h in hits if h["username"] == ad_login]
-    return (exact[0]["displayName"] or "").strip() if len(exact) == 1 else ""
+    return ad_display(exact[0]["displayName"]) if len(exact) == 1 else ""
 
 
 _ad_unknown = set()           # comptes déjà cherchés sans succès dans l'AD (ou AD en panne) : pas de nouvelle recherche avant le redémarrage
 _ad_fill = {"running": False, "retry_after": 0.0}
 _ad_fill_lock = threading.Lock()
+
+
+def normalize_ad_names():
+    """Remet les noms AD déjà enregistrés au format « Prénom NOM » (« GAULTIER Djamel » -> « Djamel GAULTIER ») ; sans effet sur ceux qui le sont déjà."""
+    db = get_db()
+    try:
+        changed = 0
+        for r in db.execute("SELECT id, nom_ad FROM users WHERE nom_ad<>''").fetchall():
+            fixed = ad_display(r["nom_ad"])
+            if fixed != r["nom_ad"]:
+                db.execute("UPDATE users SET nom_ad=? WHERE id=?", (fixed, r["id"]))
+                changed += 1
+        db.commit()
+        return changed
+    finally:
+        db.close()
 
 
 def fill_ad_names(limit=60):
@@ -316,7 +332,7 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
                     team[u["parent_id"]] = team.get(u["parent_id"], 0) + 1
 
             def who(row):
-                return None if not row else {"id": row["id"], "nom_rh": row["nom"], "nom_ad": row["nom_ad"] or None, "login": row["login"],
+                return None if not row else {"id": row["id"], "nom": user_label(row), "nom_rh": row["nom"], "nom_ad": row["nom_ad"] or None, "login": row["login"],
                                              "email": row["email"] or None, "matricule": row["matricule"] or None, "actif": bool(row["actif"])}
 
             items = []

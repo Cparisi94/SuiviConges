@@ -15,8 +15,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from db import (
-    SQL_DAYS_SINCE_SUBMIT, SQL_NOW_MINUS, get_db, init_db, public_user, row_to_dict,
-    set_setting,
+    SQL_DAYS_SINCE_SUBMIT, SQL_NOW_MINUS, USER_LABEL_SQL, get_db, init_db, public_user, row_to_dict,
+    set_setting, user_label,
 )
 from mailer import notify_validator
 from reminders import start_reminder_scheduler
@@ -342,7 +342,7 @@ def _scope_agents(db, user, year=None):
             where += " AND a.year=?"
             params.append(int(year))
         return db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE %s ORDER BY a.nom" % where,
             params,
         ).fetchall()
@@ -356,7 +356,7 @@ def _scope_agents(db, user, year=None):
         where += " AND a.year=?"
         params.append(int(year))
     return db.execute(
-        "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+        "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
         "WHERE %s ORDER BY u.login, a.nom" % where,
         params,
     ).fetchall()
@@ -415,7 +415,7 @@ def _settings_for_year(settings, year):
 
 def _agent_by_id(db, aid):
     return db.execute(
-        "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id WHERE a.id=?",
+        "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id WHERE a.id=?",
         (aid,),
     ).fetchone()
 
@@ -481,7 +481,7 @@ def _validator_chain(db, owner_id):
     while uid and uid not in seen:
         seen.add(uid)
         row = db.execute(
-            "SELECT id, login, nom, nom_famille, prenom, email, role, parent_id, actif FROM users WHERE id=?",
+            "SELECT id, login, nom, nom_ad, nom_famille, prenom, email, role, parent_id, actif FROM users WHERE id=?",
             (uid,),
         ).fetchone()
         if not row:
@@ -1037,7 +1037,7 @@ def _agent_payload(db, agent_id, user_id=None, with_cells=True):
         agent = _agent_by_id(db, agent_id)
     else:
         agent = db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.id=? AND a.user_id=?",
             (agent_id, user_id),
         ).fetchone()
@@ -1397,7 +1397,7 @@ def agents_get(aid):
     import delegation
 
     deleg = delegation.active_delegate(db, agent["user_id"])
-    payload["valideur_delegue"] = {"id": deleg["id"], "nom": deleg["nom"] or deleg["login"]} if deleg else None
+    payload["valideur_delegue"] = {"id": deleg["id"], "nom": user_label(deleg)} if deleg else None
     db.close()
     return jsonify(payload)
 
@@ -2076,12 +2076,8 @@ def _can_change_owner(db, user, agent):
 
 
 def _display_name(row):
-    """« Prénom NOM » d'un compte (jamais l'identifiant) ; à défaut, son nom affiché."""
-    prenom = (row.get("prenom") or "").strip()
-    famille = (row.get("nom_famille") or "").strip()
-    if prenom and famille:
-        return "%s %s" % (prenom.title(), famille)
-    return row.get("nom") or row.get("login") or ""
+    """Nom d'affichage unique d'un compte (voir db.user_label)."""
+    return user_label(row)
 
 
 def _owner_options(db, user, agent):
@@ -2091,7 +2087,7 @@ def _owner_options(db, user, agent):
     role_marks = ",".join("?" for _ in roles)
     if user.get("admin"):
         rows = db.execute(
-            "SELECT id, login, nom, nom_famille, prenom, role FROM users "
+            "SELECT id, login, nom, nom_ad, nom_famille, prenom, role FROM users "
             "WHERE actif=1 AND role IN (%s) ORDER BY nom, login" % role_marks,
             roles,
         ).fetchall()
@@ -2099,7 +2095,7 @@ def _owner_options(db, user, agent):
         ids = _scope_ids(db, user)
         id_marks = ",".join("?" for _ in ids)
         rows = db.execute(
-            "SELECT id, login, nom, nom_famille, prenom, role FROM users "
+            "SELECT id, login, nom, nom_ad, nom_famille, prenom, role FROM users "
             "WHERE actif=1 AND role IN (%s) AND id IN (%s) ORDER BY nom, login"
             % (role_marks, id_marks),
             roles + ids,
@@ -2562,9 +2558,9 @@ def _validator_snapshot(db, validator_id, year):
     if not validator_id:
         return "", ""
     user = db.execute(
-        "SELECT nom, login FROM users WHERE id=?", (int(validator_id),)
+        "SELECT nom, nom_ad, nom_famille, prenom, login FROM users WHERE id=?", (int(validator_id),)
     ).fetchone()
-    account = ((user["nom"] or user["login"] or "") if user else "")
+    account = user_label(user) if user else ""
     manager = _manager_name_for_user(db, validator_id, year)
     return account, manager
 
@@ -2580,7 +2576,7 @@ def _validator_group_label(account, manager):
 def _request_row(db, request_id):
     row = db.execute(
         "SELECT r.*, TRIM(a.nom || ' ' || COALESCE(a.prenom, '')) AS agent_nom, "
-        "u.login AS proprietaire, u.nom AS proprietaire_nom, "
+        "u.login AS proprietaire, " + USER_LABEL_SQL + " AS proprietaire_nom, "
         "v.login AS validator_login, v.nom AS validator_nom "
         "FROM leave_requests r "
         "JOIN agents a ON a.id=r.agent_id "
@@ -2598,13 +2594,11 @@ def _request_row(db, request_id):
         out["cells"] = []
     out["validator_account_name"] = row["validator_account_name"] or ""
     out["validator_manager_name"] = row["validator_manager_name"] or ""
-    if (row["validator_id"] and not out["validator_account_name"]
-            and not out["validator_manager_name"]):
+    if row["validator_id"]:
+        # nom d'affichage unique : recalculé à chaque lecture, pour que le même valideur porte le même nom partout
         account, manager = _validator_snapshot(db, row["validator_id"], row["year"])
-        out["validator_account_name"] = (
-            account or row["validator_nom"] or row["validator_login"] or ""
-        )
-        out["validator_manager_name"] = manager
+        out["validator_account_name"] = account or row["validator_nom"] or row["validator_login"] or ""
+        out["validator_manager_name"] = out["validator_manager_name"] or manager
     out["validator_display_name"] = (
         out["validator_manager_name"] or out["validator_account_name"]
     )
@@ -2700,15 +2694,13 @@ def requests_list():
             item["validator_group_id"] = responsible_id
             account = item.get("validator_account_name") or ""
             manager = item.get("validator_manager_name") or ""
-            if not account and not manager:
-                account, manager = _validator_snapshot(
-                    db, responsible_id, item.get("year")
-                )
+            snap_account, snap_manager = _validator_snapshot(db, responsible_id, item.get("year"))
+            account, manager = snap_account or account, manager or snap_manager      # nom d'affichage unique, recalculé
             if not account and agent:
                 ref_id = agent["validator_id"] or agent["user_id"]
-                ref = db.execute("SELECT nom, login FROM users WHERE id=?", (ref_id,)).fetchone()
+                ref = db.execute("SELECT nom, nom_ad, nom_famille, prenom, login FROM users WHERE id=?", (ref_id,)).fetchone()
                 if ref:
-                    account = ref["nom"] or ref["login"] or ""
+                    account = user_label(ref)
             if not account:
                 account = item.get("proprietaire_nom") or item.get("proprietaire") or ""
             item["validator_account_name"] = account
@@ -3578,15 +3570,15 @@ def _dashboard_without_period(db, user, agents, year, whole_scope):
         scope = set(_scope_ids(db, user))
     else:
         scope = {r["id"] for r in db.execute("SELECT id FROM users WHERE parent_id=?", (user["id"],)).fetchall()}
-    users = {r["id"]: r for r in db.execute("SELECT id, nom, nom_ad, role, actif, parent_id FROM users").fetchall()}
+    users = {r["id"]: r for r in db.execute("SELECT id, login, nom, nom_ad, nom_famille, prenom, role, actif, parent_id FROM users").fetchall()}
     out = []
     for uid in sorted(scope):
         u = users.get(uid)
         if not u or not u["actif"] or u["role"] == "administrateur" or uid == user["id"] or uid in with_fiche:
             continue
         boss = users.get(u["parent_id"]) or {}
-        out.append({"id": None, "agent_user_id": uid, "nom": u["nom_ad"] or u["nom"], "nom_rh": u["nom"], "owner_id": u["parent_id"],
-                    "owner_name": (boss.get("nom_ad") or boss.get("nom") or "") if boss else "", "is_manager": 0,
+        out.append({"id": None, "agent_user_id": uid, "nom": user_label(u), "nom_rh": u["nom"], "owner_id": u["parent_id"],
+                    "owner_name": user_label(boss) if boss else "", "is_manager": 0,
                     "sans_periode": True, "motif": "Fiche non créée"})
     out.sort(key=lambda r: (r["nom"] or "").lower())
     return out
@@ -3601,13 +3593,13 @@ def dashboard():
         agents = _scope_agents(db, request.user, year)
     elif _user_role(request.user) == "agent":
         agents = db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
     else:
         agents = db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
@@ -3873,25 +3865,25 @@ def planning():
         target_row = db.execute("SELECT * FROM users WHERE id=?", (target,)).fetchone()
         if target_row and _user_role(row_to_dict(target_row)) == "agent":
             agents = db.execute(
-                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+                "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
                 "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
                 (target, year),
             ).fetchall()
         else:
             agents = db.execute(
-                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+                "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
                 "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
                 (target, year),
             ).fetchall()
     elif _user_role(request.user) == "agent":
         agents = db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.agent_user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
     else:
         agents = db.execute(
-            "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
+            "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire FROM agents a JOIN users u ON u.id=a.user_id "
             "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
@@ -3917,7 +3909,7 @@ def planning():
         if missing:
             marks = ",".join("?" for _ in missing)
             extra = db.execute(
-                "SELECT a.*, trim(coalesce(initcap(nullif(u.prenom,'')),'') || ' ' || coalesce(nullif(u.nom_famille,''), u.nom)) AS proprietaire "
+                "SELECT a.*, " + USER_LABEL_SQL + " AS proprietaire "
                 "FROM agents a JOIN users u ON u.id=a.user_id WHERE a.agent_user_id IN (%s) AND a.year=? ORDER BY a.nom" % marks,
                 missing + [year]).fetchall()
             agents = list(agents) + [r for r in extra if r["id"] not in have]
@@ -4108,6 +4100,12 @@ import my_agents  # noqa: E402
 
 delegation.init_delegation(app, login_required, _can_manage_users)
 mail_actions.init_mail_actions(app, requests_approve.__wrapped__, requests_refuse.__wrapped__, load_settings)
+import mobile  # noqa: E402
+
+mobile.init_mobile(app, login_required)
+import ical  # noqa: E402
+
+ical.init_ical(app, login_required)
 my_agents.init_my_agents(app, login_required, _can_manage_users, _scope_ids, _create_agent_account, _insert_fiche,
                          _audit_user, _normalize_params, _request_year, ROLE_LEVELS, load_settings,
                          estimated_balance=_estimated_balance)
@@ -4224,6 +4222,11 @@ def exchange_sync_now():
 
 def bootstrap():
     init_db()
+    try:
+        import people
+        people.normalize_ad_names()          # noms AD au format « Prénom NOM »
+    except Exception as exc:  # noqa: BLE001
+        print("[boot] Noms AD non normalisés :", exc)
     try:
         audit_logs.purge()
     except Exception as exc:  # noqa: BLE001

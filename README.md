@@ -30,6 +30,8 @@ Il relaie vers le backend interne uniquement les routes utiles aux agents ; l'AP
 documentation Swagger, l'état détaillé et « se connecter en tant que » restent réservés au réseau
 interne (`frontend/nginx.dmz.conf.template`).
 
+**Version mobile** (frontend dédié, DMZ uniquement, port **8113**) : dossier `conges-mobile-dmz/`, projet séparé qui ne relaie que douze routes d'API (compteurs, demandes en cours, demande « du … au … », agenda). Voir `conges-mobile-dmz/README.md` ; sur un poste sans Docker : `cd conges-mobile-dmz && ../.venv/Scripts/python dev_server.py` (http://127.0.0.1:8113, backend sur 8110).
+
 **Poste de développement** (Python 3.12+) :
 
 ```bash
@@ -159,6 +161,7 @@ frontend/                   Interface (HTML/CSS/JS sans dépendance) + nginx, im
   public/                   Fichiers servis aux navigateurs
   nginx.conf.template       Configuration du frontend interne (port 8111)
   nginx.dmz.conf.template   Configuration du frontend DMZ (port 8112), routes internes bloquées
+conges-mobile-dmz/          Version mobile (DMZ uniquement, port 8113) : page autonome, nginx en liste blanche, Docker, dev_server.py
 docker-compose.yml          Déploiement interne (backend 8110 + frontend 8111)
 docker-compose.dmz.yml      Déploiement du frontend DMZ (8112)
 .env / .env.example         Configuration (à la racine, lue par docker-compose et par l'application)

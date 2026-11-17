@@ -13,6 +13,14 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.19.0 — 2026-11-17 — Version mobile en DMZ (frontend dédié) et nom du valideur unifié
+
+- Version mobile : un frontend dédié, séparé de l'application complète (dossier conges-mobile-dmz, déployé en DMZ uniquement), limité aux fonctions de base : compteurs, demandes en cours (en attente ou validées), demande simple « du … au … » (premier et dernier jour à la demi-journée) et agenda du mois. Il ne relaie que douze routes d'API ; tout le reste y est refusé.
+- Version mobile : l'agenda écrit le type de congé (CA, RTT…) sur chaque demi-journée avec une légende des types du mois ; en demandant des jours, on répartit le total entre les types (congés annuels, RTT, CET, sujétion…) avec des boutons − et + jusqu'à ce que tous les jours soient couverts, dans la limite du solde de chaque type ; une demande est créée par type.
+- Version mobile : on peut annuler une demande non validée (immédiat) ou demander l'annulation d'une demande validée (le valideur doit l'accepter) ; ces annulations ne concernent que ses propres demandes.
+- Version mobile : abonnement à l'agenda du téléphone (iCalendar/ICS) — un lien personnel et secret publie en lecture seule les congés avec leur état (✅ validé, ⏳ en attente) ; aucun motif sensible n'y figure (maladie, congés familiaux… s'affichent « Absence ») ; un appui sur « iPhone », « Google Agenda » ou « Outlook » suffit pour s'abonner ; le lien se remplace ou s'arrête à tout moment.
+- Nom du valideur unifié : partout (cartes de Mon équipe, tableau de bord, fiches, demandes, e-mails, recherche administrateur), une personne s'affiche au même format « Prénom NOM » (nom Active Directory remis dans cet ordre, à défaut son prénom et son nom de famille) ; les noms AD déjà enregistrés ont été convertis.
+
 ## 0.18.2 — 2026-11-17 — Tableau de bord par entité, recherche rapide d'une personne (administrateur)
 
 - Tableau de bord : les personnes sans période (fiche non créée, ou fiche à la période incomplète) sont aussi listées, avec la mention « Pas de période » à la place des soldes.

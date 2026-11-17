@@ -365,6 +365,124 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual((incomplete[0].get("sans_periode"), incomplete[0].get("motif")), (True, "Période incomplète"))
         self.assertFalse([r for r in rows if r.get("agent_user_id") == 1])                  # ni l'administrateur ni soi-même
 
+    def test_one_display_name_everywhere_is_prenom_nom(self):
+        from db import ad_display, user_label
+        self.assertEqual(ad_display("GAULTIER Djamel"), "Djamel GAULTIER")
+        self.assertEqual(ad_display("DE LA CRUZ Marie"), "Marie DE LA CRUZ")
+        self.assertEqual(ad_display("Sofia Abdiche"), "Sofia Abdiche")                    # déjà dans cet ordre : inchangé
+        self.assertEqual(ad_display("Djamel GAULTIER"), "Djamel GAULTIER")                # idempotent
+        self.assertEqual(user_label({"nom_ad": "CISSE Fatou", "nom": "CISSE FATOU NENEH"}), "Fatou CISSE")
+        self.assertEqual(user_label({"nom_ad": "", "nom_famille": "ABDICHE SLIMANI", "prenom": "SOFIA", "nom": "ABDICHE SLIMANI SOFIA"}), "Sofia ABDICHE SLIMANI")
+        self.assertEqual(user_label({"nom": "Direction RH", "login": "DRH"}), "Direction RH")
+
+    def test_mobile_summary_and_days_for_my_own_fiche(self):
+        r = self._call("GET", "/api/mobile/summary?year=2026", uid=4)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        body = r.get_json()
+        self.assertEqual(body["fiche"]["id"], 1)
+        self.assertIsInstance(body["demandables"], list)
+        self.assertTrue(all("restant" in t and "label" in t for t in body["demandables"]))     # solde (ou None) pour la répartition d'une demande
+        self._make_user("MOBSANSFICHE")
+        conn = db.get_db()
+        no_fiche_uid = conn.execute("SELECT id FROM users WHERE login='MOBSANSFICHE'").fetchone()["id"]
+        conn.close()
+        empty = self._call("GET", "/api/mobile/summary?year=2026", uid=no_fiche_uid)
+        self.assertEqual((empty.status_code, empty.get_json()["fiche"]), (200, None))                          # pas de fiche : réponse vide, sans erreur
+        # lundi 1er juin -> vendredi 5 juin 2026 : 5 jours travaillés = 10 demi-journées
+        d = self._call("GET", "/api/mobile/days?du=2026-06-01&au=2026-06-05", uid=4).get_json()
+        self.assertEqual((len(d["cells"]), d["jours"]), (10, 5.0))
+        d = self._call("GET", "/api/mobile/days?du=2026-06-01&au=2026-06-05&debut=apres_midi&fin=midi", uid=4).get_json()
+        self.assertEqual(d["jours"], 4.0)                                                                       # première matinée et dernier après-midi exclus
+        d = self._call("GET", "/api/mobile/days?du=2026-06-06&au=2026-06-07", uid=4).get_json()                # week-end : rien à poser
+        self.assertEqual(d["cells"], [])
+        self.assertEqual(self._call("GET", "/api/mobile/days?du=2026-06-05&au=2026-06-01", uid=4).status_code, 400)
+        self.assertEqual(self._call("GET", "/api/mobile/days?du=2026-12-30&au=2027-01-02", uid=4).status_code, 400)
+
+    def test_mobile_cancel_is_limited_to_my_own_requests(self):
+        def new_request(status):
+            conn = db.get_db()
+            rid = conn.execute(
+                "INSERT INTO leave_requests (agent_id, user_id, year, code, cells, days, status, validator_id, comment, soumis_le) "
+                "VALUES (1, 4, 2026, 'CA', '[9010,9011]', 1.0, ?, 3, '', '2026-05-01 10:00:00')", (status,)).lastrowid
+            conn.commit()
+            conn.close()
+            return rid
+        def status_of(rid):
+            conn = db.get_db()
+            row = conn.execute("SELECT status FROM leave_requests WHERE id=?", (rid,)).fetchone()
+            conn.close()
+            return row["status"]
+        self._make_user("MOBAUTRE")
+        conn = db.get_db()
+        other = conn.execute("SELECT id FROM users WHERE login='MOBAUTRE'").fetchone()["id"]
+        conn.close()
+        pending, validated = new_request("en_attente"), new_request("validee")
+        # un administrateur ou un autre agent ne peut pas annuler la demande d'autrui depuis le mobile
+        self.assertEqual(self._call("POST", "/api/mobile/requests/%d/cancel" % pending, uid=1, payload={}).status_code, 404)
+        self.assertEqual(self._call("POST", "/api/mobile/requests/%d/cancel" % pending, uid=other, payload={}).status_code, 404)
+        self.assertEqual(status_of(pending), "en_attente")
+        # le titulaire annule sa demande en attente
+        ok = self._call("POST", "/api/mobile/requests/%d/cancel" % pending, uid=4, payload={})
+        self.assertEqual(ok.status_code, 200, ok.get_json())
+        self.assertEqual(status_of(pending), "annulee")
+        # une demande validée ne s'annule pas directement : il faut en demander l'annulation (acceptée ensuite par le valideur)
+        self.assertEqual(self._call("POST", "/api/mobile/requests/%d/cancel" % validated, uid=4, payload={}).status_code, 400)
+        ask = self._call("POST", "/api/mobile/requests/%d/cancel-request" % validated, uid=4, payload={"comment": "erreur de saisie"})
+        self.assertEqual(ask.status_code, 200, ask.get_json())
+        self.assertEqual(status_of(validated), "annulation_demandee")
+        conn = db.get_db()
+        conn.execute("DELETE FROM leave_requests WHERE id IN (?, ?)", (pending, validated))
+        conn.commit()
+        conn.close()
+
+    def test_ics_subscription_publishes_my_leave_with_its_state(self):
+        conn = db.get_db()
+        for jour, code in ((10050, "CA"), (10051, "CA"), (10070, "CM"), (10071, "CM"), (10080, "CAH")):
+            conn.execute("INSERT INTO cells (agent_id, jour, code) VALUES (1, ?, ?)", (jour, code))
+        rid = conn.execute("INSERT INTO leave_requests (agent_id, user_id, year, code, cells, days, status, validator_id, comment, soumis_le) "
+                           "VALUES (1, 4, 2026, 'CA', '[10060]', 0.5, 'en_attente', 3, '', '2026-05-01 10:00:00')").lastrowid
+        conn.commit()
+        conn.close()
+        anonymous = self.app_module.app.test_client()                                    # sans session : seul le jeton fait foi
+        try:
+            self.assertEqual(anonymous.post("/api/mobile/calendar/link").status_code, 401)
+            self.assertFalse(self._call("GET", "/api/mobile/calendar", uid=4).get_json()["active"])
+            token = self._call("POST", "/api/mobile/calendar/link", uid=4).get_json()["token"]
+            self.assertTrue(self._call("GET", "/api/mobile/calendar", uid=4).get_json()["active"])
+            feed = anonymous.get("/api/ical/%s.ics" % token)
+            self.assertEqual(feed.status_code, 200)
+            self.assertTrue(feed.headers["Content-Type"].startswith("text/calendar"))
+            body = feed.get_data(as_text=True)
+            self.assertIn("BEGIN:VCALENDAR", body)
+            self.assertIn("DTSTART;VALUE=DATE:20261005", body)                           # journée entière validée
+            self.assertIn("SUMMARY:✅ CA", body)
+            self.assertIn("STATUS:CONFIRMED", body)
+            self.assertIn("DTSTART:20261006T083000", body)                               # demi-journée demandée : matin
+            self.assertIn("SUMMARY:⏳ CA (en attente)", body)
+            self.assertIn("STATUS:TENTATIVE", body)
+            self.assertIn("SUMMARY:✅ Absence", body)                                    # maladie : jamais de motif
+            self.assertNotIn("CM", body)
+            self.assertNotIn("CAH", body)                                                # absence en heures : pas d'événement
+            self.assertTrue(self._call("GET", "/api/mobile/calendar", uid=4).get_json()["last_used_at"])
+            # un nouveau lien remplace l'ancien ; l'arrêt de la synchronisation le désactive ; un jeton inconnu donne 404
+            again = self._call("POST", "/api/mobile/calendar/link", uid=4).get_json()["token"]
+            self.assertEqual(anonymous.get("/api/ical/%s.ics" % token).status_code, 404)
+            self.assertEqual(anonymous.get("/api/ical/%s.ics" % again).status_code, 200)
+            self.assertEqual(self._call("POST", "/api/mobile/calendar/revoke", uid=4).status_code, 200)
+            self.assertEqual(anonymous.get("/api/ical/%s.ics" % again).status_code, 404)
+            self.assertEqual(anonymous.get("/api/ical/%s.ics" % ("x" * 43)).status_code, 404)
+            conn = db.get_db()
+            stored = conn.execute("SELECT COUNT(*) AS n FROM calendar_tokens WHERE token_hash IN (?, ?)", (token, again)).fetchone()["n"]
+            conn.close()
+            self.assertEqual(stored, 0)                                                  # seul le haché est conservé, jamais le jeton
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM cells WHERE agent_id=1 AND jour IN (10050, 10051, 10070, 10071, 10080)")
+            conn.execute("DELETE FROM leave_requests WHERE id=?", (rid,))
+            conn.execute("DELETE FROM calendar_tokens WHERE user_id=4")
+            conn.commit()
+            conn.close()
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)

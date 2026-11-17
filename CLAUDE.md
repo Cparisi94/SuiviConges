@@ -8,8 +8,9 @@ Guide technique imposé par la DSI : `GUIDE_NOUVELLE_APP_VILLE.md`.
 - `backend/` : API Flask (`app.py` routes internes, `rules.py` moteur de calcul, `pg_db.py`/`db.py` accès PostgreSQL, `apm.py` API centrale, `api_v1.py`,
   `api_keys.py`, `act_as.py`, `admin_settings.py` journaux et e-mails, `audit_logs.py`, `mail_templates.py`, `sedit_rh.py`, `rh_import.py`, `version.py`), `migrations/` (SQL numérotées), `tests/`, `Dockerfile`.
 - `frontend/public/` : interface (HTML/CSS/JS) ; `frontend/` : nginx interne et DMZ, `Dockerfile`.
+- `conges-mobile-dmz/` : **version mobile**, frontend dédié et autonome (DMZ uniquement), nginx en liste blanche, `Dockerfile`, `dev_server.py` (poste sans Docker) ; le backend correspondant est `backend/mobile.py`.
 - Racine : `docker-compose.yml`, `docker-compose.dmz.yml`, `.env` (secrets, **jamais affiché ni commité**), `.env.example`, documentation.
-- Ports : backend **8110**, frontend interne **8111**, frontend DMZ **8112**.
+- Ports : backend **8110**, frontend interne **8111**, frontend DMZ **8112**, version mobile DMZ **8113**.
 
 ## Commandes (poste Windows, environnement virtuel à la racine)
 ```bash

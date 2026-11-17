@@ -8,6 +8,7 @@ pour éviter une dépendance circulaire.
 """
 import datetime as dt
 import json
+import sys
 import time
 
 from flask import Blueprint, jsonify, request
@@ -23,6 +24,11 @@ bp = Blueprint("api_v1", __name__)
 
 
 def _core():
+    """Module principal de l'application. Lancé par `python app.py` (poste de développement), il s'appelle `__main__` : un `import app` le
+    rechargerait une seconde fois (blueprints enregistrés deux fois, erreur 500) ; sous gunicorn ou dans les tests, c'est `app`."""
+    main = sys.modules.get("__main__")
+    if main is not None and hasattr(main, "_agent_by_id") and hasattr(main, "app"):
+        return main
     import app as core
     return core
 

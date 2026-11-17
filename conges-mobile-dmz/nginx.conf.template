@@ -1,0 +1,105 @@
+# Suivi des congés — version mobile en DMZ. Ne sert QUE la page mobile et ne relaie QUE douze routes d'API en liste blanche.
+# Aucune base de données, aucun secret ici. Variables : BACKEND_HOST, BACKEND_PORT (le seul port ouvert du pare-feu DMZ -> LAN).
+# Le HTTPS est terminé par le reverse-proxy de la Ville placé devant ce conteneur.
+limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=api:10m rate=120r/m;
+limit_req_zone $binary_remote_addr zone=ics:10m rate=30r/m;      # flux d'abonnement : lu par le téléphone, jamais en rafale
+
+map $http_x_forwarded_proto $fwd_proto {
+  default $http_x_forwarded_proto;
+  ''      $scheme;
+}
+
+server {
+  listen 80;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+  server_tokens off;
+  client_max_body_size 64k;     # aucune pièce jointe depuis le mobile : des demandes JSON seulement
+
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy no-referrer always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+  add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+  # --- API : LISTE BLANCHE (tout le reste est refusé : 404) ---
+  # Chaque bloc efface l'en-tête X-Scope (réservé à la vue « Voir tout » de l'application complète) et pose l'adresse du client.
+  location = /api/auth/login {
+    limit_except POST { deny all; }
+    limit_req zone=auth burst=3 nodelay;
+    limit_req_status 429;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  location = /api/auth/logout {
+    limit_except POST { deny all; }
+    limit_req zone=api burst=20 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  location = /api/me {
+    limit_except GET { deny all; }
+    limit_req zone=api burst=20 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  location ^~ /api/mobile/ {
+    limit_except GET { deny all; }
+    limit_req zone=api burst=30 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  # Création d'une demande de congé (POST seulement : la lecture des demandes passe par /api/mobile/summary).
+  location = /api/requests {
+    limit_except POST { deny all; }
+    limit_req zone=api burst=10 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+
+  # Annulation : d'une demande en attente (cancel) ou demande d'annulation d'une demande validée (cancel-request). POST seulement ;
+  # le backend vérifie que la demande est bien celle de l'agent connecté.
+  # (préfixe plus long que /api/mobile/ : prioritaire ; seules ces deux routes existent côté backend)
+  location ^~ /api/mobile/requests/ {
+    limit_except POST { deny all; }
+    limit_req zone=api burst=10 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+
+  # Abonnement ICS : création / arrêt de mon lien (POST, session), puis le flux lui-même, lu par le téléphone SANS session (le jeton fait foi).
+  location = /api/mobile/calendar/link {
+    limit_except POST { deny all; }
+    limit_req zone=api burst=5 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  location = /api/mobile/calendar/revoke {
+    limit_except POST { deny all; }
+    limit_req zone=api burst=5 nodelay;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+  location ~ ^/cal/[A-Za-z0-9_-]{20,80}\.ics$ {
+    limit_except GET HEAD { deny all; }
+    limit_req zone=ics burst=10 nodelay;
+    limit_req_status 429;
+    rewrite ^/cal/(.+)$ /api/ical/$1 break;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+
+  location = /api/status { default_type application/json; return 200 '{"status":"ok"}'; }
+  # Diagnostic de déploiement : relaie RÉELLEMENT la sonde du backend (rien n'est simulé, contrairement à /api/status).
+  #   curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1/api/diag
+  # 200 = nginx atteint le backend ; 502/504 = pare-feu, BACKEND_HOST ou BACKEND_PORT.
+  location = /api/diag {
+    proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT}/api/status;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 10s;
+  }
+  location = /healthz { access_log off; default_type text/plain; return 200 "ok"; }
+  location /api/ { return 404; }       # aucune autre route de l'API interne n'est joignable depuis la DMZ
+
+  # --- page mobile (statique) ---
+  location = /index.html { add_header Cache-Control "no-cache" always; }
+  location / {
+    try_files $uri /index.html;
+    expires -1;
+  }
+}

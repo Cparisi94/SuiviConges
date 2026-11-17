@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.18.2.
+> Dernière mise à jour : version 0.19.0.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -116,6 +116,7 @@
 
 ## 8. Tableaux de bord et planning
 
+- La **version mobile** (frontend dédié, accessible en DMZ uniquement) est limitée à la **propre fiche** de la personne : compteurs, demandes en cours (en attente ou validées à venir), demande simple « du … au … » et agenda. Les jours demandés se répartissent entre les types de congés (congés annuels, RTT, CET…) dans la limite du solde de chaque type ; une demande est créée par type. Une demande **non validée** peut être annulée tout de suite ; pour une demande **validée**, on demande l'annulation, que le valideur doit accepter (jours posés tant qu'il ne l'a pas fait) ; depuis le mobile, seules ses propres demandes sont concernées. **Agenda du téléphone** : l'agent peut s'abonner (lien personnel et secret, lecture seule) pour voir ses congés dans l'agenda de son téléphone, ✅ validés ou ⏳ en attente ; aucun motif sensible n'y figure (maladie, congés familiaux, absences particulières : « Absence ») ; le lien se remplace ou s'arrête à tout moment. La demande suit les mêmes contrôles et le même circuit de validation que dans l'application complète ; seules les demi-journées travaillées (hors fériés et hors cases déjà prises) sont posées.
 - Le **tableau de bord** regroupe les fiches **par entité** (unité Sedit RH de la personne) ; le titre de chaque groupe est le nom de l'entité. Le **valideur de l'entité** (son responsable désigné, sinon le valideur de plus haut niveau rattaché à l'unité) est affiché en premier, en gras avec une étoile ; les fiches sans entité sont regroupées à part. Les **personnes sans période** (fiche non créée, ou fiche sans période de paramètres exploitable) sont aussi listées, avec la mention « Pas de période » et sans soldes.
 - Un **administrateur** dispose d'une recherche rapide (🔍, Ctrl+K) : par nom RH, matricule ou e-mail, elle affiche le valideur de la personne, son délégataire du moment et ses comptes (application, Active Directory, fiches).
 - **Agent** : sa synthèse et l'accès à sa fiche. **Tous les profils** (valideur, administrateur comme agent) disposent de « **Ma synthèse** » : leurs propres soldes, demandes et heures (la synthèse de l'équipe reste le « Tableau de bord »). **Valideur** : une ligne par fiche du périmètre, regroupée par responsable. **RH** (tableau de bord **réservé aux comptes administrateurs** : ni les valideurs ni les agents ne le voient, et l'API le refuse) : taux d'absence (jours d'absence ÷ capacité de travail) global, par direction / service et en arbre ; demandes en retard (plus de 3 jours) ; RCH proches de l'expiration.
@@ -142,7 +143,7 @@
 - Les agents de Sedit RH ne sont lus qu'à la demande et gardés quelques minutes en mémoire ; seuls ceux que l'on crée ou rapproche sont enregistrés.
 - Le **rapprochement des matricules** se fait par nom et prénom : seules les correspondances certaines sont proposées ; les homonymes ne sont jamais rapprochés automatiquement.
 - La **date d'arrivée** issue de Sedit RH n'est reprise que si elle tombe dans l'année de la fiche.
-- **Nom affiché** : le nom de l'Active Directory est affiché par défaut ; le nom RH (Sedit RH) apparaît en dessous, en petit et en italique, quand il est différent. Le nom RH reste la référence pour la recherche d'un agent et pour l'API « manager d'un agent » (`/api/v1/managers`), qui ne renvoie jamais le nom AD.
+- **Nom affiché** : une personne (et en particulier un valideur) s'affiche **partout au même format « Prénom NOM »** : son nom Active Directory (remis dans cet ordre) s'il est connu, sinon son prénom et son nom de famille ; le nom RH (Sedit RH) apparaît en dessous, en petit et en italique, quand il est différent. Le nom RH reste la référence pour la recherche d'un agent et pour l'API « manager d'un agent » (`/api/v1/managers`), qui ne renvoie jamais le nom AD.
 - Mon équipe signale par une alerte les personnes actives dont le **lien Active Directory est incomplet** (pas d'identifiant AD, ou pas d'adresse e-mail dans l'AD) ; « Recherche AD » les relie et enregistre leur nom AD.
 - Le **manager** d'un agent est son valideur ; s'il délègue ce jour-là (absence ou période de délégation), le délégataire est indiqué en plus.
 

@@ -5525,8 +5525,8 @@ async function viewMyAgents() {
     : `<button type="button" class="btn btn-small ma-period ma-fiche-btn" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
   /* Nom affiché : le nom AD par défaut ; en dessous, en italique, le nom RH quand il diffère (mêmes mots dans un autre ordre = identique) */
   const nameKey = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z]+/).filter(Boolean).sort().join(" ");
-  const shownName = (n) => n.nom_ad || n.nom || n.login;
-  const rhName = (n) => (n.nom_ad && n.nom && nameKey(n.nom_ad) !== nameKey(n.nom) ? n.nom : "");
+  const shownName = (n) => n.label || n.nom_ad || n.nom || n.login;
+  const rhName = (n) => (n.label && n.nom && nameKey(n.label) !== nameKey(n.nom) ? n.nom : "");
   const cardHtml = (n, resp, groupName) => {
     const me = n.id === state.user.id;
     return `<div class="ma-card ma-drop${n.profil === "valideur" ? " ma-valideur" : ""}${resp ? " ma-resp" : ""}${n.by_deleg ? " ma-bydeleg" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">

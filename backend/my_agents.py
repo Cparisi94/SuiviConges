@@ -16,7 +16,7 @@ import delegation
 import people
 import rh_import
 import sedit_rh
-from db import get_db, row_to_dict
+from db import get_db, row_to_dict, user_label
 from http_utils import error
 
 bp = Blueprint("my_agents", __name__, url_prefix="/api/my-agents")
@@ -53,7 +53,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
 
     def children_map(db):
         rows = [row_to_dict(r) for r in db.execute(
-            "SELECT id, login, ad_login, nom, nom_ad, matricule, email, role, admin, actif, parent_id, unit_code FROM users").fetchall()]
+            "SELECT id, login, ad_login, nom, nom_ad, nom_famille, prenom, matricule, email, role, admin, actif, parent_id, unit_code FROM users").fetchall()]
         kids = {}
         for u in rows:
             kids.setdefault(u["parent_id"], []).append(u)
@@ -187,10 +187,10 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
 
             def node(u, seen, level=0, by_deleg=False):
                 # by_deleg : personne placée sous un valideur qui me délègue en ce moment (je la gère par délégation).
-                out = {"by_deleg": by_deleg, "delegated": u["id"] in delegating and level == 1, "fiche": fiches.get(u["id"]), "year": year, "id": u["id"], "nom": u["nom"], "nom_ad": u["nom_ad"] or "", "login": u["login"], "matricule": u["matricule"],
+                out = {"by_deleg": by_deleg, "delegated": u["id"] in delegating and level == 1, "fiche": fiches.get(u["id"]), "year": year, "id": u["id"], "nom": u["nom"], "nom_ad": u["nom_ad"] or "", "label": user_label(u), "login": u["login"], "matricule": u["matricule"],
                        "role": u["role"], "admin": u["admin"], "actif": u["actif"], "no_email": not (u["email"] or "").strip(), "no_ad": not (u["ad_login"] or "").strip(),
                        "profil": "agent" if u["role"] == "agent" else "valideur",
-                       "valideur": ((by_id.get(u["parent_id"]) or {}).get("nom_ad") or (by_id.get(u["parent_id"]) or {}).get("nom") or (by_id.get(u["parent_id"]) or {}).get("login") or ""),
+                       "valideur": (user_label(by_id[u["parent_id"]]) if u["parent_id"] in by_id else ""),
                        "unit_code": u["unit_code"], "unit_label": (index.get(u["unit_code"]) or {}).get("libelle", ""),
                        "unit_head": bool(u["unit_code"] and (index.get(u["unit_code"]) or {}).get("head_user_id") == u["id"]),
                        "children": []}
@@ -749,7 +749,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
                 return error("Cet identifiant AD est déjà utilisé par le compte %s" % clash["login"], 400)
             old = db.execute("SELECT email, ad_login FROM users WHERE id=?", (uid,)).fetchone()
             db.execute("UPDATE users SET email=?, ad_login=?, nom_ad=? WHERE id=?",
-                       (found["email"], username, (found.get("displayName") or "").strip(), uid))
+                       (found["email"], username, people.ad_display(found.get("displayName") or ""), uid))
             db.execute("UPDATE agents SET email=? WHERE agent_user_id=?", (found["email"], uid))
             audit_user(db, uid, user["login"], request.user, "modification", "e-mail", old["email"] or "", found["email"],
                        "Compte AD « %s » rattaché (recherche AD)" % username)
