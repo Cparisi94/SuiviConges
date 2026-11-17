@@ -1397,7 +1397,7 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertTrue(self.app_module._cell_covered(cov, 2026, 8310))     # 31 août (matin) : clé 8310
         self.assertFalse(self.app_module._cell_covered(cov, 2026, 9010))
         self.assertEqual(self.app_module._agent_coverage({"year": 2026, "periods": "[]", "params": json.dumps({"date_arrivee": "2026-03-02"})}),
-                         [{"start": "2026-03-02", "end": "2026-12-31", "days": [1, 2, 3, 4, 5], "ferie": False}])
+                         [{"start": "2026-03-02", "end": "2026-12-31", "days": [1, 2, 3, 4, 5], "halves": {}, "ferie": False}])
         # Jours travaillés : samedi / dimanche non décomptés, férié seulement si l'agent le travaille.
         self.assertFalse(self.app_module._cell_covered(cov, 2026, 8290))                       # samedi 29 août
         self.assertTrue(self.app_module._cell_covered(cov, 2026, 8280))                        # vendredi 28 août : travaillé
@@ -1927,8 +1927,25 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_part_time_period_can_work_afternoons_only(self):
+        app = self.app_module
+        per = [{"start": "2026-01-01", "end": "2026-12-31", "jours_hebdo": 5, "jours_travailles": [1, 2, 3, 4, 5], "demi_jours": {"1": "pm", "2": "pm", "3": "pm", "4": "pm", "5": "pm"}}]
+        norm = app._normalize_periods(per, {}, 2026)
+        self.assertEqual(norm[0]["demi_jours"]["1"], "pm")
+        # demi-journée inconnue, ou jour non travaillé : refusé
+        self.assertIsNone(app._normalize_periods([dict(per[0], demi_jours={"1": "soir"})], {}, 2026))
+        self.assertIsNone(app._normalize_periods([dict(per[0], jours_hebdo=4, jours_travailles=[1, 2, 3, 4], demi_jours={"5": "pm"})], {}, 2026))
+        agent = {"year": 2026, "periods": json.dumps(norm), "params": "{}"}
+        cov = app._agent_coverage(agent)
+        # lundi 4 mai 2026 : le matin n'est pas travaillé, l'après-midi oui ; sans « demi_jours » : les deux
+        self.assertFalse(app._cell_covered(cov, 2026, 5040))
+        self.assertTrue(app._cell_covered(cov, 2026, 5041))
+        full = app._agent_coverage({"year": 2026, "periods": json.dumps(app._normalize_periods([dict(per[0], demi_jours={})], {}, 2026)), "params": "{}"})
+        self.assertTrue(app._cell_covered(full, 2026, 5040) and app._cell_covered(full, 2026, 5041))
+
     def test_fiche_without_email_can_still_be_saved(self):
         agent = self._call("GET", "/api/agents/1", uid=1).get_json()
+        old_email = db.get_db().execute("SELECT email FROM agents WHERE id=1").fetchone()["email"]
         conn = db.get_db()
         conn.execute("UPDATE agents SET email='' WHERE id=1")
         conn.commit()
@@ -1937,6 +1954,10 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(self._call("PUT", "/api/agents/1", uid=1, payload=payload).status_code, 200)
         payload["email"] = "pas-une-adresse"
         self.assertEqual(self._call("PUT", "/api/agents/1", uid=1, payload=payload).status_code, 400)
+        conn = db.get_db()
+        conn.execute("UPDATE agents SET email=? WHERE id=1", (old_email,))
+        conn.commit()
+        conn.close()
 
     def test_sedit_codes_cannot_be_entered_by_hand(self):
         agent = self._call("GET", "/api/agents/1", uid=1).get_json()

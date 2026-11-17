@@ -1770,3 +1770,8 @@ tr.row-off td { color: #888; }
 .act-qr { margin: 8px auto; width: 220px; }
 .act-qr svg { width: 100%; height: auto; }
 @media print { body > *:not(#act-modal) { display: none !important; } #act-modal { position: static; background: none; } #act-modal .modal-actions { display: none; } }
+
+/* Demi-journées travaillées d'une période (temps partiel : ex. après-midi seulement) */
+.wd-halves { display: flex; flex-wrap: wrap; gap: 2px 6px; margin-top: 4px; padding-top: 4px; border-top: 1px dotted var(--border, #d8cfc6); }
+.periods-table .wd.wd-half { flex-direction: row; gap: 3px; margin: 0; }
+.wd-half select { width: auto; min-width: 0; padding: 0 2px; font-size: 11px; height: 20px; }

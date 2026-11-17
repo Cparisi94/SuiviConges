@@ -1156,6 +1156,25 @@ def _clean_work_days(raw, jours_hebdo=None):
     return days
 
 
+def _clean_half_days(raw, days):
+    """Demi-journées travaillées d'une période : {"1": "pm", "3": "am"} = lundi l'après-midi seulement, mercredi le matin seulement (un jour absent
+    de la liste est travaillé toute la journée). Seuls les jours travaillés `days` sont acceptés. None si la valeur est invalide."""
+    if raw in (None, "", {}):
+        return {}
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for key, value in raw.items():
+        try:
+            wd = int(key)
+        except (TypeError, ValueError):
+            return None
+        if wd not in (days or []) or value not in ("am", "pm"):
+            return None
+        out[str(wd)] = value
+    return out
+
+
 def _normalize_periods(raw, params, year):
     """Valide les périodes de paramètres d'une fiche.
 
@@ -1207,6 +1226,9 @@ def _normalize_periods(raw, params, year):
         days = _clean_work_days(item.get("jours_travailles"), jours)
         if days is None:
             return None
+        halves = _clean_half_days(item.get("demi_jours"), days)
+        if halves is None:
+            return None
         out.append({
             "start": start.isoformat(),
             "end": end.isoformat(),
@@ -1215,6 +1237,7 @@ def _normalize_periods(raw, params, year):
             "quotite": (item.get("quotite") or "").strip(),
             "jours_hebdo": jours,
             "jours_travailles": days,
+            "demi_jours": halves,
             "ferie_travaille": bool(item.get("ferie_travaille")),
         })
         previous_end = end
@@ -1771,7 +1794,7 @@ def agents_duplicate():
         params = json_loads(source["params"])
         source_periods = json_loads(source["periods"]) if source["periods"] else []
         last = source_periods[-1] if source_periods else {}
-        for key in ("penibilite", "duree_hebdo", "quotite", "jours_hebdo", "jours_travailles", "ferie_travaille"):
+        for key in ("penibilite", "duree_hebdo", "quotite", "jours_hebdo", "jours_travailles", "demi_jours", "ferie_travaille"):
             if last and key in last:
                 params[key] = last.get(key)
         params["date_arrivee"] = ""
@@ -1807,7 +1830,7 @@ def agents_duplicate():
             params["jours_travailles"] = days
             new_periods = [{"start": "%04d-01-01" % year, "end": period_end, "penibilite": params["penibilite"],
                             "duree_hebdo": params.get("duree_hebdo") or "", "quotite": params["quotite"], "jours_hebdo": jours,
-                            "jours_travailles": days, "ferie_travaille": bool(params.get("ferie_travaille"))}]
+                            "jours_travailles": days, "demi_jours": _clean_half_days(params.get("demi_jours"), days) or {}, "ferie_travaille": bool(params.get("ferie_travaille"))}]
         cur = db.execute(
             "INSERT INTO agents (user_id, agent_user_id, nom, prenom, email, matricule, validator_id, year, params, periods, is_manager) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -1895,6 +1918,7 @@ def _agent_coverage(agent):
     if periods:
         return [{"start": p["start"], "end": p["end"],
                  "days": p.get("jours_travailles") or _clean_work_days(None, p.get("jours_hebdo")),
+                 "halves": _halves_map(p.get("demi_jours")),
                  "ferie": bool(p.get("ferie_travaille"))} for p in periods]
     params = json_loads(agent["params"]) if agent["params"] else {}
     jours = params.get("jours_hebdo")
@@ -1905,7 +1929,19 @@ def _agent_coverage(agent):
     return [{"start": (params.get("date_arrivee") or "%d-01-01" % year)[:10],
              "end": (params.get("date_depart") or "%d-12-31" % year)[:10],
              "days": params.get("jours_travailles") or _clean_work_days(None, jours),
+             "halves": _halves_map(params.get("demi_jours")),
              "ferie": bool(params.get("ferie_travaille"))}]
+
+
+def _halves_map(raw):
+    """{"1": "pm"} -> {1: 1} : demi-journée travaillée (0 = matin, 1 = après-midi) des jours à demi-journée ; les autres jours sont travaillés en entier."""
+    out = {}
+    for key, value in (raw or {}).items():
+        try:
+            out[int(key)] = 0 if value == "am" else 1
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _cell_covered(coverage, year, key, holidays=()):
@@ -1915,7 +1951,10 @@ def _cell_covered(coverage, year, key, holidays=()):
     weekday = dt.date(int(year), month, day).isoweekday()
     for period in coverage:
         if period["start"] <= iso <= period["end"]:
-            return weekday in period["days"] and (period["ferie"] or iso not in holidays)
+            if weekday not in period["days"] or not (period["ferie"] or iso not in holidays):
+                return False
+            only = (period.get("halves") or {}).get(weekday)         # jour travaillé une demi-journée seulement (ex. temps partiel : après-midi)
+            return only is None or only == key % 10
     return False
 
 

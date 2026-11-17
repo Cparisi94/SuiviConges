@@ -13,6 +13,12 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.23.0 — 2026-11-17 — Demi-journées travaillées d'une période (temps partiel)
+
+- Dans les périodes de paramètres d'une fiche, pour chaque jour travaillé, on peut indiquer si la personne travaille la journée entière, le matin seulement ou l'après-midi seulement (ex. un agent à mi-temps qui travaille uniquement les après-midi).
+- La demi-journée non travaillée est grisée dans le calendrier et n'est ni sélectionnable, ni décomptée ; le serveur applique la même règle aux demandes, à la version mobile et aux absences de Sedit RH.
+- Un jour décoché perd sa demi-journée ; l'ajout d'un changement de période et le report de l'année reprennent les demi-journées.
+
 ## 0.22.0 — 2026-11-17 — Absences de Sedit RH intégrées aux plannings et aux compteurs
 
 - Les absences saisies dans Sedit RH (maladie, maternité-paternité-adoption, présence parentale, soins à un membre de la famille, garde d'enfant malade, autorisation spéciale d'absence) sont maintenant lues dans Sedit RH à chaque affichage d'un planning ou d'un compteur (application complète et version mobile) et conservées en base ; si Sedit RH ne répond pas, la dernière lecture sert.

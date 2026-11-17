@@ -13,9 +13,20 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.22.0"
+VERSION = "0.23.0"
 
 VERSIONS = [
+    {
+        "version": "0.23.0",
+        "date": "2026-11-17",
+        "type": "minor",
+        "titre": "Demi-journées travaillées d'une période (temps partiel)",
+        "items": [
+            "Dans les périodes de paramètres d'une fiche, pour chaque jour travaillé, on peut indiquer si la personne travaille la journée entière, le matin seulement ou l'après-midi seulement (ex. un agent à mi-temps qui travaille uniquement les après-midi).",
+            "La demi-journée non travaillée est grisée dans le calendrier et n'est ni sélectionnable, ni décomptée ; le serveur applique la même règle aux demandes, à la version mobile et aux absences de Sedit RH.",
+            "Un jour décoché perd sa demi-journée ; l'ajout d'un changement de période et le report de l'année reprennent les demi-journées.",
+        ],
+    },
     {
         "version": "0.22.0",
         "date": "2026-11-17",

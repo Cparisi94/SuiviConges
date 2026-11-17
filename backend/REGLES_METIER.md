@@ -87,6 +87,7 @@
 - **Reliquat** intégré au solde dès la saisie, consommé par le code CA n-1.
 - **Déductions** : maladie, grève, exclusion… réduisent certains droits (RTT, JS…). Elles se calculent à partir des absences de **Sedit RH** (CM, CP, CT : règle inchangée), relues à chaque affichage d'un planning ou d'un compteur et conservées en base (dernière lecture si Sedit RH est indisponible).
 - **Absences de Sedit RH** (CM, CP, CT, GEM, SF, ASA) : elles ne comptent que sur les **jours travaillés** de la personne (ni week-end, ni jour férié non travaillé, ni hors période). **Sedit RH fait foi** : ses absences écrasent et annulent les absences saisies dans l'outil sur les mêmes demi-journées. Ces codes **ne sont pas saisissables** dans l'outil (palette de saisie et serveur).
+- **Demi-journées travaillées** : dans une période, un jour travaillé peut l'être en journée entière (par défaut), le matin seulement ou l'après-midi seulement (temps partiel) ; l'autre demi-journée n'est ni sélectionnable, ni décomptée (calendrier, demandes, mobile, absences de Sedit RH).
 - **Menu Utilisateurs** : réservé aux administrateurs.
 - **Soldes** = droits − pris, par type et au total ; certains droits s'acquièrent au fil de l'année (« généré à ce jour »).
 - **Cassage** : seuls le CA de l'année (jamais le reliquat) et les RTT déjà générés peuvent être cassés en heures.

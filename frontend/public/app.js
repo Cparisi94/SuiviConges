@@ -47,6 +47,20 @@ function periodDays(per) {
   const d = per && Array.isArray(per.jours_travailles) && per.jours_travailles.length ? per.jours_travailles : defaultDays(per && per.jours_hebdo);
   return d.map(Number);
 }
+/* Demi-journées travaillées : {"1": "pm"} = lundi après-midi seulement ("am" = matin seulement) ; un jour absent est travaillé en entier. */
+function periodHalves(per) {
+  const days = periodDays(per), out = {};
+  Object.entries((per && per.demi_jours) || {}).forEach(([k, v]) => { if (days.includes(Number(k)) && (v === "am" || v === "pm")) out[k] = v; });
+  return out;
+}
+function halvesSelects(per, attr, disabled) {
+  const halves = periodHalves(per);
+  return periodDays(per).map((n) => {
+    const full = WEEKDAYS[n - 1];
+    return `<label class="wd wd-half" title="${full[2]} : journée entière, matin seulement ou après-midi seulement">${full[1]}
+      <select ${attr}="${n}"${disabled ? " disabled" : ""}><option value="">jour</option><option value="am"${halves[n] === "am" ? " selected" : ""}>matin</option><option value="pm"${halves[n] === "pm" ? " selected" : ""}>ap.-midi</option></select></label>`;
+  }).join("");
+}
 function daysCheckboxes(days, attr, disabled) {
   return WEEKDAYS.map(([n, l, full]) => `<label class="wd" title="${full}"><input type="checkbox" ${attr}="${n}" ${days.includes(n) ? "checked" : ""}${disabled ? " disabled" : ""}>${l}</label>`).join("");
 }
@@ -2226,6 +2240,7 @@ function renderFiche() {
       quotite: p.quotite || "",
       jours_hebdo: p.jours_hebdo,
       jours_travailles: p.jours_travailles,
+      demi_jours: p.demi_jours,
       ferie_travaille: p.ferie_travaille,
     }];
   };
@@ -2250,7 +2265,8 @@ function renderFiche() {
         <td><select data-pf="duree_hebdo"${disPeriod}>${optionList(dureesPer, per.duree_hebdo, true)}</select></td>
         <td><select data-pf="quotite"${disPeriod}>${optionList(s.quotites, per.quotite, true)}</select></td>
         <td><select data-pf="jours_hebdo"${disPeriod}>${optionList(s.jours_hebdo, per.jours_hebdo, true)}</select></td>
-        <td class="wd-cell">${daysCheckboxes(periodDays(per), "data-pd", ro)}</td>
+        <td class="wd-cell">${daysCheckboxes(periodDays(per), "data-pd", ro)}
+          <div class="wd-halves" title="Si l'agent ne travaille qu'une demi-journée certains jours (temps partiel), indiquez laquelle : l'autre demi-journée est grisée">${halvesSelects(per, "data-ph", ro)}</div></td>
         <td><label class="wd" title="Jours fériés travaillés"><input type="checkbox" data-pferie ${per.ferie_travaille ? "checked" : ""}${ro ? " disabled" : ""}></label></td>
         <td>${i > 0 && !ro ? `<button class="btn btn-small btn-danger" data-period-del="${i}">Supprimer</button>` : ""}</td>
       </tr>`;
@@ -2306,7 +2322,16 @@ function renderFiche() {
         if (!days.length) { box.checked = true; toast("Au moins un jour travaillé.", true); return; }
         const list = materializePeriods();
         list[index].jours_travailles = days;
+        list[index].demi_jours = periodHalves(list[index]);                 // un jour décoché perd sa demi-journée
         if ((s.jours_hebdo || []).map(Number).includes(days.length)) list[index].jours_hebdo = days.length;   // jours/sem. = nombre de jours cochés
+        renderPeriodsEditor();
+        scheduleSave();
+        scheduleCompute();
+      }));
+      tr.querySelectorAll("[data-ph]").forEach((sel) => sel.addEventListener("change", () => {
+        const list = materializePeriods(), halves = { ...(list[index].demi_jours || {}) };
+        if (sel.value) halves[sel.dataset.ph] = sel.value; else delete halves[sel.dataset.ph];
+        list[index].demi_jours = halves;
         renderPeriodsEditor();
         scheduleSave();
         scheduleCompute();
@@ -2362,6 +2387,7 @@ function renderFiche() {
           quotite: old.quotite,
           jours_hebdo: old.jours_hebdo,
           jours_travailles: periodDays(old),
+          demi_jours: periodHalves(old),
           ferie_travaille: !!old.ferie_travaille,
         };
         old.end = addDays(value, -1);
@@ -2671,8 +2697,8 @@ function ficheWorkRules() {
   const year = f.year || (state.settings.general ? state.settings.general.year : new Date().getFullYear());
   const list = (f.periods && f.periods.length) ? f.periods
     : [{ start: p.date_arrivee || `${year}-01-01`, end: p.date_depart || `${year}-12-31`, jours_hebdo: p.jours_hebdo,
-      jours_travailles: p.jours_travailles, ferie_travaille: p.ferie_travaille }];
-  return list.map((x) => ({ start: x.start, end: x.end, days: periodDays(x), ferie: !!x.ferie_travaille }));
+      jours_travailles: p.jours_travailles, demi_jours: p.demi_jours, ferie_travaille: p.ferie_travaille }];
+  return list.map((x) => ({ start: x.start, end: x.end, days: periodDays(x), halves: periodHalves(x), ferie: !!x.ferie_travaille }));
 }
 
 function applyCalendarCoverage() {
@@ -2683,10 +2709,13 @@ function applyCalendarCoverage() {
     const iso = el.dataset.iso;
     const wd = new Date(iso + "T00:00:00").getDay() || 7;
     const covered = rules.find((r) => iso >= r.start && iso <= r.end);
-    const off = !covered || !covered.days.includes(wd) || (feries.has(iso) && !covered.ferie);
+    const half = Number(el.dataset.k) % 10;                       // 0 = matin, 1 = après-midi
+    const only = covered ? covered.halves[wd] : undefined;        // jour travaillé une demi-journée seulement
+    const offHalf = !!covered && covered.days.includes(wd) && !!only && (only === "am" ? 0 : 1) !== half;
+    const off = !covered || !covered.days.includes(wd) || (feries.has(iso) && !covered.ferie) || offHalf;
     el.classList.toggle("cal-off", off);
     if (off) {
-      el.setAttribute("title", covered ? "Jour non travaillé : non sélectionnable" : "Hors période de paramètres : non sélectionnable");
+      el.setAttribute("title", covered ? (offHalf ? "Demi-journée non travaillée : non sélectionnable" : "Jour non travaillé : non sélectionnable") : "Hors période de paramètres : non sélectionnable");
       el.classList.remove("selected");
     }
   });
