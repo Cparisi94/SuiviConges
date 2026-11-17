@@ -13,9 +13,19 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.23.0"
+VERSION = "0.23.1"
 
 VERSIONS = [
+    {
+        "version": "0.23.1",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Périodes : demi-journées travaillées en cases à cocher",
+        "items": [
+            "Dans les périodes d'une fiche, les jours travaillés se saisissent maintenant avec une grille de cases à cocher : une case « matin » et une case « après-midi » par jour de la semaine (ex. à mi-temps : lundi toute la journée, mardi matin, jeudi et vendredi après-midi).",
+            "Un jour est travaillé dès qu'une de ses deux cases est cochée ; une seule case cochée = demi-journée travaillée, l'autre est grisée dans le calendrier.",
+        ],
+    },
     {
         "version": "0.23.0",
         "date": "2026-11-17",

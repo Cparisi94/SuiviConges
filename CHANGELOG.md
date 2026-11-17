@@ -13,6 +13,11 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.23.1 — 2026-11-17 — Périodes : demi-journées travaillées en cases à cocher
+
+- Dans les périodes d'une fiche, les jours travaillés se saisissent maintenant avec une grille de cases à cocher : une case « matin » et une case « après-midi » par jour de la semaine (ex. à mi-temps : lundi toute la journée, mardi matin, jeudi et vendredi après-midi).
+- Un jour est travaillé dès qu'une de ses deux cases est cochée ; une seule case cochée = demi-journée travaillée, l'autre est grisée dans le calendrier.
+
 ## 0.23.0 — 2026-11-17 — Demi-journées travaillées d'une période (temps partiel)
 
 - Dans les périodes de paramètres d'une fiche, pour chaque jour travaillé, on peut indiquer si la personne travaille la journée entière, le matin seulement ou l'après-midi seulement (ex. un agent à mi-temps qui travaille uniquement les après-midi).

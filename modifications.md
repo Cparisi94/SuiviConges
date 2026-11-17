@@ -933,3 +933,7 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 ## Version 0.23.0 — Demi-journées travaillées d'une période (temps partiel)
 
 **Ce qui a changé** : dans le tableau des périodes d'une fiche, sous les jours travaillés, chaque jour coché propose « jour », « matin » ou « ap.-midi ». Un agent à mi-temps qui ne travaille que les après-midi se paramètre donc en choisissant « ap.-midi » pour chacun de ses jours. La demi-journée non travaillée est grisée et ne peut pas être demandée. **Impact** : aucun pour les fiches existantes (tous les jours restent en journée entière) ; le calcul des soldes n'est pas modifié (il dépend de la quotité et du nombre de jours par semaine). **Vérifié** : 140 tests automatiques ; non vérifié dans un navigateur ; l'écran « Mon équipe > créer une période » ne propose pas encore les demi-journées (à régler ensuite dans la fiche).
+
+## Version 0.23.1 — Périodes : demi-journées travaillées en cases à cocher
+
+**Ce qui a changé** : la saisie des jours travaillés d'une période est simplifiée : pour chaque jour de la semaine, deux cases à cocher (matin, après-midi). Exemple d'un 50 % : lundi toute la journée (2 cases), mardi matin, jeudi et vendredi après-midi. **Impact** : aucun sur les fiches existantes ni sur les calculs. **Vérifié** : tests automatiques inchangés (la règle serveur est la même) ; l'affichage de la grille n'a pas été contrôlé dans un navigateur.
