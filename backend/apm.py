@@ -81,6 +81,15 @@ def send_mail(to, subject, html, footer=None, from_name="", from_email=""):
     raise ApmError("APM mail/send : HTTP %s %s" % (resp.status_code, data.get("message", "")))
 
 
+def send_sms(mobile, message):
+    """Envoie un SMS via l'APM (`POST /api/v1/sms/send`, droit `sms_send` sur la clé de l'application). `mobile` au format national « 06XXXXXXXX »."""
+    resp = _post("/api/v1/sms/send", {"message": message, "mobile": mobile, "title": "Suivi des congés"}, timeout=20)
+    data = _json(resp)
+    if resp.status_code == 200 and data.get("status") == "success":
+        return
+    raise ApmError("APM sms/send : HTTP %s %s" % (resp.status_code, data.get("error", "")))
+
+
 def _normalize_ad_user(item):
     if not isinstance(item, dict):
         return None

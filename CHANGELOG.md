@@ -13,6 +13,16 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.21.0 — 2026-11-17 — Agents sans compte AD : activation par code et SMS, mot de passe oublié, connexion mémorisée
+
+- Agents sans compte Active Directory : le valideur (ou un administrateur) génère dans Mon équipe un code d'activation (bouton « 🔑 Activation », avec QR code à remettre à l'agent, valable 7 jours, à usage unique). L'agent ouvre la version mobile, choisit « Première connexion », saisit son matricule et le code, puis son smartphone (un code de contrôle lui est envoyé par SMS et le numéro n'est enregistré qu'une fois ce code saisi), et enfin son mot de passe ; il se connecte ensuite avec son matricule. Parcours durci : même réponse si le matricule existe ou non, verrouillage après 5 essais, SMS limité (3 envois, 1 par minute, 10 minutes de validité), limites par adresse et par matricule, journalisation de chaque étape et e-mail de prévenance.
+- Agents sans compte AD : e-mail facultatif lors de l'activation (sans e-mail, les confirmations de demandes et de validations arrivent par SMS, y compris pour un valideur sans e-mail), mot de passe oublié par SMS pour les agents dont le smartphone est contrôlé, case « Se souvenir de moi » (30 jours) et verrouillage par empreinte ou Face ID sur la version mobile ; les principes d'accès sont documentés (document et diagrammes BPMN).
+
+## 0.20.1 — 2026-11-17 — L'adresse /mobile/ du serveur interne est réservée aux tests sur ivry.local
+
+- Version mobile : le verrouillage biométrique est représenté par une icône d'empreinte digitale (bouton d'en-tête, écran de verrouillage et bouton « Déverrouiller »), à la place des cadenas.
+- Version mobile : l'adresse /mobile/ du serveur interne ne sert plus qu'à tester. Elle est active sur le serveur interne mais ne répond que pour les noms en .ivry.local ; partout ailleurs elle répond « introuvable » (la variable MOBILE_TEST=0 la coupe). En production, la version mobile n'est accessible que par la DMZ.
+
 ## 0.20.0 — 2026-11-17 — Backend mobile séparé, accessible sous /mobile/
 
 - Backend mobile : un second conteneur (backend-mobile, port 8115), même code que le backend mais en mode « mobile » : il ne répond qu'aux routes de la version mobile, sert la page mobile, n'ouvre qu'un cookie de session distinct et ne relance ni e-mails ni synchronisation Outlook. Il est accessible sous /mobile/ du serveur (une adresse à ajouter au nginx du frontend, fournie).

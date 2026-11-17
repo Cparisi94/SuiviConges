@@ -3,7 +3,7 @@
 #   cp .env.example .env     # puis renseigner CONGES_SECRET_KEY, POSTGRES_*, APM_API_KEY…
 #   docker-compose up -d --build
 #
-# Ports : backend 8110, frontend (réseau interne) 8111, frontend DMZ 8112 (docker-compose.dmz.yml), backend mobile 8115 (accessible sous /mobile/ du frontend).
+# Ports : backend 8110, frontend (réseau interne) 8111, frontend DMZ 8112 (docker-compose.dmz.yml), backend mobile 8115 (adresse /mobile/ du frontend : TEST seulement sur ivry.local ; MOBILE_TEST=0 la coupe).
 # Le backend est publié sur 8110 pour que le futur frontend de la DMZ puisse le joindre : à limiter par
 # pare-feu à l'adresse du frontend DMZ (BACK_BIND=127.0.0.1 tant qu'il n'y a pas de frontend distant).
 # Le HTTPS est assuré par le reverse-proxy de la Ville devant les frontends.
@@ -25,7 +25,8 @@ services:
 
   # Backend MOBILE : même image, mode « mobile » (CONGES_MODE) : ne répond qu'aux routes de la version mobile (liste blanche, voir
   # backend/mobile_mode.py) et sert la page mobile. Pas de migrations ni de tâches de fond (relances, Outlook) : elles restent celles de « backend ».
-  # Accessible sous /mobile/ du frontend ; publié sur 8115 (local par défaut) pour un reverse-proxy qui voudrait le joindre directement.
+  # Publié sur 8115 : c'est le port que le frontend mobile de la DMZ (conges-mobile-dmz) joint, via le pare-feu DMZ -> LAN.
+  # L'adresse /mobile/ du frontend interne n'est qu'un moyen de TESTER sur ivry.local : active par défaut (MOBILE_TEST=1) mais 404 hors des noms en .ivry.local ; MOBILE_TEST=0 la coupe.
   backend-mobile:
     build:
       context: ./backend
@@ -62,6 +63,7 @@ services:
     environment:
       - BACKEND_URL=${BACKEND_URL:-http://backend:8110}
       - MOBILE_BACKEND_URL=${MOBILE_BACKEND_URL:-http://backend-mobile:8115}
+      - MOBILE_TEST=${MOBILE_TEST:-1}                  # 1 (défaut) = adresse /mobile/ active, mais pour les noms en .ivry.local SEULEMENT (404 sinon) ; 0 la coupe
     ports:
       - "${FRONT_PORT:-8111}:80"
     depends_on:

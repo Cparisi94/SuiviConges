@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_Reinit" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:collaboration id="Collaboration_Reinit">
+    <bpmn:participant id="Participant_Reinit" name="Accès d'un agent sans compte AD — mot de passe oublié" processRef="Process_Reinit" />
+  </bpmn:collaboration>
+  <bpmn:process id="Process_Reinit" isExecutable="false">
+    <bpmn:documentation id="Doc_Reinit">Un agent dont le smartphone a été contrôlé lors de l'activation réinitialise lui-même son mot de passe : matricule ou identifiant, puis code reçu par SMS (6 chiffres, 10 minutes, 5 essais, 3 envois par heure) et nouveau mot de passe. Le message affiché est identique que le compte existe ou non ; les connexions mémorisées sont coupées ; l'agent est prévenu par e-mail ou par SMS.</bpmn:documentation>
+    <bpmn:laneSet id="LaneSet_Reinit">
+      <bpmn:lane id="Lane_Agent" name="Agent (smartphone)">
+        <bpmn:flowNodeRef>S</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Id</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Enter</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>E_Done</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_App" name="Version mobile et serveur (DMZ / backend)">
+        <bpmn:flowNodeRef>T_Find</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>G_Tel</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>E_None</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Code</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Chk</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>G_Ok</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>E_Block</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Save</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_Ville" name="API Ville (SMS)">
+        <bpmn:flowNodeRef>T_Send</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>T_Notice</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="S" name="Mot de passe&#10;oublié"><bpmn:outgoing>Flow_1</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:userTask id="T_Id" name="Saisir son matricule&#10;ou son identifiant"><bpmn:incoming>Flow_1</bpmn:incoming><bpmn:outgoing>Flow_2</bpmn:outgoing></bpmn:userTask>
+    <bpmn:serviceTask id="T_Find" name="Rechercher le compte&#10;(4 demandes / 15 min,&#10;réponse identique)"><bpmn:incoming>Flow_2</bpmn:incoming><bpmn:outgoing>Flow_3</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="G_Tel" name="Smartphone&#10;contrôlé ?"><bpmn:incoming>Flow_3</bpmn:incoming><bpmn:outgoing>Flow_4</bpmn:outgoing><bpmn:outgoing>Flow_5</bpmn:outgoing></bpmn:exclusiveGateway>
+    <bpmn:endEvent id="E_None" name="Aucun SMS&#10;(même message&#10;à l'écran)"><bpmn:incoming>Flow_5</bpmn:incoming></bpmn:endEvent>
+    <bpmn:serviceTask id="T_Code" name="Créer le code SMS&#10;(6 chiffres, 10 min,&#10;3 par heure)"><bpmn:incoming>Flow_4</bpmn:incoming><bpmn:outgoing>Flow_6</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:sendTask id="T_Send" name="Envoyer le SMS&#10;de réinitialisation"><bpmn:incoming>Flow_6</bpmn:incoming><bpmn:outgoing>Flow_7</bpmn:outgoing></bpmn:sendTask>
+    <bpmn:userTask id="T_Enter" name="Saisir le code SMS&#10;et le nouveau&#10;mot de passe"><bpmn:incoming>Flow_7</bpmn:incoming><bpmn:outgoing>Flow_8</bpmn:outgoing></bpmn:userTask>
+    <bpmn:serviceTask id="T_Chk" name="Contrôler le code&#10;(5 essais) et les règles&#10;du mot de passe"><bpmn:incoming>Flow_8</bpmn:incoming><bpmn:outgoing>Flow_9</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="G_Ok" name="Valide ?"><bpmn:incoming>Flow_9</bpmn:incoming><bpmn:outgoing>Flow_10</bpmn:outgoing><bpmn:outgoing>Flow_11</bpmn:outgoing></bpmn:exclusiveGateway>
+    <bpmn:endEvent id="E_Block" name="Code incorrect ou&#10;verrouillé : recommencer&#10;ou voir son valideur"><bpmn:incoming>Flow_11</bpmn:incoming></bpmn:endEvent>
+    <bpmn:serviceTask id="T_Save" name="Enregistrer le mot&#10;de passe, couper les&#10;connexions mémorisées"><bpmn:incoming>Flow_10</bpmn:incoming><bpmn:outgoing>Flow_12</bpmn:outgoing></bpmn:serviceTask>
+    <bpmn:sendTask id="T_Notice" name="SMS de prévenance&#10;(si pas d'e-mail)"><bpmn:incoming>Flow_12</bpmn:incoming><bpmn:outgoing>Flow_13</bpmn:outgoing></bpmn:sendTask>
+    <bpmn:endEvent id="E_Done" name="Mot de passe changé :&#10;se connecter"><bpmn:incoming>Flow_13</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="S" targetRef="T_Id" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="T_Id" targetRef="T_Find" />
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="T_Find" targetRef="G_Tel" />
+    <bpmn:sequenceFlow id="Flow_4" name="Oui" sourceRef="G_Tel" targetRef="T_Code" />
+    <bpmn:sequenceFlow id="Flow_5" name="Non" sourceRef="G_Tel" targetRef="E_None" />
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="T_Code" targetRef="T_Send" />
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="T_Send" targetRef="T_Enter" />
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="T_Enter" targetRef="T_Chk" />
+    <bpmn:sequenceFlow id="Flow_9" sourceRef="T_Chk" targetRef="G_Ok" />
+    <bpmn:sequenceFlow id="Flow_10" name="Oui" sourceRef="G_Ok" targetRef="T_Save" />
+    <bpmn:sequenceFlow id="Flow_11" name="Non" sourceRef="G_Ok" targetRef="E_Block" />
+    <bpmn:sequenceFlow id="Flow_12" sourceRef="T_Save" targetRef="T_Notice" />
+    <bpmn:sequenceFlow id="Flow_13" sourceRef="T_Notice" targetRef="E_Done" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="Diagram_Reinit">
+    <bpmndi:BPMNPlane id="Plane_Reinit" bpmnElement="Collaboration_Reinit">
+      <bpmndi:BPMNShape id="Participant_Reinit_di" bpmnElement="Participant_Reinit" isHorizontal="true"><dc:Bounds x="60" y="40" width="2010" height="680" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Agent_di" bpmnElement="Lane_Agent" isHorizontal="true"><dc:Bounds x="90" y="40" width="1980" height="190" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_App_di" bpmnElement="Lane_App" isHorizontal="true"><dc:Bounds x="90" y="230" width="1980" height="330" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Ville_di" bpmnElement="Lane_Ville" isHorizontal="true"><dc:Bounds x="90" y="560" width="1980" height="160" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="S_di" bpmnElement="S"><dc:Bounds x="212" y="117" width="36" height="36" /><bpmndi:BPMNLabel><dc:Bounds x="150" y="157" width="160" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Id_di" bpmnElement="T_Id"><dc:Bounds x="310" y="90" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Find_di" bpmnElement="T_Find"><dc:Bounds x="460" y="320" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="G_Tel_di" bpmnElement="G_Tel" isMarkerVisible="true"><dc:Bounds x="655" y="340" width="50" height="50" /><bpmndi:BPMNLabel><dc:Bounds x="600" y="306" width="160" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_None_di" bpmnElement="E_None"><dc:Bounds x="812" y="477" width="36" height="36" /><bpmndi:BPMNLabel><dc:Bounds x="750" y="517" width="160" height="42" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Code_di" bpmnElement="T_Code"><dc:Bounds x="760" y="320" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Send_di" bpmnElement="T_Send"><dc:Bounds x="910" y="595" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Enter_di" bpmnElement="T_Enter"><dc:Bounds x="1060" y="90" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Chk_di" bpmnElement="T_Chk"><dc:Bounds x="1210" y="320" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="G_Ok_di" bpmnElement="G_Ok" isMarkerVisible="true"><dc:Bounds x="1405" y="340" width="50" height="50" /><bpmndi:BPMNLabel><dc:Bounds x="1350" y="320" width="160" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_Block_di" bpmnElement="E_Block"><dc:Bounds x="1562" y="477" width="36" height="36" /><bpmndi:BPMNLabel><dc:Bounds x="1500" y="517" width="160" height="42" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Save_di" bpmnElement="T_Save"><dc:Bounds x="1510" y="320" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="T_Notice_di" bpmnElement="T_Notice"><dc:Bounds x="1660" y="595" width="140" height="90" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="E_Done_di" bpmnElement="E_Done"><dc:Bounds x="1862" y="117" width="36" height="36" /><bpmndi:BPMNLabel><dc:Bounds x="1800" y="157" width="160" height="28" /></bpmndi:BPMNLabel></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1"><di:waypoint x="248" y="135" /><di:waypoint x="310" y="135" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2"><di:waypoint x="450" y="135" /><di:waypoint x="530" y="135" /><di:waypoint x="530" y="320" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3"><di:waypoint x="600" y="365" /><di:waypoint x="655" y="365" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4"><di:waypoint x="705" y="365" /><di:waypoint x="760" y="365" /><bpmndi:BPMNLabel><dc:Bounds x="711" y="345" width="24" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5"><di:waypoint x="680" y="390" /><di:waypoint x="680" y="495" /><di:waypoint x="812" y="495" /><bpmndi:BPMNLabel><dc:Bounds x="688" y="396" width="24" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_6_di" bpmnElement="Flow_6"><di:waypoint x="900" y="365" /><di:waypoint x="980" y="365" /><di:waypoint x="980" y="595" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_7_di" bpmnElement="Flow_7"><di:waypoint x="1050" y="640" /><di:waypoint x="1130" y="640" /><di:waypoint x="1130" y="180" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_8_di" bpmnElement="Flow_8"><di:waypoint x="1200" y="135" /><di:waypoint x="1280" y="135" /><di:waypoint x="1280" y="320" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_9_di" bpmnElement="Flow_9"><di:waypoint x="1350" y="365" /><di:waypoint x="1405" y="365" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_10_di" bpmnElement="Flow_10"><di:waypoint x="1455" y="365" /><di:waypoint x="1510" y="365" /><bpmndi:BPMNLabel><dc:Bounds x="1461" y="345" width="24" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_11_di" bpmnElement="Flow_11"><di:waypoint x="1430" y="390" /><di:waypoint x="1430" y="495" /><di:waypoint x="1562" y="495" /><bpmndi:BPMNLabel><dc:Bounds x="1438" y="396" width="24" height="14" /></bpmndi:BPMNLabel></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_12_di" bpmnElement="Flow_12"><di:waypoint x="1650" y="365" /><di:waypoint x="1730" y="365" /><di:waypoint x="1730" y="595" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_13_di" bpmnElement="Flow_13"><di:waypoint x="1800" y="640" /><di:waypoint x="1880" y="640" /><di:waypoint x="1880" y="153" /></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -483,6 +483,84 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_activation_of_an_account_without_ad_code_sms_password(self):
+        import re
+        self._make_user("SANSAD1")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='SANSAD1'").fetchone()["id"]
+        conn.execute("UPDATE users SET matricule='ACT0001', ad_login='', actif=1, role='agent', email='' WHERE id=?", (uid,))
+        conn.commit()
+        conn.close()
+        # seuls l'administrateur et le valideur de la personne génèrent le code ; pas pour un compte AD
+        self.assertEqual(self._call("POST", "/api/users/%d/activation" % uid, uid=4).status_code, 403)
+        made = self._call("POST", "/api/users/%d/activation" % uid, uid=1)
+        self.assertEqual(made.status_code, 200, made.get_json())
+        code = made.get_json()["code"]
+        self.assertRegex(code, r"^[A-Z0-9]{5}-[A-Z0-9]{5}$")
+        sent = []
+        client = self.app_module.app.test_client()
+        post = lambda path, **body: client.post("/api/activation/" + path, json=body)
+        # réponse identique : matricule inconnu ou code faux
+        wrong = post("start", matricule="ACT0001", code="AAAAA-BBBBB")
+        unknown = post("start", matricule="INCONNU9", code=code)
+        self.assertEqual((wrong.status_code, wrong.get_json()), (unknown.status_code, unknown.get_json()))
+        # étapes dans l'ordre : pas de SMS sans code valide
+        self.assertEqual(post("sms", mobile="0612345678").status_code, 400)
+        self.assertEqual(post("start", matricule="ACT0001", code=code.lower()).status_code, 200)
+        with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: sent.append((mobile, message))):
+            self.assertEqual(post("sms", mobile="12345").status_code, 400)
+            ok = post("sms", mobile="+33 6 12 34 56 78")
+            self.assertEqual((ok.status_code, ok.get_json()["mobile"]), (200, "06 ** ** ** 78"))
+            self.assertEqual(post("sms", mobile="0612345678").status_code, 429)         # 60 s entre deux SMS
+        otp = re.search("[0-9]{6}", sent[0][1]).group(0)
+        self.assertEqual(sent[0][0], "0612345678")
+        self.assertEqual(post("otp", code="000000" if otp != "000000" else "111111").status_code, 400)
+        self.assertEqual(post("password", password="Motdepasse123", confirm="Motdepasse123").status_code, 400)   # SMS pas encore validé
+        self.assertEqual(post("otp", code=otp).status_code, 200)
+        self.assertEqual(post("password", password="Motdepasse123", confirm="Motdepasse123").status_code, 400)   # l'étape e-mail précède le mot de passe
+        self.assertEqual(post("email", email="pas-une-adresse").status_code, 400)
+        skipped = post("email", email="")                                                                          # adresse facultative
+        self.assertEqual((skipped.status_code, skipped.get_json()["sms_a_la_place"]), (200, True))
+        self.assertEqual(post("password", password="court1", confirm="court1").status_code, 400)
+        self.assertEqual(post("password", password="Motdepasse123", confirm="Autre1234567").status_code, 400)
+        self.assertEqual(post("password", password="ACT0001-abc123", confirm="ACT0001-abc123").status_code, 400)  # contient le matricule
+        done = post("password", password="Motdepasse123", confirm="Motdepasse123")
+        self.assertEqual((done.status_code, done.get_json()["ok"]), (200, True))
+        self.assertEqual(post("password", password="Motdepasse123", confirm="Motdepasse123").status_code, 400)    # code à usage unique
+        # le compte se connecte par son matricule, en mode AD comme en mode local
+        with mock.patch.object(config, "AUTH_MODE", "ad"):
+            self.assertEqual(self._login("ACT0001", "Motdepasse123").status_code, 200)
+            self.assertEqual(self._login("ACT0001", "Mauvais12345").status_code, 401)
+        self.assertEqual(self._call("GET", "/api/me", uid=uid).get_json()["user"]["password_by_ad"], False)
+
+    def test_activation_locks_after_five_wrong_codes_and_a_new_code_replaces_the_old_one(self):
+        self._make_user("SANSAD2")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='SANSAD2'").fetchone()["id"]
+        conn.execute("UPDATE users SET matricule='ACT0002', ad_login='', actif=1, role='agent' WHERE id=?", (uid,))
+        conn.commit()
+        conn.close()
+        first = self._call("POST", "/api/users/%d/activation" % uid, uid=1).get_json()["code"]
+        client = self.app_module.app.test_client()
+        for _ in range(5):
+            self.assertEqual(client.post("/api/activation/start", json={"matricule": "ACT0002", "code": "ZZZZZ-ZZZZZ"}).status_code, 400)
+        ratelimit.reset()
+        self.assertEqual(client.post("/api/activation/start", json={"matricule": "ACT0002", "code": first}).status_code, 400)   # verrouillée : même le bon code est refusé
+        second = self._call("POST", "/api/users/%d/activation" % uid, uid=1).get_json()["code"]
+        self.assertEqual(client.post("/api/activation/start", json={"matricule": "ACT0002", "code": first}).status_code, 400)    # l'ancien code est remplacé
+        self.assertEqual(client.post("/api/activation/start", json={"matricule": "ACT0002", "code": second}).status_code, 200)
+        # un compte avec AD ne s'active pas ainsi
+        self.assertEqual(self._call("POST", "/api/users/%d/activation" % self._make_ad_user(), uid=1).status_code, 400)
+
+    def _make_ad_user(self):
+        self._make_user("AVECAD1", ad_login="avecad1")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='AVECAD1'").fetchone()["id"]
+        conn.execute("UPDATE users SET matricule='ACT0003' WHERE id=?", (uid,))
+        conn.commit()
+        conn.close()
+        return uid
+
     def test_mobile_backend_mode_only_answers_to_the_mobile_routes(self):
         from flask import Flask
         import mobile_mode
@@ -510,6 +588,103 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(client.get("/api/me").status_code, 200)
         self.assertEqual(client.get("/api/settings").status_code, 404)                        # route de l'application complète : fermée
         self.assertIn("frame-ancestors 'none'", client.get("/api/me").headers["Content-Security-Policy"])
+
+    def test_activation_can_record_an_optional_email(self):
+        self._make_user("SANSAD3")
+        conn = db.get_db()
+        uid = conn.execute("SELECT id FROM users WHERE login='SANSAD3'").fetchone()["id"]
+        conn.execute("UPDATE users SET matricule='ACT0004', ad_login='', actif=1, role='agent', email='' WHERE id=?", (uid,))
+        conn.commit()
+        conn.close()
+        code = self._call("POST", "/api/users/%d/activation" % uid, uid=1).get_json()["code"]
+        client = self.app_module.app.test_client()
+        post = lambda path, **body: client.post("/api/activation/" + path, json=body)
+        self.assertEqual(post("start", matricule="ACT0004", code=code).status_code, 200)
+        with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: self.__dict__.setdefault("_otp", message)):
+            self.assertEqual(post("sms", mobile="0698765432").status_code, 200)
+        otp = [w for w in self._otp.replace(".", " ").split() if w.isdigit() and len(w) == 6][0]
+        self.assertEqual(post("otp", code=otp).status_code, 200)
+        self.assertEqual(post("email", email="Lucie.Test@Example.fr").get_json()["sms_a_la_place"], False)
+        conn = db.get_db()
+        self.assertEqual(conn.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()["email"], "lucie.test@example.fr")
+        conn.close()
+        del self.__dict__["_otp"]
+
+    def test_people_without_email_get_sms_confirmations(self):
+        import sms_notify
+        conn = db.get_db()
+        # l'agent (compte 4) n'a pas d'e-mail mais un smartphone contrôlé ; son valideur (3) a un e-mail
+        conn.execute("UPDATE users SET email='', mobile='0611223344', mobile_verifie_le=CURRENT_TIMESTAMP WHERE id=4")
+        conn.execute("UPDATE users SET email='valideur@example.fr', mobile='', mobile_verifie_le=NULL WHERE id=3")
+        rid = conn.execute(
+            "INSERT INTO leave_requests (agent_id, user_id, year, code, cells, days, status, validator_id, comment, soumis_le) "
+            "VALUES (1, 4, 2026, 'CA', '[10010,10011]', 1.0, 'en_attente', 3, '', '2026-05-01 10:00:00')").lastrowid
+        conn.commit()
+        sent = []
+        try:
+            with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: sent.append((mobile, message))), mock.patch.object(sms_notify, "SYNC", True):
+                sms_notify.on_request_event(conn, rid, "soumise", 4)
+                sms_notify.on_request_event(conn, rid, "validee", 3)
+                self.assertEqual([m for m, _ in sent], ["0611223344", "0611223344"])           # l'agent seul : le valideur a un e-mail
+                self.assertIn("est envoyée à", sent[0][1])
+                self.assertIn("VALIDEE", sent[1][1])
+                sent.clear()
+                conn.execute("UPDATE users SET email='agent@example.fr' WHERE id=4")
+                conn.commit()
+                sms_notify.on_request_event(conn, rid, "refusee", 3)
+                self.assertEqual(sent, [])                                                       # avec une adresse e-mail : pas de SMS
+        finally:
+            conn.execute("DELETE FROM leave_requests WHERE id=?", (rid,))
+            conn.execute("UPDATE users SET email='', mobile='', mobile_verifie_le=NULL WHERE id IN (3, 4)")
+            conn.commit()
+            conn.close()
+
+    @mock.patch.object(config, "AUTH_MODE", "local")
+    def test_remember_me_restores_the_session_and_logout_revokes_it(self):
+        self._make_user("MEMOIRE1", password="Secret12345")
+        client = self.app_module.app.test_client()
+        r = client.post("/api/auth/login", json={"login": "MEMOIRE1", "password": "Secret12345", "remember": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("conges_remember=", r.headers.get("Set-Cookie", ""))
+        self.assertIn("HttpOnly", r.headers.get("Set-Cookie", ""))
+        with client.session_transaction() as s:                 # la session expire : seul le cookie mémorisé reste
+            s.clear()
+        self.assertEqual(client.get("/api/me").status_code, 200)
+        client.post("/api/auth/logout")
+        self.assertEqual(client.get("/api/me").status_code, 401)  # jeton révoqué par la déconnexion
+        # sans la case cochée : pas de cookie ; un administrateur n'a jamais de connexion mémorisée
+        self.assertNotIn("conges_remember", self.app_module.app.test_client().post("/api/auth/login", json={"login": "MEMOIRE1", "password": "Secret12345"}).headers.get("Set-Cookie", ""))
+        self._make_user("MEMOADM", password="Secret12345", admin=1)
+        self.assertNotIn("conges_remember", self.app_module.app.test_client().post("/api/auth/login", json={"login": "MEMOADM", "password": "Secret12345", "remember": True}).headers.get("Set-Cookie", ""))
+
+    def test_forgotten_password_by_sms_only_for_verified_smartphones(self):
+        from werkzeug.security import generate_password_hash
+        self._make_user("OUBLI1", password="AncienMdp123")
+        self._make_user("OUBLI2", password="AncienMdp123")
+        conn = db.get_db()
+        ids = {r["login"]: r["id"] for r in conn.execute("SELECT id, login FROM users WHERE login IN ('OUBLI1','OUBLI2')").fetchall()}
+        conn.execute("UPDATE users SET matricule='OUB0001', ad_login='', role='agent', actif=1, mobile='0655443322', mobile_verifie_le=CURRENT_TIMESTAMP WHERE id=?", (ids["OUBLI1"],))
+        conn.execute("UPDATE users SET matricule='OUB0002', ad_login='', role='agent', actif=1, mobile='', mobile_verifie_le=NULL WHERE id=?", (ids["OUBLI2"],))
+        conn.commit()
+        conn.close()
+        sent = []
+        client = self.app_module.app.test_client()
+        post = lambda path, **body: client.post("/api/activation/" + path, json=body)
+        with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: sent.append((mobile, message))):
+            ok = post("forgot", identifiant="OUB0001")
+            same = [post("forgot", identifiant="OUB0002"), post("forgot", identifiant="INCONNU")]       # sans smartphone contrôlé, ou inconnu : même réponse, aucun SMS
+            self.assertEqual([(r.status_code, r.get_json()) for r in same], [(ok.status_code, ok.get_json())] * 2)
+        self.assertEqual([m for m, _ in sent], ["0655443322"])
+        otp = [w for w in sent[0][1].replace(":", " ").replace(".", " ").split() if w.isdigit() and len(w) == 6][0]
+        self.assertEqual(post("reset", identifiant="OUB0001", code="000000" if otp != "000000" else "111111", password="NouveauMdp2026", confirm="NouveauMdp2026").status_code, 400)
+        self.assertEqual(post("reset", identifiant="OUB0001", code=otp, password="court1", confirm="court1").status_code, 400)
+        with mock.patch.object(apm, "send_sms", side_effect=lambda mobile, message: sent.append((mobile, message))):
+            done = post("reset", identifiant="OUB0001", code=otp, password="NouveauMdp2026", confirm="NouveauMdp2026")
+        self.assertEqual((done.status_code, done.get_json()["ok"]), (200, True))
+        self.assertEqual(post("reset", identifiant="OUB0001", code=otp, password="Autre2026xyz", confirm="Autre2026xyz").status_code, 400)   # code à usage unique
+        with mock.patch.object(config, "AUTH_MODE", "local"):
+            self.assertEqual(self._login("OUB0001", "NouveauMdp2026").status_code, 200)
+            self.assertEqual(self._login("OUB0001", "AncienMdp123").status_code, 401)
 
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")

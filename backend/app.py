@@ -28,6 +28,8 @@ from rules import compute as rule_compute
 from rules import matrix_rows
 
 import act_as
+import remember
+import sms_notify
 import apm
 import audit_logs
 import config
@@ -162,6 +164,16 @@ def current_user():
     # L'identité provient uniquement de la session signée côté serveur :
     # aucun en-tête ni cookie fourni par le client n'est cru sur parole.
     uid = session.get("uid")
+    if not uid and request.cookies.get(remember.COOKIE):
+        # session expirée : « Se souvenir de moi » (jeton aléatoire, 30 jours) rétablit la connexion
+        db0 = get_db()
+        try:
+            uid = remember.user_id_from_cookie(db0)
+        finally:
+            db0.close()
+        if uid:
+            session["uid"] = uid
+            session.permanent = True
     if not uid:
         return None
     db = get_db()
@@ -554,6 +566,8 @@ def _check_credentials(user, password):
         return local_ok, "local"
     if user["admin"] and local_ok:
         return True, "secours"
+    if not (user["ad_login"] or "").strip() and user["mobile_verifie_le"]:
+        return local_ok, "local"       # compte sans AD activé (code + SMS) : mot de passe local ; un compte jamais activé garde un mot de passe aléatoire inconnu
     return apm.ad_authenticate((user["ad_login"] or user["login"]).strip(), password), "ad"
 
 
@@ -576,7 +590,7 @@ def _matricule_holder(db, matricule, exclude_user_id=None):
 
 
 def _password_managed_by_ad(user):
-    return config.AUTH_MODE == "ad" and not user["admin"]
+    return config.AUTH_MODE == "ad" and not user["admin"] and not user["mobile_verifie_le"]      # sauf compte sans AD activé (code + SMS)
 
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -598,6 +612,10 @@ def login():
             # Identifiant Active Directory saisi à la place de l'identifiant de l'application (« machevalier » pour « MCHEVALIER ») ; ambigu = refusé.
             by_ad = db.execute("SELECT * FROM users WHERE ad_login<>'' AND lower(ad_login)=lower(?)", (login_name,)).fetchall()
             user = by_ad[0] if len(by_ad) == 1 else None
+        if not user and not same:
+            # Compte sans AD activé : le matricule sert d'identifiant ; ambigu = refusé.
+            by_mat = db.execute("SELECT * FROM users WHERE matricule<>'' AND matricule=? AND ad_login=''", (login_name,)).fetchall()
+            user = by_mat[0] if len(by_mat) == 1 else user
     db.close()
     if not user:
         ratelimit.record(bucket)
@@ -623,7 +641,14 @@ def login():
     out = public_user(user)
     out["password_by_ad"] = _password_managed_by_ad(user)
     out["auth_mode"] = config.AUTH_MODE
-    return jsonify({"user": out})
+    resp = jsonify({"user": out})
+    if data.get("remember") and not user["admin"]:
+        db = get_db()
+        try:
+            remember.issue(db, user["id"], resp)          # « Se souvenir de moi » : pas pour les administrateurs
+        finally:
+            db.close()
+    return resp
 
 
 @app.route("/api/me", methods=["GET"])
@@ -670,6 +695,7 @@ def me_password():
         "UPDATE users SET mot_de_passe=? WHERE id=?",
         (generate_password_hash(new_password), user["id"]),
     )
+    remember.revoke_all(db, user["id"])                   # les connexions mémorisées sont coupées
     _audit_user(db, user["id"], user["login"], request.user, "modification",
                 "mot_de_passe", "***", "modifié", "Changement par l'utilisateur")
     db.commit()
@@ -683,7 +709,13 @@ def logout():
     if session.get("uid"):
         audit_logs.log_login("deconnexion", "", session.get("uid"), True)
     session.clear()
-    return jsonify({"ok": True})
+    resp = jsonify({"ok": True})
+    db = get_db()
+    try:
+        remember.revoke_cookie(db, resp)
+    finally:
+        db.close()
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -2500,6 +2532,7 @@ def _audit_request(db, request_id, action, actor_id, comment=""):
         "INSERT INTO leave_request_events (request_id, action, actor_id, comment) VALUES (?,?,?,?)",
         (request_id, action, actor_id, comment or ""),
     )
+    sms_notify.on_request_event(db, request_id, action, actor_id)       # SMS pour les personnes sans e-mail
 
 
 def _login_for_user(db, user_id):
@@ -4101,8 +4134,10 @@ import my_agents  # noqa: E402
 delegation.init_delegation(app, login_required, _can_manage_users)
 mail_actions.init_mail_actions(app, requests_approve.__wrapped__, requests_refuse.__wrapped__, load_settings)
 import mobile  # noqa: E402
+import activation  # noqa: E402
 
 mobile.init_mobile(app, login_required)
+activation.init_activation(app, login_required, _can_manage_users, _scope_ids, _audit_user)
 import ical  # noqa: E402
 
 ical.init_ical(app, login_required)

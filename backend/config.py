@@ -88,6 +88,8 @@ APM_API_KEY = os.environ.get("APM_API_KEY", "")
 HUBDSI_API_URL = os.environ.get("HUBDSI_API_URL", "")
 HUBDSI_API_KEY = os.environ.get("HUBDSI_API_KEY", "")
 # API Sedit RH (agents, organisation ; lecture seule) : clé distribuée par l'application api-apps/sedit-rh
+# Adresse publique de la version mobile (DMZ), utilisée dans le QR code d'activation (ex. https://conges-mobile.ivry94.fr)
+MOBILE_URL = os.environ.get("CONGES_MOBILE_URL", "")
 SEDITRH_API_URL = os.environ.get("SEDITRH_API_URL", "")
 SEDITRH_API_KEY = os.environ.get("SEDITRH_API_KEY", "")
 

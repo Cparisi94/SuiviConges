@@ -1,8 +1,9 @@
-# Suivi des congés — version mobile en DMZ. Ne sert QUE la page mobile et ne relaie QUE douze routes d'API en liste blanche.
+# Suivi des congés — version mobile en DMZ. Ne sert QUE la page mobile et ne relaie QUE seize routes d'API en liste blanche.
 # Aucune base de données, aucun secret ici. Variables : BACKEND_HOST, BACKEND_PORT (le seul port ouvert du pare-feu DMZ -> LAN).
 # Le HTTPS est terminé par le reverse-proxy de la Ville placé devant ce conteneur.
 limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;
 limit_req_zone $binary_remote_addr zone=api:10m rate=120r/m;
+limit_req_zone $binary_remote_addr zone=act:10m rate=12r/m;      # activation d'un compte (4 étapes, SMS) : plus strict que l'API courante
 limit_req_zone $binary_remote_addr zone=ics:10m rate=30r/m;      # flux d'abonnement : lu par le téléphone, jamais en rafale
 
 map $http_x_forwarded_proto $fwd_proto {
@@ -79,6 +80,14 @@ server {
     limit_req zone=ics burst=10 nodelay;
     limit_req_status 429;
     rewrite ^/cal/(.+)$ /api/ical/$1 break;
+    include /etc/nginx/conf.d/conges_mobile_proxy.inc;
+  }
+
+  # Première connexion (compte sans AD) : code d'activation, SMS, mot de passe. POST seulement, sans session ; le backend limite aussi par matricule.
+  location ^~ /api/activation/ {
+    limit_except POST { deny all; }
+    limit_req zone=act burst=6 nodelay;
+    limit_req_status 429;
     include /etc/nginx/conf.d/conges_mobile_proxy.inc;
   }
 

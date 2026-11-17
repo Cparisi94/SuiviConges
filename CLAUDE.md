@@ -10,7 +10,7 @@ Guide technique imposé par la DSI : `GUIDE_NOUVELLE_APP_VILLE.md`.
 - `frontend/public/` : interface (HTML/CSS/JS) ; `frontend/` : nginx interne et DMZ, `Dockerfile`.
 - `conges-mobile-dmz/` : **version mobile**, frontend dédié et autonome (DMZ uniquement), nginx en liste blanche, `Dockerfile`, `dev_server.py` (poste sans Docker) ; le backend correspondant est `backend/mobile.py`, et `backend/mobile_mode.py` / `wsgi_mobile.py` / `run_mobile.py` en font un backend séparé (`CONGES_MODE=mobile`).
 - Racine : `docker-compose.yml`, `docker-compose.dmz.yml`, `.env` (secrets, **jamais affiché ni commité**), `.env.example`, documentation.
-- Ports : backend **8110**, frontend interne **8111**, frontend DMZ **8112**, version mobile DMZ **8113**, backend mobile **8115** (`/mobile/` du frontend).
+- Ports : backend **8110**, frontend interne **8111**, frontend DMZ **8112**, version mobile DMZ **8113**, backend mobile **8115** (joint par la DMZ ; `/mobile/` du frontend interne = test seulement sur ivry.local, `MOBILE_TEST` : 1 par défaut, 0 la coupe).
 
 ## Commandes (poste Windows, environnement virtuel à la racine)
 ```bash

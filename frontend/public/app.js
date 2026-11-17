@@ -5552,7 +5552,7 @@ async function viewMyAgents() {
         ${n.no_ad && n.actif && !n.all ? `<span class="ma-noemail" title="Aucun compte Active Directory lié : nom AD, e-mail et connexion par l'AD indisponibles">⚠ AD</span>` : ""}
       </div>
       ${periodHtml(n)}
-      ${(n.no_email || n.no_ad) && n.actif && !n.all ? `<div class="ma-card-actions"><button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant) et le lier">Recherche AD</button></div>` : ""}
+      ${(n.no_email || n.no_ad) && n.actif && !n.all ? `<div class="ma-card-actions">${n.no_ad ? `<button type="button" class="btn btn-small ma-activate" data-uid="${n.id}" title="Activer un compte sans Active Directory : code d'activation et QR code à remettre à l'agent (le smartphone est contrôlé par SMS)">🔑 Activation</button>` : ""}<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant) et le lier">Recherche AD</button></div>` : ""}
       ${ficheHtml(n)}
     </div>`;
   };
@@ -5709,6 +5709,10 @@ async function viewMyAgents() {
   });
   c.querySelectorAll(".ma-ad").forEach((b) => {
     b.addEventListener("click", (ev) => { ev.stopPropagation(); askAd(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
+    b.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  });
+  c.querySelectorAll(".ma-activate").forEach((b) => {
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); openActivationModal(Number(b.dataset.uid), nodeName(b.dataset.uid)); });
     b.addEventListener("mousedown", (ev) => ev.stopPropagation());
   });
   c.querySelectorAll(".ma-period").forEach((b) => {
@@ -6227,3 +6231,57 @@ document.addEventListener("keydown", (e) => {
 });
 const searchBtn = $("#btn-search");
 if (searchBtn) searchBtn.addEventListener("click", openAgentSearch);
+
+/* ============================ Activation d'un compte sans Active Directory (document imprimable) ============================ */
+// Ouvre un document A4 à remettre à l'agent (code, QR code, marche à suivre) et lance l'impression. La fenêtre est ouverte tout de suite
+// (dans le clic, sinon le navigateur bloque la fenêtre), puis remplie quand le code est généré.
+async function openActivationModal(uid, name) {
+  const w = window.open("", "_blank");
+  if (w) { w.document.write("<!doctype html><meta charset='utf-8'><title>Activation</title><p style='font:16px sans-serif;padding:30px'>Génération du code d'activation…</p>"); }
+  let r;
+  try { r = await api(`/api/users/${uid}/activation`, { method: "POST", body: "{}" }); }
+  catch (e) { if (w) w.close(); toast(e.message, true); return; }
+  const qr = r.qr_svg && String(r.qr_svg).trim().startsWith("<svg") ? r.qr_svg : "";
+  const page = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Activation du compte — ${esc(r.nom)}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font: 14px/1.5 "Segoe UI", Arial, sans-serif; color: #222; max-width: 170mm; margin: 0 auto; }
+  header { border-bottom: 3px solid #b4553f; padding-bottom: 8px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: baseline; }
+  header b { font-size: 18px; color: #7f3a2a; } header span { color: #666; font-size: 12px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .who { font-size: 16px; margin-bottom: 16px; }
+  .box { border: 2px dashed #b4553f; border-radius: 10px; padding: 14px; text-align: center; margin: 14px 0; }
+  .code { font: 700 34px/1.2 Consolas, "Courier New", monospace; letter-spacing: .14em; }
+  .mat { font-size: 18px; margin-top: 6px; }
+  .row { display: flex; gap: 20px; align-items: center; }
+  .qr { width: 52mm; flex: none; } .qr svg { width: 100%; height: auto; }
+  ol { padding-left: 20px; } li { margin-bottom: 6px; }
+  .warn { background: #fff7ed; border-left: 4px solid #d97706; padding: 8px 12px; margin-top: 16px; font-size: 12.5px; }
+  footer { margin-top: 24px; font-size: 11px; color: #777; border-top: 1px solid #ddd; padding-top: 6px; }
+  .noprint { margin: 16px 0; } @media print { .noprint { display: none; } }
+</style></head><body>
+<div class="noprint"><button onclick="window.print()">Imprimer</button> <button onclick="window.close()">Fermer</button></div>
+<header><b>Ville d'Ivry-sur-Seine</b><span>Suivi des congés — document confidentiel</span></header>
+<h1>Activation de votre compte</h1>
+<div class="who">${esc(r.nom)}</div>
+<div class="box"><div>Votre code d'activation</div><div class="code">${esc(r.code)}</div><div class="mat">Matricule : <b>${esc(r.matricule)}</b></div></div>
+<div class="row">${qr ? `<div class="qr">${qr}</div>` : ""}
+<div><p><b>Comment activer votre compte (depuis votre smartphone)</b></p>
+<ol>
+  <li>${qr ? "Scannez le QR code avec l'appareil photo de votre smartphone, ou" : "Ouvrez"} ${r.url ? `l'adresse <b>${esc(String(r.url).split("#")[0])}</b>` : "la page « Mes congés » indiquée par la DRH"}.</li>
+  <li>Choisissez <b>« Première connexion »</b> et saisissez votre matricule et le code ci-dessus${qr ? " (le QR code les remplit pour vous)" : ""}.</li>
+  <li>Saisissez votre <b>numéro de smartphone</b> : vous recevez un <b>code par SMS</b> à recopier.</li>
+  <li>Choisissez votre <b>mot de passe</b> (10 caractères au moins, avec des lettres et des chiffres).</li>
+  <li>Ensuite, connectez-vous avec votre <b>matricule</b> et ce mot de passe.</li>
+</ol></div></div>
+<div class="warn"><b>Ce code est personnel</b> : ne le communiquez à personne. Il est valable jusqu'au <b>${esc(r.expire_le)}</b>, utilisable une seule fois, et se bloque après 5 essais erronés. Passé ce délai, ou en cas de blocage, demandez-en un nouveau à votre responsable (valideur).</div>
+<footer>Remis le ${esc(new Date().toLocaleDateString("fr-FR"))} — conservez ou détruisez ce document après activation.</footer>
+</body></html>`;
+  if (!w) { toast(`Code d'activation de ${name} : ${r.code} (matricule ${r.matricule}) — autorisez les fenêtres pour obtenir le document imprimable`, true); return; }
+  w.document.open();
+  w.document.write(page);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch (_) { /* l'agent imprime avec le bouton */ } }, 400);
+}
+

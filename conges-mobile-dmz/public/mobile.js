@@ -1,7 +1,7 @@
 /* Suivi des congés — version mobile (DMZ). Page autonome : aucune dépendance sur l'application complète.
    Fonctions de base : compteurs, demandes en cours (en attente ou validées), demande simple « du … au … », agenda.
    N'appelle que : /api/auth/login, /api/auth/logout, /api/me, /api/mobile/summary, /api/mobile/days, POST /api/requests
-   et POST /api/mobile/requests/<id>/cancel | cancel-request, GET /api/mobile/calendar, POST /api/mobile/calendar/link | revoke.
+   et POST /api/mobile/requests/<id>/cancel | cancel-request, plus POST /api/activation/* (première connexion), GET /api/mobile/calendar, POST /api/mobile/calendar/link | revoke.
    Le flux ICS (/cal/<jeton>.ics) est lu par le téléphone, pas par cette page.
    (la liste blanche du nginx de ce dossier). */
 (() => {
@@ -35,22 +35,30 @@
   }
 
   /* ----------------------------- connexion ----------------------------- */
-  function showLogin(message) {
+  function showLogin(message, prefillLogin, info) {
     state.user = null;
     document.querySelectorAll("#m-sheet").forEach((n) => n.remove());
     $("#app").innerHTML = `<div class="m-wrap"><form id="login-form" class="m-card m-login" autocomplete="on">
         <h1>📅 Mes congés</h1><p class="muted">Connectez-vous avec votre compte de la Ville.</p>
-        <label>Identifiant<input id="login-user" autocomplete="username" autocapitalize="none" required></label>
+        <label>Identifiant ou matricule<input id="login-user" autocomplete="username" autocapitalize="none" value="${esc(prefillLogin || "")}" required></label>
         <label>Mot de passe<input id="login-pass" type="password" autocomplete="current-password" required></label>
+        <label class="m-check"><input type="checkbox" id="login-remember"> Se souvenir de moi (30 jours)</label>
+        ${info ? `<div class="m-info">${esc(info)}</div>` : ""}
         <div id="login-error" class="form-error${message ? "" : " hidden"}">${esc(message || "")}</div>
-        <button type="submit" class="m-new">Se connecter</button></form></div>`;
+        <button type="submit" class="m-new">Se connecter</button>
+        <p class="m-act-back"><a href="#" id="go-forgot">Mot de passe oublié ?</a></p>
+        </form>
+        <p class="m-act-sep">Première connexion ?</p>
+        <button type="button" class="m-ghost m-block" id="go-activation">Activer mon compte</button></div>`;
+    $("#go-activation").addEventListener("click", () => showActivation());
+    $("#go-forgot").addEventListener("click", (e) => { e.preventDefault(); showForgot($("#login-user").value.trim()); });
     $("#login-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const err = $("#login-error"), btn = e.target.querySelector("button");
       err.classList.add("hidden");
       btn.disabled = true;
       try {
-        const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ login: $("#login-user").value.trim(), password: $("#login-pass").value }) });
+        const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ login: $("#login-user").value.trim(), password: $("#login-pass").value, remember: $("#login-remember").checked }) });
         state.user = data.user;
         render();
       } catch (ex) {
@@ -64,7 +72,156 @@
 
   async function logout() {
     try { await api("/api/auth/logout", { method: "POST" }); } catch (_) { /* déjà déconnecté */ }
+    try { localStorage.removeItem("m_bio"); } catch (_) { /* sans effet */ }
     showLogin();
+  }
+
+  /* ----------------------------- mot de passe oublié (smartphone contrôlé) ----------------------------- */
+  function showForgot(prefill) {
+    const app = $("#app");
+    const frame = (title, body) => `<div class="m-wrap"><div class="m-card m-login"><h1>📅 ${title}</h1>${body}
+        <div id="fg-error" class="form-error hidden"></div><p class="m-act-back"><a href="#" id="fg-back">← Retour à la connexion</a></p></div></div>`;
+    const fail = (msg) => { const el = $("#fg-error"); el.textContent = msg; el.classList.remove("hidden"); };
+    let ident = prefill || "";
+    const step1 = () => {
+      app.innerHTML = frame("Mot de passe oublié", `<p class="muted">Saisissez votre matricule ou votre identifiant : si votre smartphone a été enregistré, un code vous est envoyé par SMS.</p>
+        <form id="fg-form"><label>Matricule ou identifiant<input id="fg-id" value="${esc(ident)}" autocomplete="username" autocapitalize="none" required></label>
+        <button type="submit" class="m-new">Recevoir le code par SMS</button></form>`);
+      $("#fg-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        ident = $("#fg-id").value.trim();
+        try { await api("/api/activation/forgot", { method: "POST", body: JSON.stringify({ identifiant: ident }) }); step2(); }
+        catch (ex) { fail(ex.message); }
+      });
+      back();
+    };
+    const step2 = () => {
+      app.innerHTML = frame("Nouveau mot de passe", `<p class="muted">Si ces informations correspondent à un compte dont le smartphone est enregistré, un SMS vient d'être envoyé (valable 10 minutes).</p>
+        <form id="fg-form"><label>Code reçu par SMS<input id="fg-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+        <label>Nouveau mot de passe (10 caractères, lettres et chiffres)<input id="fg-pw" type="password" autocomplete="new-password" required></label>
+        <label>Confirmez-le<input id="fg-pw2" type="password" autocomplete="new-password" required></label>
+        <button type="submit" class="m-new">Changer mon mot de passe</button></form>`);
+      $("#fg-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api("/api/activation/reset", { method: "POST", body: JSON.stringify({ identifiant: ident, code: $("#fg-code").value.trim(), password: $("#fg-pw").value, confirm: $("#fg-pw2").value }) });
+          showLogin(null, r.matricule || ident, "Mot de passe modifié : connectez-vous avec votre nouveau mot de passe.");
+        } catch (ex) { fail(ex.message); }
+      });
+      back();
+    };
+    const back = () => { $("#fg-back").addEventListener("click", (e) => { e.preventDefault(); showLogin(); }); };
+    step1();
+  }
+
+  /* ----------------------------- empreinte / Face ID : verrouillage de l'application sur ce téléphone -----------------------------
+     Verrou LOCAL (WebAuthn, authentificateur du téléphone, vérification de l'utilisateur obligatoire) : à l'ouverture, la page demande l'empreinte ou le visage
+     avant d'afficher quoi que ce soit. Il protège un téléphone déverrouillé prêté ou volé ; il ne remplace pas le mot de passe (connexion mémorisée 30 jours). */
+  // Icône d'empreinte digitale (SVG en ligne : hérite de la couleur du texte, aucune image à charger).
+  const fpIcon = (size) => `<svg class="m-fp" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>`;
+  const BIO_KEY = "m_bio";
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  const bioStored = () => { try { return JSON.parse(localStorage.getItem(BIO_KEY) || "null"); } catch (_) { return null; } };
+  async function bioAvailable() {
+    try { return !!(window.isSecureContext && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (_) { return false; }
+  }
+  async function bioEnable() {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rp: { name: "Mes congés" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "u" + state.user.id, displayName: "Mes congés" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "discouraged" }, attestation: "none", timeout: 60000 } });
+    try { localStorage.setItem(BIO_KEY, JSON.stringify({ uid: state.user.id, cred: b64(cred.rawId) })); } catch (_) { /* stockage indisponible */ }
+  }
+  async function bioCheck(stored) {
+    await navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: "public-key", id: unb64(stored.cred) }], userVerification: "required", timeout: 60000 } });
+  }
+  function showLock(stored) {
+    $("#app").innerHTML = `<div class="m-wrap"><div class="m-card m-login"><div class="m-lock-icon">${fpIcon(72)}</div><h1>Mes congés</h1><p class="muted">Application verrouillée : confirmez avec votre empreinte ou votre visage.</p>
+        <div id="lock-error" class="form-error hidden"></div>
+        <button type="button" class="m-new" id="lock-go">${fpIcon(20)} Déverrouiller</button>
+        <button type="button" class="m-ghost m-block" id="lock-other">Me connecter avec mon mot de passe</button></div></div>`;
+    const go = async () => {
+      try { await bioCheck(stored); render(); }
+      catch (_) { const el = $("#lock-error"); el.textContent = "Vérification annulée ou refusée."; el.classList.remove("hidden"); }
+    };
+    $("#lock-go").addEventListener("click", go);
+    $("#lock-other").addEventListener("click", async () => { try { localStorage.removeItem(BIO_KEY); } catch (_) { /* sans effet */ } await logout(); });
+    go();
+  }
+
+  /* ----------------------------- première connexion : activation du compte (code + SMS + mot de passe) ----------------------------- */
+  function showActivation(prefill) {
+    prefill = prefill || {};
+    let step = "code", login = "";
+    const app = $("#app");
+    const frame = (title, body) => `<div class="m-wrap"><div class="m-card m-login"><h1>📅 ${title}</h1>${body}
+        <div id="act-error" class="form-error hidden"></div><p class="m-act-back"><a href="#" id="act-back">← Retour à la connexion</a></p></div></div>`;
+    const fail = (msg) => { const el = $("#act-error"); el.textContent = msg; el.classList.remove("hidden"); };
+    const call = async (path, body) => {
+      $("#act-error").classList.add("hidden");
+      return api("/api/activation/" + path, { method: "POST", body: JSON.stringify(body) });
+    };
+    const draw = (info) => {
+      if (step === "code") {
+        app.innerHTML = frame("Première connexion", `<p class="muted">Saisissez le matricule et le code d'activation remis par votre responsable (ou scannez le QR code).</p>
+          <form id="act-form"><label>Matricule<input id="act-mat" value="${esc(prefill.matricule || "")}" autocomplete="off" autocapitalize="characters" required></label>
+          <label>Code d'activation<input id="act-code" value="${esc(prefill.code || "")}" autocomplete="off" autocapitalize="characters" placeholder="XXXXX-XXXXX" required></label>
+          <button type="submit" class="m-new">Continuer</button></form>`);
+        $("#act-form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          try { await call("start", { matricule: $("#act-mat").value.trim(), code: $("#act-code").value.trim() }); step = "sms"; draw(); }
+          catch (ex) { fail(ex.message); }
+        });
+      } else if (step === "sms") {
+        app.innerHTML = frame("Votre smartphone", `<p class="muted">Saisissez votre numéro de smartphone : nous vous envoyons un code par SMS pour le contrôler.</p>
+          <form id="act-form"><label>Numéro de smartphone<input id="act-mobile" type="tel" inputmode="tel" autocomplete="tel" placeholder="06 12 34 56 78" required></label>
+          <button type="submit" class="m-new">Recevoir le code par SMS</button></form>`);
+        $("#act-form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          try { const r = await call("sms", { mobile: $("#act-mobile").value.trim() }); step = "otp"; draw(r); }
+          catch (ex) { fail(ex.message); }
+        });
+      } else if (step === "otp") {
+        app.innerHTML = frame("Code reçu par SMS", `<p class="muted">Un SMS a été envoyé au ${esc(info && info.mobile || "")}. Saisissez le code à 6 chiffres (valable ${esc(info && info.valable_minutes || 10)} minutes).</p>
+          <form id="act-form"><label>Code SMS<input id="act-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+          <button type="submit" class="m-new">Valider</button></form>
+          <p class="m-act-back"><a href="#" id="act-resend">Je n'ai rien reçu : renvoyer un SMS</a></p>`);
+        $("#act-form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          try { await call("otp", { code: $("#act-otp").value.trim() }); step = "email"; draw(); }
+          catch (ex) { fail(ex.message); }
+        });
+        $("#act-resend").addEventListener("click", (e) => { e.preventDefault(); step = "sms"; draw(); });
+      } else if (step === "email") {
+        app.innerHTML = frame("Votre adresse e-mail", `<p class="muted"><strong>Facultatif.</strong> Sans adresse e-mail, vos confirmations de demandes et de validations vous seront envoyées <strong>par SMS</strong>.</p>
+          <form id="act-form"><label>Adresse e-mail<input id="act-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" placeholder="prenom.nom@exemple.fr"></label>
+          <button type="submit" class="m-new">Continuer</button></form>
+          <button type="button" class="m-ghost m-block" id="act-noemail">Je n'ai pas d'adresse e-mail</button>`);
+        const send = async (value) => { try { await call("email", { email: value }); step = "password"; draw(); } catch (ex) { fail(ex.message); } };
+        $("#act-form").addEventListener("submit", (e) => { e.preventDefault(); send($("#act-email").value.trim()); });
+        $("#act-noemail").addEventListener("click", () => send(""));
+      } else if (step === "password") {
+        app.innerHTML = frame("Choisissez votre mot de passe", `<p class="muted">10 caractères au moins, avec des lettres et des chiffres.</p>
+          <form id="act-form"><label>Mot de passe<input id="act-pw" type="password" autocomplete="new-password" required></label>
+          <label>Confirmez-le<input id="act-pw2" type="password" autocomplete="new-password" required></label>
+          <button type="submit" class="m-new">Activer mon compte</button></form>`);
+        $("#act-form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          try { const r = await call("password", { password: $("#act-pw").value, confirm: $("#act-pw2").value }); login = r.matricule || r.login; step = "done"; draw(); }
+          catch (ex) { fail(ex.message); }
+        });
+      } else {
+        app.innerHTML = frame("Compte activé", `<p>Votre compte est activé. Connectez-vous avec votre <strong>matricule</strong> (${esc(login)}) et le mot de passe que vous venez de choisir.</p>
+          <button type="button" class="m-new" id="act-go">Se connecter</button>`);
+        $("#act-go").addEventListener("click", () => showLogin(null, login));
+      }
+      const back = $("#act-back");
+      if (back) back.addEventListener("click", (e) => { e.preventDefault(); showLogin(); });
+    };
+    draw();
   }
 
   /* ----------------------------- écran principal ----------------------------- */
@@ -78,10 +235,24 @@
 
     const head = `<header class="m-head">
         <div><b>📅 Mes congés</b><div class="m-who">${esc(d.user.label)}</div></div>
-        <button type="button" id="m-logout" title="Déconnexion" aria-label="Déconnexion">⏻</button></header>
+        <span class="m-head-btns"><button type="button" id="m-bio" class="hidden" aria-label="Verrouillage par empreinte"></button><button type="button" id="m-logout" title="Déconnexion" aria-label="Déconnexion">⏻</button></span></header>
       <div class="m-year"><button type="button" id="m-prev-year" aria-label="Année précédente">‹</button><strong>${year}</strong><button type="button" id="m-next-year" aria-label="Année suivante">›</button></div>`;
     const bind = () => {
       $("#m-logout").addEventListener("click", logout);
+      bioAvailable().then((ok) => {
+        const b = $("#m-bio");
+        if (!ok || !b) return;
+        const on = () => { const s = bioStored(); return !!(s && s.uid === (state.user || {}).id); };
+        const paint = () => { b.innerHTML = fpIcon(22); b.classList.toggle("m-bio-on", on()); b.setAttribute("aria-pressed", on() ? "true" : "false"); b.title = on() ? "Verrouillage par empreinte actif (toucher pour le retirer)" : "Activer le verrouillage par empreinte ou Face ID"; b.classList.remove("hidden"); };
+        paint();
+        b.addEventListener("click", async () => {
+          try {
+            if (on()) { localStorage.removeItem("m_bio"); toast("Verrouillage retiré"); }
+            else { await bioEnable(); toast("Verrouillage activé : l'empreinte sera demandée à l'ouverture"); }
+          } catch (_) { toast("Activation annulée ou impossible sur cet appareil", true); }
+          paint();
+        });
+      });
       $("#m-prev-year").addEventListener("click", () => { state.year = year - 1; render(); });
       $("#m-next-year").addEventListener("click", () => { state.year = year + 1; render(); });
     };
@@ -413,7 +584,17 @@
 
   /* ----------------------------- démarrage ----------------------------- */
   (async () => {
-    try { const me = await api("/api/me"); state.user = me.user; render(); }
-    catch (_) { showLogin(); }
+    const m = /^#activation=([^.]+)\.(.+)$/.exec(location.hash || "");
+    if (m) {                                                // lien du QR code : matricule et code préremplis, puis retiré de l'adresse
+      history.replaceState(null, "", location.pathname);
+      showActivation({ matricule: decodeURIComponent(m[1]), code: decodeURIComponent(m[2]) });
+      return;
+    }
+    try {
+      const me = await api("/api/me");
+      state.user = me.user;
+      const stored = bioStored();
+      if (stored && stored.uid === me.user.id && await bioAvailable()) showLock(stored); else render();
+    } catch (_) { showLogin(); }
   })();
 })();

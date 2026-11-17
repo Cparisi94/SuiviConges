@@ -1,7 +1,7 @@
 # Suivi des congés — version mobile en DMZ
 
 Frontend **autonome** et **minimal** pour les agents qui consultent leurs congés depuis un téléphone : page statique (HTML, CSS, JavaScript sans build)
-+ nginx qui ne relaie que douze routes d'API. Projet **séparé** du reste du dépôt : build context Docker = ce dossier seul, aucune dépendance sur `frontend/`.
++ nginx qui ne relaie que seize routes d'API. Projet **séparé** du reste du dépôt : build context Docker = ce dossier seul, aucune dépendance sur `frontend/`.
 
 ```
 Agent ──HTTPS──▶ reverse proxy DMZ ──HTTP──▶ [conges-mobile-dmz : nginx + page] ──1 port TCP──▶ backend Suivi des congés (LAN)
@@ -31,6 +31,7 @@ Rien d'autre : pas de validation, pas de planning, pas d'administration. Les dem
 | `/api/mobile/calendar` | GET | état de mon abonnement à l'agenda du téléphone |
 | `/api/mobile/calendar/link`, `/api/mobile/calendar/revoke` | POST | créer (ou remplacer) mon lien d'abonnement ; l'arrêter |
 | `/cal/<jeton>.ics` | GET | flux iCalendar lu par le téléphone, **sans session** (le jeton secret fait foi) |
+| `/api/activation/start`, `/sms`, `/otp`, `/email`, `/password`, `/forgot`, `/reset` | POST | agents sans compte AD : première connexion (matricule + code d'activation, SMS de contrôle du smartphone, e-mail facultatif, mot de passe) et mot de passe oublié par SMS (sans session ; 12 requêtes par minute et par adresse) |
 | `/api/mobile/requests/<id>/cancel`, `/api/mobile/requests/<id>/cancel-request` | POST | annulation d'une demande en attente ; demande d'annulation d'une demande validée (réservées à mes demandes) |
 
 `/api/status` répond `ok` sans interroger le backend ; `/api/diag` relaie réellement la sonde du backend (`200` = joignable, `502`/`504` = pare-feu, `MOBILE_BACKEND_HOST` ou `MOBILE_BACKEND_PORT`).

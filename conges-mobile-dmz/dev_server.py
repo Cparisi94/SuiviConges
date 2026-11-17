@@ -26,6 +26,7 @@ ALLOWED = [
     ({"POST"}, re.compile(r"^/api/mobile/calendar/(link|revoke)$")),
     ({"POST"}, re.compile(r"^/api/requests$")),
     ({"POST"}, re.compile(r"^/api/mobile/requests/[0-9]+/(cancel|cancel-request)$")),
+    ({"POST"}, re.compile(r"^/api/activation/(start|sms|otp|email|password|forgot|reset)$")),
 ]
 
 

@@ -7,6 +7,13 @@ map $http_x_forwarded_proto $fwd_proto {
     ''      $scheme;
 }
 
+# /mobile/ : TEST SEULEMENT, sur le réseau interne. En production, la version mobile n'est exposée que par le frontend de la DMZ (conges-mobile-dmz).
+# Actif uniquement si MOBILE_TEST=1 ET si le nom d'hôte demandé se termine par .ivry.local ; dans tous les autres cas, /mobile/ répond 404.
+map "${MOBILE_TEST}:$host" $mobile_test {
+    default 0;
+    "~^1:.+\.ivry\.local$" 1;
+}
+
 # Freine les tentatives de connexion répétées (en plus de la limite applicative).
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
 
@@ -42,11 +49,16 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # Version mobile : le backend MOBILE (conteneur backend-mobile, liste blanche de routes) sert la page et son API sous /mobile/.
+    # Version mobile (TEST SEULEMENT, voir la carte $mobile_test en tête de fichier) : le backend MOBILE (conteneur backend-mobile, liste blanche
+    # de routes) sert la page et son API sous /mobile/.
     # Le préfixe est retiré (/mobile/api/me -> /api/me). Le cookie de session mobile est distinct de celui de l'application.
     # Adresse résolue à l'usage (resolver Docker) : nginx démarre même si le conteneur mobile est arrêté (502 jusqu'à son retour).
-    location = /mobile { return 301 /mobile/; }
+    location = /mobile {
+        if ($mobile_test = 0) { return 404; }
+        return 301 /mobile/;
+    }
     location = /mobile/api/auth/login {
+        if ($mobile_test = 0) { return 404; }
         limit_req zone=login burst=5 nodelay;
         limit_req_status 429;
         resolver 127.0.0.11 valid=10s ipv6=off;
@@ -56,6 +68,7 @@ server {
         include /etc/nginx/proxy_params_conges;
     }
     location ^~ /mobile/ {
+        if ($mobile_test = 0) { return 404; }
         resolver 127.0.0.11 valid=10s ipv6=off;
         set $mobile_up ${MOBILE_BACKEND_URL};
         rewrite ^/mobile/(.*)$ /$1 break;
