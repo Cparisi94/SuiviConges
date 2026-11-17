@@ -1221,6 +1221,11 @@ def _create_agent_account(db, nom, prenom, email, matricule, owner_id, ad_login=
         "VALUES (?,?,?,?,?,?,?,?,0,'agent',?,1)",
         (login, ad_login, full_name, nom, prenom, email, matricule, generate_password_hash(_agent_password()), owner_id),
     )
+    if ad_login:
+        import people
+        ad_name = people.fetch_ad_name(ad_login)          # nom affiché dans l'AD (« Sofia Abdiche »), affiché par défaut dans l'application
+        if ad_name:
+            db.execute("UPDATE users SET nom_ad=? WHERE id=?", (ad_name, cur.lastrowid))
     return cur.lastrowid, login
 
 

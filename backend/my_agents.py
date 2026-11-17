@@ -53,7 +53,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
 
     def children_map(db):
         rows = [row_to_dict(r) for r in db.execute(
-            "SELECT id, login, nom, matricule, email, role, admin, actif, parent_id, unit_code FROM users").fetchall()]
+            "SELECT id, login, nom, nom_ad, matricule, email, role, admin, actif, parent_id, unit_code FROM users").fetchall()]
         kids = {}
         for u in rows:
             kids.setdefault(u["parent_id"], []).append(u)
@@ -156,6 +156,7 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             units = load_units(db)
             index = people.unit_index(units)
             by_id, kids = children_map(db)
+            people.fill_ad_names_async()          # noms AD manquants : renseignés en arrière-plan, visibles au prochain affichage
             # Le responsable d'une unité en est le valideur : un responsable resté agent est promu (niveau déduit de son unité).
             healed = False
             for unit in units:
@@ -184,18 +185,20 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
             deep = request.args.get("depth") == "all" or (request.user.get("admin") and request.headers.get("X-Scope") == "all")
             delegating = set(delegation.delegators_of(db, request.user["id"]))
 
-            def node(u, seen, level=0):
-                out = {"delegated": u["id"] in delegating and level == 1, "fiche": fiches.get(u["id"]), "year": year, "id": u["id"], "nom": u["nom"], "login": u["login"], "matricule": u["matricule"],
+            def node(u, seen, level=0, by_deleg=False):
+                # by_deleg : personne placée sous un valideur qui me délègue en ce moment (je la gère par délégation).
+                out = {"by_deleg": by_deleg, "delegated": u["id"] in delegating and level == 1, "fiche": fiches.get(u["id"]), "year": year, "id": u["id"], "nom": u["nom"], "nom_ad": u["nom_ad"] or "", "login": u["login"], "matricule": u["matricule"],
                        "role": u["role"], "admin": u["admin"], "actif": u["actif"], "no_email": not (u["email"] or "").strip(),
                        "profil": "agent" if u["role"] == "agent" else "valideur",
-                       "valideur": ((by_id.get(u["parent_id"]) or {}).get("nom") or (by_id.get(u["parent_id"]) or {}).get("login") or ""),
+                       "valideur": ((by_id.get(u["parent_id"]) or {}).get("nom_ad") or (by_id.get(u["parent_id"]) or {}).get("nom") or (by_id.get(u["parent_id"]) or {}).get("login") or ""),
                        "unit_code": u["unit_code"], "unit_label": (index.get(u["unit_code"]) or {}).get("libelle", ""),
                        "unit_head": bool(u["unit_code"] and (index.get(u["unit_code"]) or {}).get("head_user_id") == u["id"]),
                        "children": []}
                 expand = deep or level == 0 or (level == 1 and u["id"] in delegating)
                 for c in sorted(kids.get(u["id"], []), key=lambda x: (x["nom"] or x["login"]).lower()):
                     if expand and c["id"] not in seen:
-                        out["children"].append(node(c, seen | {c["id"]}, level + 1))
+                        out["children"].append(node(c, seen | {c["id"]}, level + 1,
+                                                    by_deleg or (u["id"] in delegating and level == 1)))
                 out["count"] = len(subtree(kids, u["id"])) - 1          # tous les subordonnés, affichés ou non
                 out["more"] = out["count"] > len(out["children"]) + sum(c["count"] for c in out["children"])
                 return out

@@ -12,6 +12,8 @@ Parcours de création (écran Utilisateurs) :
 """
 import re
 import secrets
+import threading
+import time
 import unicodedata
 import uuid
 
@@ -155,6 +157,71 @@ def ad_match(nom, prenom):
     return {"status": status, "candidates": found[:8]}
 
 
+def fetch_ad_name(ad_login):
+    """Nom affiché (displayName) du compte AD `ad_login` ; « » si l'AD ne le connaît pas, None si l'AD est indisponible (jamais d'exception)."""
+    ad_login = (ad_login or "").strip().lower()
+    if not ad_login:
+        return ""
+    if not apm.configured():
+        return None
+    try:
+        hits = apm.ad_search(ad_login, limit=15)
+    except apm.ApmError:
+        return None
+    exact = [h for h in hits if h["username"] == ad_login]
+    return (exact[0]["displayName"] or "").strip() if len(exact) == 1 else ""
+
+
+_ad_unknown = set()           # comptes déjà cherchés sans succès dans l'AD (ou AD en panne) : pas de nouvelle recherche avant le redémarrage
+_ad_fill = {"running": False, "retry_after": 0.0}
+_ad_fill_lock = threading.Lock()
+
+
+def fill_ad_names(limit=60):
+    """Renseigne `users.nom_ad` des comptes actifs qui ont un identifiant AD mais pas encore de nom AD. Retourne le nombre de noms trouvés.
+
+    Un compte que l'AD ne connaît pas n'est pas réinterrogé avant le redémarrage de l'application."""
+    db = get_db()
+    try:
+        rows = [r for r in db.execute(
+            "SELECT id, login, ad_login FROM users WHERE actif=1 AND nom_ad='' AND ad_login<>'' ORDER BY id").fetchall()
+            if r["id"] not in _ad_unknown][:limit]
+        found = 0
+        for r in rows:
+            name = fetch_ad_name(r["ad_login"])
+            if name is None:
+                break                                    # AD indisponible : on réessaiera au prochain passage
+            if not name:
+                _ad_unknown.add(r["id"])
+                continue
+            db.execute("UPDATE users SET nom_ad=? WHERE id=?", (name, r["id"]))
+            found += 1
+        db.commit()
+        return found
+    finally:
+        db.close()
+
+
+def fill_ad_names_async():
+    """Lance `fill_ad_names` en arrière-plan (un seul passage à la fois, pause de 10 minutes entre deux passages) : l'écran n'attend pas l'AD."""
+    with _ad_fill_lock:
+        if _ad_fill["running"] or time.time() < _ad_fill["retry_after"] or not apm.configured():
+            return
+        _ad_fill["running"] = True
+
+    def run():
+        try:
+            fill_ad_names()
+        except Exception as exc:  # noqa: BLE001 - tâche de fond : on journalise sans propager
+            print("[people] noms AD non renseignés : %s" % exc)
+        finally:
+            with _ad_fill_lock:
+                _ad_fill["running"] = False
+                _ad_fill["retry_after"] = time.time() + 600
+
+    threading.Thread(target=run, name="conges-ad-names", daemon=True).start()
+
+
 # --------------------------------------------------------------------------- #
 #  Routes
 # --------------------------------------------------------------------------- #
@@ -179,6 +246,15 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
         if not nom:
             return error("Nom obligatoire", 400)
         return jsonify(ad_match(nom, prenom))
+
+    @bp.route("/users/ad-names/sync", methods=["POST"])
+    @login_required
+    def ad_names_sync():
+        """Renseigne tout de suite les noms AD manquants (administrateur) ; l'application le fait aussi seule, en arrière-plan."""
+        if not request.user.get("admin"):
+            return error("Accès réservé aux administrateurs", 403)
+        _ad_unknown.clear()
+        return jsonify({"renseignes": fill_ad_names(limit=500)})
 
     @bp.route("/org-units", methods=["GET"])
     @login_required
@@ -329,6 +405,9 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
                     return error("Mot de passe local obligatoire pour un compte administrateur", 400)
                 else:
                     db.execute("UPDATE users SET admin=1 WHERE id=?", (user_id,))
+            ad_name = fetch_ad_name(ad_login) if ad_login else ""
+            if ad_name:
+                db.execute("UPDATE users SET nom_ad=? WHERE id=?", (ad_name, user_id))
             db.execute("UPDATE users SET unit_code=?, validator_unit_code=? WHERE id=?",
                        (unit_code if profil != "administrateur" else "",
                         validator_unit if profil == "valideur" else "", user_id))

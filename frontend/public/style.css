@@ -1649,7 +1649,9 @@ tr.row-off td { color: #888; }
 .ma-gcount { font-size: 11px; font-weight: 500; opacity: .9; text-transform: none; }
 .ma-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; margin: 6px 0; }
 .ma-card { border: 1px solid var(--border, #e3d5cf); border-radius: 10px; background: #fff; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; cursor: grab; }
-.ma-card.ma-resp { background: #fff4ee; border-color: #e3a58f; }
+.ma-card.ma-valideur { background: #f7e9e1; border-color: #e0bba9; }
+.ma-card.ma-resp { background: #f4dfd3; border-color: #d99a82; }
+.ma-card.ma-bydeleg { border: 2px dashed #3b78b8; padding: 7px 9px; }   /* personne gérée par délégation : pointillé bleu */
 .ma-card.ma-off { opacity: .55; }
 .ma-card.ma-over { outline: 2px dashed #c4573a; background: rgba(196, 87, 58, .12); }
 .ma-card.ma-picked { outline: 2px solid #c4573a; background: rgba(196, 87, 58, .10); }
@@ -1657,6 +1659,7 @@ tr.row-off td { color: #888; }
 .ma-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
 .ma-top-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; }
 .ma-star { color: #c4573a; }
+.ma-rhname { font-style: italic; font-size: 11.5px; color: #7a6a63; margin-top: -3px; }
 .ma-card-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .ma-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: auto; }
 .ma-period-view { display: flex; align-items: center; gap: 8px; }

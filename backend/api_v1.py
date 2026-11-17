@@ -8,6 +8,7 @@ pour éviter une dépendance circulaire.
 """
 import datetime as dt
 import json
+import re
 import time
 
 from flask import Blueprint, jsonify, request
@@ -228,4 +229,68 @@ def leave_requests():
                 continue
         item["dates"] = dates
         items.append(item)
+    return paged(items, total, limit, offset)
+
+
+# --------------------------------------------------------------------------- #
+#  Manager (valideur) d'un agent
+# --------------------------------------------------------------------------- #
+def _name_words(value):
+    """Mots d'un nom, sans accents ni majuscules : « Éloïse DUPONT-MARTIN » -> {eloise, dupont, martin}."""
+    import unicodedata
+    text = unicodedata.normalize("NFKD", (value or "").lower()).encode("ascii", "ignore").decode()
+    return [w for w in re.split(r"[^a-z0-9]+", text) if w]
+
+
+def _person(row):
+    """Identité RH d'un compte (nom RH = celui de Sedit RH, jamais le nom Active Directory)."""
+    return {"id": row["id"], "nom_rh": row["nom"], "nom_famille": row["nom_famille"] or None, "prenom": row["prenom"] or None,
+            "matricule": row["matricule"] or None, "email": row["email"] or None}
+
+
+@bp.route("/api/v1/managers", methods=["GET"])
+@api_key_required("managers:read")
+def managers():
+    """Cherche un agent par **nom RH**, matricule ou e-mail et renvoie son manager (son valideur).
+
+    `q` : matricule ou e-mail exact, ou un ou plusieurs mots du nom RH (accents et casse ignorés, début de mot suffisant).
+    Seul le nom RH est cherché et renvoyé. `delegue_actuel` : la personne à qui le manager délègue en ce moment (absence ou période de
+    délégation), sinon null. Comptes actifs seulement, sauf `?inclure_inactifs=1`."""
+    import delegation
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return error("Paramètre q obligatoire (nom RH, matricule ou e-mail, 2 caractères au moins)", 400)
+    limit, offset = page_args(default=20, maximum=100)
+    with_inactive = request.args.get("inclure_inactifs") == "1"
+    words = _name_words(q)
+    db = get_db()
+    try:
+        users = {r["id"]: r for r in db.execute(
+            "SELECT id, login, nom, nom_famille, prenom, email, matricule, role, actif, parent_id, unit_code FROM users").fetchall()}
+        units = {r["code"]: r["libelle"] for r in db.execute("SELECT code, libelle FROM org_units").fetchall()}
+        hits = []
+        for u in users.values():
+            if u["role"] == "administrateur" or (not u["actif"] and not with_inactive):
+                continue
+            mat, mail = (u["matricule"] or "").strip().lower(), (u["email"] or "").strip().lower()
+            if (mat and mat == q.lower()) or (mail and mail == q.lower()):
+                hits.append((0, u))
+            elif words:
+                rh_words = _name_words(" ".join([u["nom"] or "", u["nom_famille"] or "", u["prenom"] or ""]))
+                if all(any(rw.startswith(w) for rw in rh_words) for w in words):
+                    hits.append((1, u))
+        hits.sort(key=lambda h: (h[0], (h[1]["nom"] or "").lower(), h[1]["id"]))
+        total = len(hits)
+        items = []
+        for _rank, u in hits[offset:offset + limit]:
+            item = _person(u)
+            item["unite"] = {"code": u["unit_code"], "libelle": units.get(u["unit_code"])} if u["unit_code"] else None
+            item["actif"] = bool(u["actif"])
+            boss = users.get(u["parent_id"])
+            item["manager"] = _person(boss) if boss else None
+            delegate = delegation.active_delegate(db, boss["id"]) if boss else None
+            item["delegue_actuel"] = _person(users[delegate["id"]]) if delegate and delegate["id"] in users else None
+            items.append(item)
+    finally:
+        db.close()
     return paged(items, total, limit, offset)

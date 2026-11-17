@@ -13,6 +13,16 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.18.0 — 2026-11-17 — Nom AD affiché par défaut, API « manager d'un agent », Mon équipe et en-tête refaits
+
+- Nom affiché : le nom de l'Active Directory est affiché par défaut (Mon équipe, en-tête, valideur de chaque carte) ; quand le nom RH (Sedit RH) est différent, il apparaît en dessous, en petit et en italique. Les noms AD sont renseignés automatiquement en arrière-plan.
+- Nouvelle route d'API GET /api/v1/managers (droit managers:read) : on cherche un agent par nom RH, matricule ou e-mail et elle renvoie son manager (son valideur) et, s'il y en a un, son délégataire du moment ; seuls les noms RH sont cherchés et renvoyés.
+- Mon équipe : chaque carte affiche la fin de contrat (si Sedit RH la connaît) et le solde estimé de congés et de RTT, les valideurs ont un fond plus foncé, les boutons Unité et ↑/↓ passent en haut à droite de la carte, le bouton « Voir les congés » prend toute la largeur, et l'année disparaît des cartes.
+- Mon équipe : les personnes que vous gérez par délégation sont entourées d'un pointillé bleu et portent le badge « par délégation » ; en « Voir tout », votre propre carte n'est plus masquée.
+- En-tête sur une seule ligne : le titre ramène à l'accueil, le nom est raccourci, la déconnexion est une icône et le Paramétrage une roue dentée ; le bouton « Mot de passe » n'est plus proposé en mode AD, même aux administrateurs.
+- Mode AD : le mot de passe local de secours n'est plus obligatoire à la création d'un administrateur.
+- E-mails : les boutons Valider / Refuser / Voir le calendrier s'affichent correctement dans l'ancien Outlook (boutons en cellules de tableau).
+
 ## 0.17.8 — 2026-11-17 — Bloc « Autres » (absences Sedit RH) dans la synthèse
 
 - Synthèse de la fiche : un bloc « Autres » indique, par type (congé maladie, garde d'enfant malade, congé de maternité/adoption/paternité, congé parental, soins à entourage familial), le nombre de jours ouvrés d'absence saisis dans Sedit RH sur l'année, à titre d'information.

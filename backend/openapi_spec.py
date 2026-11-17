@@ -60,6 +60,12 @@ def build_spec():
                 {"name": "agent_id", "in": "query", "schema": {"type": "integer"}},
                 {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 200, "maximum": 1000}},
                 {"name": "offset", "in": "query", "schema": {"type": "integer", "default": 0}}]),
+            "/api/v1/managers": _get("Manager (valideur) d'un agent, recherché par nom RH, matricule ou e-mail", "managers:read", [
+                {"name": "q", "in": "query", "required": True, "schema": {"type": "string"},
+                 "description": "Matricule ou e-mail exact, ou mots du nom RH (Sedit RH ; accents et casse ignorés)"},
+                {"name": "inclure_inactifs", "in": "query", "schema": {"type": "string", "enum": ["1"]}},
+                {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 20, "maximum": 100}},
+                {"name": "offset", "in": "query", "schema": {"type": "integer", "default": 0}}]),
             "/api/v1/requests": _get("Demandes de congés", "requests:read", _PAGE + [
                 _YEAR, {"name": "status", "in": "query", "schema": {"type": "string"},
                         "description": "en_attente, validee, refusee, annulee, annulation_demandee…"},

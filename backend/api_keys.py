@@ -27,6 +27,7 @@ SCOPES = {
     "balances:read": "Soldes de congés, RTT, CET… d'une fiche",
     "absences:read": "Absences saisies (demi-journées) sur une période",
     "requests:read": "Demandes de congés et leur état",
+    "managers:read": "Recherche d'un agent (nom RH, matricule, e-mail) et de son manager (valideur)",
 }
 PUBLIC_FIELDS = "id, name, key_prefix, scopes, allowed_ips, expires_at, actif, created_at, last_used_at"
 

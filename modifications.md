@@ -881,3 +881,15 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **Autres** : la synthèse de la fiche (panneau de droite) et « Ma synthèse » indiquent maintenant le nombre de jours d'absence saisis dans Sedit RH, par type (maladie, garde d'enfant malade, maternité/paternité, congé parental, soins à un proche). Ce sont des jours ouvrés de l'année (week-ends et jours fériés exclus) ; ils sont donnés à titre d'information et ne changent aucun solde de congés. Le bloc n'apparaît que si Sedit RH est joignable et que l'agent a des absences.
 
 **Vérifications** : calcul des jours contrôlé sur un exemple (jour férié et changement d'année exclus) ; affichage non contrôlé dans un navigateur.
+
+## Version 0.18.0 — Nom AD affiché par défaut, API « manager d'un agent », Mon équipe et en-tête refaits
+
+**Nom affiché** : l'application affichait le nom de Sedit RH (« ABDICHE SLIMANI SOFIA »). Elle affiche maintenant le nom de l'Active Directory (« ABDICHE Sofia ») et, en dessous, en petit et en italique, le nom RH quand il est différent. Ce choix s'applique à Mon équipe, à l'en-tête et au valideur indiqué sur chaque carte. Les 83 comptes de la base de démonstration ont reçu leur nom AD ; pour les futurs comptes, il est lu dans l'AD à la création, et un administrateur peut relancer la lecture (`POST /api/users/ad-names/sync`). Une migration (`0012_nom_ad.sql`) ajoute la colonne : elle s'applique seule au démarrage.
+
+**API « manager d'un agent »** : `GET /api/v1/managers?q=…` permet à une autre application de retrouver le valideur d'un agent à partir de son nom RH, de son matricule ou de son e-mail. Elle ne cherche et ne renvoie que le nom RH. Elle demande une clé API dotée du nouveau droit `managers:read` (à créer par l'administrateur, comme les autres clés).
+
+**Mon équipe et en-tête** : fin de contrat (Sedit RH) et solde estimé de congés/RTT sur chaque carte, fond plus foncé pour les valideurs, boutons Unité et ↑/↓ en haut à droite, « Voir les congés » en pleine largeur, pointillé bleu pour les personnes gérées par délégation, en-tête sur une seule ligne (titre cliquable, nom raccourci, déconnexion en icône, Paramétrage en roue dentée). Pour les administrateurs en mode AD, le mot de passe de secours n'est plus obligatoire et le bouton « Mot de passe » n'est plus proposé.
+
+**E-mails** : les boutons de validation s'affichent correctement dans l'ancien Outlook.
+
+**Vérifications** : 119 tests automatiques (dont l'API manager et l'affichage du nom AD) ; lecture des noms AD réellement faite sur la base de démonstration. L'affichage n'a pas été contrôlé dans un navigateur, ni le rendu des e-mails dans l'ancien Outlook après le dernier envoi de test.

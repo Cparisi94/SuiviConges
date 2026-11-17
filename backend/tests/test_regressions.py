@@ -266,6 +266,53 @@ class PrototypeRegressionTests(unittest.TestCase):
     def _get_v1(self, path, key):
         return self.client.get(path, headers={"X-API-Key": key})
 
+    def test_managers_api_finds_an_agent_by_rh_name_and_returns_the_manager(self):
+        conn = db.get_db()
+        conn.execute("UPDATE users SET nom='LEFEVRE ÉLOÏSE', nom_famille='LEFEVRE', prenom='ÉLOÏSE', matricule='0099001', "
+                     "email='eloise@example.fr', nom_ad='Éloïse Lefèvre-Durand' WHERE id=4")
+        conn.execute("UPDATE users SET nom='DURAND PAUL', nom_famille='DURAND', prenom='PAUL', matricule='0099002', "
+                     "email='paul@example.fr', nom_ad='P. Durand (DSI)' WHERE id=3")
+        conn.commit()
+        conn.close()
+        key = self._new_key("Managers", scopes=("managers:read",))["key"]
+        for q in ("0099001", "ELOISE LEF", "lefevre", "eloise@example.fr"):
+            r = self._get_v1("/api/v1/managers?q=" + q, key)
+            self.assertEqual(r.status_code, 200, (q, r.get_json()))
+            body = r.get_json()
+            self.assertEqual(body["total"], 1, q)
+            item = body["items"][0]
+            self.assertEqual((item["matricule"], item["nom_rh"]), ("0099001", "LEFEVRE ÉLOÏSE"), q)
+            # le manager est le valideur du compte, désigné par son nom RH (jamais par son nom AD)
+            self.assertEqual((item["manager"]["nom_rh"], item["manager"]["matricule"]), ("DURAND PAUL", "0099002"))
+            self.assertNotIn("nom_ad", item)
+            self.assertNotIn("Lefèvre-Durand", json.dumps(body))
+        # le nom AD n'est pas cherché : seul le nom RH l'est
+        self.assertEqual(self._get_v1("/api/v1/managers?q=Lefevre-Durand", key).get_json()["total"], 0)
+        self.assertEqual(self._get_v1("/api/v1/managers?q=x", key).status_code, 400)
+        # le périmètre est obligatoire
+        other = self._new_key("Autre", scopes=("agents:read",))["key"]
+        self.assertEqual(self._get_v1("/api/v1/managers?q=lefevre", other).status_code, 403)
+
+    def test_team_tree_exposes_the_ad_name_next_to_the_rh_name(self):
+        conn = db.get_db()
+        conn.execute("UPDATE users SET nom='ABDICHE SLIMANI SOFIA', nom_ad='Sofia Abdiche' WHERE id=5")
+        conn.commit()
+        conn.close()
+        tree = self._call("GET", "/api/my-agents?depth=all", uid=3).get_json()
+        kids = {c["id"]: c for c in tree["children"]}
+        self.assertEqual((kids[5]["nom"], kids[5]["nom_ad"]), ("ABDICHE SLIMANI SOFIA", "Sofia Abdiche"))
+        # le valideur d'une carte est désigné par son nom AD quand il existe, sinon par son nom RH
+        self.assertEqual(self._call("GET", "/api/my-agents?depth=all", uid=2).get_json()["children"][0]["valideur"], "Direction RH")
+        conn = db.get_db()
+        conn.execute("UPDATE users SET nom_ad='Direction des RH' WHERE id=2")
+        conn.commit()
+        conn.close()
+        self.assertEqual(self._call("GET", "/api/my-agents?depth=all", uid=2).get_json()["children"][0]["valideur"], "Direction des RH")
+        conn = db.get_db()
+        conn.execute("UPDATE users SET nom_ad='' WHERE id IN (2, 5)")
+        conn.commit()
+        conn.close()
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)
@@ -1093,9 +1140,10 @@ class PrototypeRegressionTests(unittest.TestCase):
         self.assertEqual(mailer.format_ranges([4200], 2026), ["le 20 avril 2026 (matin)"])
         self.assertEqual(mailer.format_ranges([4200, 4201, 4220, 4221], 2026), ["le 20 avril 2026", "le 22 avril 2026"])
         r = mail_templates.render("nouvelle_demande", mail_templates.TEMPLATES["nouvelle_demande"]["sample"])
-        self.assertIn(">Valider</a>", r["html"])
-        self.assertIn(">Refuser</a>", r["html"])
-        self.assertIn("calendrier d&#x27;équipe</a>", r["html"])
+        self.assertIn(">Valider</font></a>", r["html"])
+        self.assertIn(">Refuser</font></a>", r["html"])
+        self.assertIn("calendrier d&#x27;équipe</font></a>", r["html"])
+        self.assertIn('bgcolor="#1b7a3d"', r["html"])        # bouton = cellule de tableau colorée : l'ancien Outlook l'affiche correctement
         self.assertNotIn("[[bouton", r["text"])
         self.assertIn("Valider : https://", r["text"])
         # Sans adresse de l'application, les lignes de bouton disparaissent (variables vides).

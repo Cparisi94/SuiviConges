@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.17.8 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.18.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -546,7 +546,9 @@ Le moteur est **pur** (sans accès base) et reproduit les formules du classeur. 
 
 - **API-01** — **API `/api/v1` en lecture seule** : `GET /agents`, `GET /agents/{id}`, `GET /agents/{id}/balance`, `GET /absences`, `GET /requests`. Listes **paginées** (`limit`, `offset`), erreurs `{ "error": … }`.
 - **API-02** — **Clés** `cgk_` + 64 caractères hexadécimaux, en-tête `X-API-Key` (ou `Authorization: Bearer`), **affichées une seule fois**, stockées hachées (SHA-256).
-- **API-03** — **Périmètres** : `agents:read`, `balances:read`, `absences:read`, `requests:read` (ou `*`) ; **IP/réseaux autorisés** et **expiration** facultatifs ; désactivation immédiate.
+- **API-03** — **Périmètres** : `agents:read`, `balances:read`, `absences:read`, `requests:read`, `managers:read` (ou `*`) ; **IP/réseaux autorisés** et **expiration** facultatifs ; désactivation immédiate.
+- **API-12** — **Manager d'un agent** : `GET /api/v1/managers?q=…` (droit `managers:read`) cherche parmi les comptes actifs (sauf administrateurs purs ; `inclure_inactifs=1` pour les autres) par **matricule** ou **e-mail** exact, ou par **mots du nom RH** (Sedit RH : `nom`, `nom_famille`, `prenom` ; accents et casse ignorés, début de mot suffisant) ; le nom AD n'est ni cherché ni renvoyé. Chaque résultat porte l'identité RH de l'agent, son unité, son **manager** (le valideur du compte, `users.parent_id`) et `delegue_actuel` (délégataire du manager ce jour-là, sinon `null`). Pagination `limit`/`offset` (20 par défaut, 100 au plus) ; `q` : 2 caractères au moins.
+- **NOM-01** — **Nom AD affiché par défaut** : `users.nom_ad` (migration `0012_nom_ad.sql`) reçoit le `displayName` de l'AD (par l'APM `ad/search`, correspondance exacte sur l'identifiant AD) à la création d'un compte et, pour les comptes existants, en arrière-plan à l'affichage de Mon équipe (`people.fill_ad_names_async`, un passage à la fois, pause de 10 min ; un compte inconnu de l'AD n'est pas réinterrogé avant redémarrage) ou à la demande (`POST /api/users/ad-names/sync`, administrateur). Mon équipe, l'en-tête et le valideur de chaque carte affichent le nom AD ; le **nom RH** apparaît en dessous, petit et en italique, seulement s'il diffère (mêmes mots dans un autre ordre = identique).
 - **API-04** — **Limitation** de débit (120 requêtes par minute et par clé) ; **journal** de chaque appel (méthode, chemin, statut, IP), sans contenu.
 - **API-05** — **Documentation interactive** `/api-docs` (Swagger UI) et spécification `/api/v1/openapi.json`, vérifiée par un test (toute route `/api/v1` doit y figurer).
 - **API-06** — **Supervision** : `GET /api/status` (public en interne) renvoie la **version**, l'état de l'application, de la base (latence), de l'APM et de Sedit RH (configurés ou non) et le mode d'authentification.
@@ -773,6 +775,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.18.0** | 2026-11-17 | Nom AD affiché par défaut (nom RH en italique dessous), API `GET /api/v1/managers`, Mon équipe (fin de contrat, solde estimé, délégation en pointillé) et en-tête refaits, boutons d'e-mail compatibles ancien Outlook. |
 | **0.17.8** | 2026-11-17 | Bloc « Autres » (absences Sedit RH) dans la synthèse. |
 | **0.17.7** | 2026-11-17 | Panneau de synthèse compact. |
 | **0.17.6** | 2026-11-17 | Agenda Outlook à jour à chaque demande, soldes prévisionnels. |

@@ -240,11 +240,21 @@ BUTTON_COLORS = (("valider", "#1b7a3d"), ("refuser", "#b3261e"))
 
 
 def _button(label, url):
+    """Bouton « incassable » : cellule de tableau colorée (bgcolor) dont la marge interne est portée par la cellule,
+    car l'ancien Outlook (moteur Word) ignore marges, marges internes et fond d'un simple lien."""
     low = label.lower()
     color = next((c for k, c in BUTTON_COLORS if low.startswith(k)), "#c4573a")
-    return ('<a href="%s" style="display:inline-block;padding:10px 18px;margin:4px 8px 4px 0;border-radius:6px;'
-            'background:%s;color:#ffffff;text-decoration:none;font-weight:600">%s</a>'
-            % (html.escape(url, quote=True), color, html.escape(label)))
+    return ('<td bgcolor="%s" align="center" style="background-color:%s;border-radius:6px;padding:10px 18px 10px 18px;">'
+            '<a href="%s" target="_blank" style="color:#ffffff;font-family:Arial,sans-serif;font-size:14px;line-height:18px;'
+            'font-weight:bold;text-decoration:none;white-space:nowrap;"><font color="#ffffff">%s</font></a></td>'
+            % (color, color, html.escape(url, quote=True), html.escape(label)))
+
+
+def _button_row(cells):
+    """Boutons consécutifs : un seul tableau, une cellule par bouton, séparées par une cellule vide."""
+    spacer = '<td width="10" style="width:10px;font-size:0;line-height:0;">&nbsp;</td>'
+    return ('<table border="0" cellspacing="0" cellpadding="0" style="margin:4px 0 4px 0;"><tr>%s</tr></table>'
+            % spacer.join(cells))
 
 
 def plain(text):
@@ -254,18 +264,25 @@ def plain(text):
 
 def to_html(text):
     """Texte brut -> HTML (échappé ; les adresses http(s) deviennent des liens ; « [[bouton:Texte|URL]] » devient un bouton)."""
-    out = []
+    out, row = [], []
     for line in text.split("\n"):
         m = BUTTON.match(line)
         if m:
-            out.append(("btn", _button(m.group(1).strip(), m.group(2))))
+            row.append(_button(m.group(1).strip(), m.group(2)))
             continue
+        if row:
+            out.append(("btn", _button_row(row)))
+            row = []
         escaped = html.escape(line)
         out.append(("txt", re.sub(r"(https?://[^\s<]+)", r'<a href="\1">\1</a>', escaped)))
+    if row:
+        out.append(("btn", _button_row(row)))
     html_out = ""
     for i, (kind, piece) in enumerate(out):
-        if i:
-            html_out += " " if (kind == "btn" and out[i - 1][0] == "btn") else "<br>\n"
+        if i and not (kind == "btn" or out[i - 1][0] == "btn"):
+            html_out += "<br>\n"
+        elif i:
+            html_out += "\n"
         html_out += piece
     return html_out
 

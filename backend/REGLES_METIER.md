@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.17.1.
+> Dernière mise à jour : version 0.18.0.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -124,7 +124,7 @@
 
 - **Mode local** : mots de passe de l'application (8 caractères minimum). **Mode AD** : le mot de passe est celui du compte Ville ; le compte doit exister dans l'application. Les **administrateurs** gardent un mot de passe local de secours.
 - L'**identifiant** de connexion est insensible aux majuscules et minuscules.
-- Le bouton « Mot de passe » n'est pas proposé aux comptes gérés par l'AD.
+- Le bouton « Mot de passe » n'est pas proposé en mode AD (le mot de passe est celui du compte Ville, administrateurs compris). Le mot de passe local de secours d'un administrateur est **facultatif** à la création en mode AD (obligatoire en mode local).
 - Session de 10 h ; **8 échecs en 15 minutes** par adresse bloquent les essais ; même message pour un compte inconnu et un mauvais mot de passe.
 - Chaque connexion, échec, déconnexion et « se connecter en tant que » est journalisé. Un administrateur peut se connecter **en tant que** un autre compte (bandeau d'identité, tout est tracé).
 
@@ -140,6 +140,8 @@
 - Les agents de Sedit RH ne sont lus qu'à la demande et gardés quelques minutes en mémoire ; seuls ceux que l'on crée ou rapproche sont enregistrés.
 - Le **rapprochement des matricules** se fait par nom et prénom : seules les correspondances certaines sont proposées ; les homonymes ne sont jamais rapprochés automatiquement.
 - La **date d'arrivée** issue de Sedit RH n'est reprise que si elle tombe dans l'année de la fiche.
+- **Nom affiché** : le nom de l'Active Directory est affiché par défaut ; le nom RH (Sedit RH) apparaît en dessous, en petit et en italique, quand il est différent. Le nom RH reste la référence pour la recherche d'un agent et pour l'API « manager d'un agent » (`/api/v1/managers`), qui ne renvoie jamais le nom AD.
+- Le **manager** d'un agent est son valideur ; s'il délègue ce jour-là (absence ou période de délégation), le délégataire est indiqué en plus.
 
 ## 12. Agenda Outlook (module exchange)
 

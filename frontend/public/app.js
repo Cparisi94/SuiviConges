@@ -366,10 +366,14 @@ function showApp() {
   $("#view-login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   // Nom raccourci (« Marc C. ») pour gagner de la place ; le nom complet est dans l'infobulle.
-  const fullName = state.user.nom || state.user.login;
+  const adParts = String(state.user.nom_ad || "").trim().split(/\s+/).filter(Boolean);
+  const fullName = state.user.nom_ad || state.user.nom || state.user.login;
   const given = String(state.user.prenom || "").trim(), family = String(state.user.nom_famille || "").trim();
   const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-  $("#user-badge").textContent = given && family ? `${cap(given.split(/\s+/)[0])} ${family.charAt(0).toUpperCase()}.` : fullName;
+  // Le prénom et le nom de famille (champs séparés) donnent « Marc C. » ; à défaut, le nom AD (« NOM Prénom ») : mots en majuscules = nom de famille.
+  const adFamily = adParts.filter((w) => w === w.toUpperCase()), adGiven = adParts.filter((w) => w !== w.toUpperCase());
+  $("#user-badge").textContent = given && family ? `${cap(given.split(/\s+/)[0])} ${family.charAt(0).toUpperCase()}.`
+    : (adFamily.length && adGiven.length ? `${adGiven[0]} ${adFamily[0].charAt(0)}.` : fullName);
   $("#user-badge").title = fullName + (state.user.admin ? " (administrateur)" : "");
   const isAdmin = !!state.user.admin;
   const isAgent = userRole(state.user) === "agent";
@@ -5540,15 +5544,20 @@ async function viewMyAgents() {
   const ficheHtml = (n) => (n.fiche && n.fiche.complete
     ? `<a class="btn btn-primary btn-small ma-fiche-btn" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir le calendrier et les soldes de congés de cette personne">📅 Voir les congés</a>`
     : `<button type="button" class="btn btn-small ma-period ma-fiche-btn" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
+  /* Nom affiché : le nom AD par défaut ; en dessous, en italique, le nom RH quand il diffère (mêmes mots dans un autre ordre = identique) */
+  const nameKey = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z]+/).filter(Boolean).sort().join(" ");
+  const shownName = (n) => n.nom_ad || n.nom || n.login;
+  const rhName = (n) => (n.nom_ad && n.nom && nameKey(n.nom_ad) !== nameKey(n.nom) ? n.nom : "");
   const cardHtml = (n, resp, groupName) => {
     const me = n.id === state.user.id;
-    return `<div class="ma-card ma-drop${resp ? " ma-resp" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
-      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}${resp || n.unit_head ? ` <span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</span>
+    return `<div class="ma-card ma-drop${n.profil === "valideur" ? " ma-valideur" : ""}${resp ? " ma-resp" : ""}${n.by_deleg ? " ma-bydeleg" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
+      <div class="ma-card-top"><span class="ma-name">${esc(shownName(n))}${resp || n.unit_head ? ` <span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</span>
         <span class="ma-top-btns">
           <button type="button" class="btn btn-small ma-unit-edit" data-uid="${n.id}" title="Définir l'unité de cette personne (liste), et si elle en est la responsable">✎ Unité</button>
-          ${n.profil === "agent" && n.actif && !me ? `<button type="button" class="btn btn-small ma-promote" data-uid="${n.id}" title="Passer cette personne en valideur : elle pourra valider les demandes de ses agents (niveau déduit de son unité)">↑ Valideur</button>` : ""}
-          ${n.profil === "valideur" && n.role !== "administrateur" && !n.admin && n.actif && !me && !n.all ? `<button type="button" class="btn btn-small ma-demote" data-uid="${n.id}" title="Repasser cette personne en agent : les personnes qu'elle valide remontent sous son propre valideur">↓ Agent</button>` : ""}
+          ${n.profil === "agent" && n.actif && !me ? `<button type="button" class="btn btn-small ma-promote" data-uid="${n.id}" title="Passer en valideur : cette personne pourra valider les demandes de ses agents (niveau déduit de son unité)" aria-label="Passer en valideur">↑</button>` : ""}
+          ${n.profil === "valideur" && n.role !== "administrateur" && !n.admin && n.actif && !me && !n.all ? `<button type="button" class="btn btn-small ma-demote" data-uid="${n.id}" title="Repasser en agent : les personnes qu'elle valide remontent sous son propre valideur" aria-label="Repasser en agent">↓</button>` : ""}
         </span></div>
+      ${rhName(n) ? `<div class="ma-rhname" title="Nom dans Sedit RH">${esc(rhName(n))}</div>` : ""}
       ${n.unit_label && norm(n.unit_label) !== norm(groupName) ? `<div class="muted ma-cunit" title="Unité de la personne">${esc(n.unit_label)}</div>` : ""}
       ${n.valideur && !n.all ? `<div class="ma-cvalid" title="Valideur de cette personne">Valideur : <strong>${esc(n.valideur)}</strong></div>` : ""}
       ${!n.all && (n.matricule || (n.fiche && n.fiche.complete)) ? `<div class="ma-counters">
@@ -5558,6 +5567,7 @@ async function viewMyAgents() {
       <div class="ma-card-badges">
         <span class="badge-role role-${esc(n.role)}">${esc(PROFIL_LABELS[n.profil] || n.profil)}${n.admin ? " · Admin" : ""}</span>
         ${n.delegated ? `<span class="ma-deleg" title="Délégation en cours : cette personne vous délègue ses validations">délégation</span>` : ""}
+        ${n.by_deleg ? `<span class="ma-deleg" title="Vous gérez cette personne par délégation : son valideur vous délègue ses validations en ce moment">par délégation</span>` : ""}
         ${n.count ? `<span class="ma-count" title="${n.more ? "Personnes sous sa responsabilité (affichez toute la ligne hiérarchique pour les voir)" : "Personnes sous sa responsabilité"}">${n.count}${n.more ? "+" : ""}</span>` : ""}
         ${n.no_email && n.actif ? `<span class="ma-noemail" title="Sans adresse e-mail : aucune notification ne lui sera envoyée">⚠ e-mail</span>` : ""}
       </div>
