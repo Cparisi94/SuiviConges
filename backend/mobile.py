@@ -75,7 +75,7 @@ def init_mobile(app, login_required):
                                   for c in core._requestable_codes(year)]
             out["feries"] = [str(x[0])[:10] for x in (settings.get("jours_feries") or []) if x]
             out["couverture"] = core._agent_coverage(agent)
-            sy = core._agent_summary_for_row(agent, settings)
+            sy = core._agent_summary_for_row(agent, settings, fetch=True)       # compteurs : absences de Sedit RH relues à chaque affichage
             if not sy.get("error"):
                 def pick(key, label):
                     block = sy.get(key) or {}
@@ -138,17 +138,17 @@ def init_mobile(app, login_required):
             agent = core._agent_by_id(db, row["id"])
             coverage = core._agent_coverage(agent)
             holidays = {str(x[0])[:10] for x in (core.load_settings().get("jours_feries") or [])}
-            busy = set(core._agent_cells(db, agent["id"])) | set(core._pending_cells(db, agent["id"]))
         finally:
             db.close()
         matricule = (request.user.get("matricule") or "").strip()
         if not matricule:
             return jsonify({"items": [], "warning": "Matricule inconnu"})
-        import sedit_rh
+        import absences_rh
+        db = get_db()
         try:
-            absences = sedit_rh.absences(matricule, year)
-        except sedit_rh.SeditError as exc:
-            return jsonify({"items": [], "warning": str(exc)})
+            absences, warning = absences_rh.items_for(db, matricule, year, True)       # relues dans Sedit RH à chaque affichage, conservées en base
+        finally:
+            db.close()
         items = []
         for a in absences:
             try:
@@ -159,10 +159,13 @@ def init_mobile(app, login_required):
                 if day.year == year:
                     for half in (0, 1):
                         key = day.month * 1000 + day.day * 10 + half
-                        if core._cell_covered(coverage, year, key, holidays) and str(key) not in busy:
+                        if core._cell_covered(coverage, year, key, holidays):       # Sedit RH fait foi : il prime sur les saisies locales
                             items.append({"d": day.isoformat(), "h": half, "code": a["code"], "s": "rh"})
                 day += dt.timedelta(days=1)
-        return jsonify({"items": items})
+        out = {"items": items}
+        if warning:
+            out["warning"] = warning
+        return jsonify(out)
 
     @bp.route("/days", methods=["GET"])
     @login_required

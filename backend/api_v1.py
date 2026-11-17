@@ -149,7 +149,7 @@ def agent_balance(agent_id):
     if not agent:
         return error("Fiche introuvable", 404)
     settings = core._settings_for_year(core.load_settings(), agent["year"])
-    summary = core._agent_summary_for_row(agent, settings)
+    summary = core._agent_summary_for_row(agent, settings, fetch=True)       # solde d'une personne : absences de Sedit RH relues
     if "error" in summary:
         return error("Calcul impossible pour cette fiche : %s" % summary["error"], 422)
     return jsonify({

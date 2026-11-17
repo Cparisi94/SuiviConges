@@ -701,10 +701,10 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertEqual(len(items), 10)                                       # 5 jours ouvrés x 2 demi-journées : le week-end n'est pas compté
             self.assertEqual({(i["code"], i["s"]) for i in items}, {("CM", "rh")})
             self.assertEqual(min(i["d"] for i in items), "2026-09-07")
-            # Sedit RH indisponible : réponse vide avec avertissement, jamais d'erreur
+            # Sedit RH indisponible : la dernière lecture (conservée en base) est servie avec un avertissement, jamais d'erreur
             with mock.patch.object(sedit_rh, "absences", side_effect=sedit_rh.SeditError("hors service")):
                 down = self._call("GET", "/api/mobile/absences-rh?year=2026", uid=4)
-            self.assertEqual((down.status_code, down.get_json()["items"]), (200, []))
+            self.assertEqual((down.status_code, len(down.get_json()["items"])), (200, 10))
             self.assertIn("hors service", down.get_json()["warning"])
             import mobile_mode
             self.assertTrue(mobile_mode.is_allowed("GET", "/api/mobile/absences-rh"))
@@ -1770,7 +1770,7 @@ class PrototypeRegressionTests(unittest.TestCase):
                 self.assertEqual(self._call("GET", "/api/agents/1/absences-rh", uid=2130).status_code, 404)    # une autre personne ne lit pas la fiche
             with mock.patch.object(sedit_rh, "absences", side_effect=sedit_rh.SeditError("Accès refusé", 403)):
                 r = self._call("GET", "/api/agents/1/absences-rh", uid=1)
-                self.assertEqual((r.status_code, r.get_json()["items"]), (200, []))
+                self.assertEqual((r.status_code, [i["code"] for i in r.get_json()["items"]]), (200, ["CM"]))      # dernière lecture conservée en base
                 self.assertIn("Accès refusé", r.get_json()["warning"])
             # Valideur actuel : sans délégation, aucun ; avec une période de délégation en cours, le valideur du valideur
             self.assertIsNone(self._call("GET", "/api/agents/1", uid=1).get_json()["valideur_delegue"])
@@ -1888,6 +1888,69 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.execute("UPDATE users SET exchange_sync=0 WHERE id=4")
             conn.commit()
             conn.close()
+
+    def test_sedit_rh_absences_feed_the_counters_on_worked_days_only(self):
+        import app as core
+        import sedit_rh
+        conn = db.get_db()
+        conn.execute("UPDATE users SET matricule='0099001' WHERE id=4")
+        conn.commit()
+        conn.close()
+        try:
+            # 2026-05-04 (lundi) -> 2026-05-10 (dimanche) ; le vendredi 8 mai est férié : 4 jours travaillés
+            fake = [{"code": "CM", "libelle": "Congé maladie", "debut": "2026-05-04", "fin": "2026-05-10"}]
+            payload = {"params": {"duree_hebdo": "35", "jours_hebdo": "5", "quotite": "100", "penibilite": "non"}, "agent_id": 1, "year": 2026, "cells": {}}
+            with mock.patch.object(sedit_rh, "absences", return_value=fake), \
+                 mock.patch.object(core, "load_settings", return_value=dict(core.load_settings(), jours_feries=[["2026-05-08", "Victoire 1945"]])):
+                data = self._call("POST", "/api/compute", uid=4, payload=payload).get_json()
+                self.assertEqual(data["counts"]["abs"], 4.0)                 # CM de Sedit RH : jours travaillés seulement (ni week-end ni férié)
+                # Sedit RH fait foi : il écrase et annule la saisie locale (ici un CA) sur la même demi-journée
+                payload["cells"] = {"5040": "CA", "5100": "CA"}
+                again = self._call("POST", "/api/compute", uid=4, payload=payload).get_json()
+                self.assertEqual(again["counts"]["abs"], 4.0)
+                self.assertEqual(again["counts"]["ca"], 0.5)                 # le CA du 4 mai est annulé ; celui du 10 mai (dimanche, hors Sedit) reste
+                rows = self._call("GET", "/api/agents/1/absences-rh", uid=1).get_json()
+                self.assertNotIn("5090", rows["cells"])                      # le week-end n'est jamais affiché
+                self.assertNotIn("5080", rows["cells"])                      # ni le jour férié
+            conn = db.get_db()
+            stored = conn.execute("SELECT count(*) AS n FROM absences_rh WHERE matricule='0099001'").fetchone()["n"]
+            conn.close()
+            self.assertEqual(stored, 1)                                      # conservée en base
+            with mock.patch.object(sedit_rh, "absences", side_effect=sedit_rh.SeditError("hors service")),                  mock.patch.object(core, "load_settings", return_value=dict(core.load_settings(), jours_feries=[["2026-05-08", "Victoire 1945"]])):
+                payload["cells"] = {}
+                down = self._call("POST", "/api/compute", uid=4, payload=payload).get_json()
+            self.assertEqual(down["counts"]["abs"], 4.0)                     # Sedit RH en panne : la dernière lecture sert
+        finally:
+            conn = db.get_db()
+            conn.execute("DELETE FROM absences_rh WHERE matricule='0099001'")
+            conn.execute("UPDATE users SET matricule='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
+    def test_fiche_without_email_can_still_be_saved(self):
+        agent = self._call("GET", "/api/agents/1", uid=1).get_json()
+        conn = db.get_db()
+        conn.execute("UPDATE agents SET email='' WHERE id=1")
+        conn.commit()
+        conn.close()
+        payload = {"nom": agent["nom"], "prenom": agent.get("prenom") or "X", "email": "", "params": agent["params"], "periods": agent.get("periods") or []}
+        self.assertEqual(self._call("PUT", "/api/agents/1", uid=1, payload=payload).status_code, 200)
+        payload["email"] = "pas-une-adresse"
+        self.assertEqual(self._call("PUT", "/api/agents/1", uid=1, payload=payload).status_code, 400)
+
+    def test_sedit_codes_cannot_be_entered_by_hand(self):
+        agent = self._call("GET", "/api/agents/1", uid=1).get_json()
+        payload = {"nom": agent["nom"], "prenom": agent.get("prenom") or "X", "email": agent.get("email") or "", "params": agent["params"],
+                   "periods": agent.get("periods") or [], "cells": {"9010": "CM"}}
+        r = self._call("PUT", "/api/agents/1", uid=1, payload=payload)
+        self.assertEqual(r.status_code, 400, r.get_json())
+        self.assertIn("Sedit RH", r.get_json()["error"])
+        payload["cells"] = {"9010": "CA"}                                     # les autres codes restent saisissables
+        self.assertNotEqual(self._call("PUT", "/api/agents/1", uid=1, payload=payload).status_code, 400)
+        conn = db.get_db()
+        conn.execute("DELETE FROM cells WHERE agent_id=1 AND jour=9010")
+        conn.commit()
+        conn.close()
 
     def test_compute_gives_forecast_balances_with_pending_requests(self):
         conn = db.get_db()

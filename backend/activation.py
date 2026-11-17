@@ -160,7 +160,7 @@ def init_activation(app, login_required, can_manage, scope_ids, audit_user):
             audit_user(db, uid, user["login"], request.user, "creation", "code_activation", "", "généré (valable %d jours)" % VALID_DAYS, "Code d'activation du compte sans AD")
             db.commit()
             base = (config.MOBILE_URL or "").rstrip("/")
-            url = "%s/#activation=%s.%s" % (base, user["matricule"].strip(), code) if base else None
+            url = "%s/#activation=%s" % (base, code) if base else None      # le QR code ne porte que le code : le matricule est saisi par l'agent
             return jsonify({"code": code, "matricule": user["matricule"].strip(), "nom": user_label(user), "expire_le": expire.strftime("%d/%m/%Y"),
                             "url": url, "qr_svg": qr_svg(url) if url else None, "mobile_url_configuree": bool(base)})
         finally:

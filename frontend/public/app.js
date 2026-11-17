@@ -407,7 +407,7 @@ function showApp() {
   }
   $("#nav-my-agents").classList.toggle("hidden", !canManageUsers());
   $("#nav-delegation").classList.toggle("hidden", !canManageUsers());
-  $("#nav-users").classList.toggle("hidden", !canManageUsers() || isAdmin);
+  $("#nav-users").classList.add("hidden");                  // « Utilisateurs » est réservé aux administrateurs (Paramétrage > Accès)
   // Mode AD : le mot de passe est celui du compte Ville, il ne se change pas ici (même pour un administrateur).
   $("#btn-password").classList.toggle("hidden", !!state.user.password_by_ad || state.user.auth_mode === "ad");
   setupActAs();
@@ -2556,14 +2556,11 @@ function renderFiche() {
     try {
       const r = await api(`/api/agents/${f.id}/absences-rh`);
       if (state.fiche !== f) return;
+      // `r.cells` : demi-journées TRAVAILLÉES calculées par le serveur (jamais un week-end, un jour férié non travaillé ni hors période)
+      const byCode = {};
+      (r.items || []).forEach((a) => { byCode[a.code] = a; });
       const cells = {};
-      (r.items || []).forEach((a) => {
-        const d0 = new Date(a.debut + "T12:00:00"), d1 = new Date(a.fin + "T12:00:00");
-        for (let d = d0; d <= d1; d = new Date(d.getTime() + 86400000)) {
-          if (d.getFullYear() !== f.year || d.getDay() === 0 || d.getDay() === 6) continue;     // l'année de la fiche, jours ouvrés seulement
-          [0, 1].forEach((half) => { cells[cellKey(d.getMonth() + 1, d.getDate(), half)] = a; });
-        }
-      });
+      Object.entries(r.cells || {}).forEach(([k, code]) => { cells[k] = byCode[code] || { code, libelle: code }; });
       f.rh_cells = cells;
       f.rh_count = (r.items || []).length;
       f.rh_days = rhDaysSummary(r.items, f.year);
@@ -2573,7 +2570,7 @@ function renderFiche() {
       if (note) {
         note.classList.toggle("hidden", !Object.keys(cells).length && !r.warning);
         note.textContent = r.warning ? "Absences de Sedit RH indisponibles : " + r.warning
-          : `${f.rh_count} absence(s) saisie(s) dans Sedit RH sont affichées en couleur claire (CM, GEM, CT, CP, SF), sans être reprises dans la fiche.`;
+          : `${f.rh_count} absence(s) saisie(s) dans Sedit RH sont affichées en couleur claire (CM, GEM, CT, CP, SF, ASA) sur les jours travaillés ; elles font foi : elles remplacent les saisies locales et entrent dans les compteurs (déductions de RTT et de sujétions).`;
       }
     } catch (e) { /* affichage facultatif : la fiche reste utilisable sans */ }
   })();
@@ -2707,7 +2704,13 @@ function paintCalendar() {
     const rhAbs = rh[k];
     el.classList.remove("pending", "rh-abs");
     el.removeAttribute("title");
-    if (code) {
+    if (rhAbs) {                                // Sedit RH fait foi : il écrase et annule les saisies locales sur ces demi-journées
+      el.textContent = rhAbs.code;
+      el.style.background = mixColor(codes[rhAbs.code] || "F2F2F2", 0.45);
+      el.style.color = "#4a2118";
+      el.classList.add("rh-abs");
+      el.title = `Saisi dans Sedit RH : ${rhAbs.libelle} (pris en compte dans les compteurs)${code || pendingCode ? " — remplace la saisie locale " + (code || pendingCode) : ""}`;
+    } else if (code) {
       const hex = codes[code] || "F2F2F2";
       el.textContent = code;
       el.style.background = cssColor(hex);
@@ -2718,12 +2721,6 @@ function paintCalendar() {
       el.style.color = "#4a2118";
       el.classList.add("pending");
       el.title = "Demande en attente : " + pendingCode;
-    } else if (rhAbs) {
-      el.textContent = rhAbs.code;
-      el.style.background = mixColor(codes[rhAbs.code] || "F2F2F2", 0.45);
-      el.style.color = "#4a2118";
-      el.classList.add("rh-abs");
-      el.title = `Saisi dans Sedit RH : ${rhAbs.libelle} (non repris dans la fiche)`;
     } else {
       el.textContent = "";
       el.style.background = "";
@@ -2784,6 +2781,8 @@ function paintHourlyAnnotations() {
     cell.appendChild(note);
   });
 }
+
+const SEDIT_CODES = ["CM", "CP", "CT", "GEM", "SF", "ASA"];   // absences saisies dans Sedit RH (voir backend/sedit_rh.py) : non saisissables dans l'outil
 
 function codeColorMap() {
   const map = {};
@@ -2946,7 +2945,8 @@ function openPickerForCells(cells, anchor) {
     ? cellLabel(first)
     : `${cellLabel(first)} → ${cellLabel(last)} · ${pickerTargets.length} demi-journée(s)`);
   const colors = codeColorMap();
-  const codes = state.requestMode ? requestCodeList() : currentCodeList();
+  // les absences de Sedit RH (CM, CP, CT, GEM, SF, ASA…) viennent de Sedit RH : elles ne se saisissent plus dans l'outil
+  const codes = (state.requestMode ? requestCodeList() : currentCodeList()).filter((c) => !SEDIT_CODES.includes(c));
   $("#code-picker-list").innerHTML = codes.map((code) =>
     `<button class="code-btn" data-code="${esc(code)}" style="background:${cssColor(colors[code] || "F2F2F2")};color:${textColorFor(colors[code] || "F2F2F2")}">${esc(code)}</button>`
   ).join("");
@@ -4902,7 +4902,7 @@ async function viewApiKeys() {
    Utilisateurs (admin)
    ========================================================================== */
 async function viewUsers() {
-  if (!canManageUsers()) { location.hash = "#/dashboard"; return; }
+  if (!state.user || !state.user.admin) { location.hash = "#/dashboard"; return; }
   const isAdmin = !!state.user.admin;
   const c = contentEl();
   const H = $("#admin-body") ? "h2" : "h1";
@@ -6252,7 +6252,6 @@ async function openActivationModal(uid, name) {
   .who { font-size: 16px; margin-bottom: 16px; }
   .box { border: 2px dashed #b4553f; border-radius: 10px; padding: 14px; text-align: center; margin: 14px 0; }
   .code { font: 700 34px/1.2 Consolas, "Courier New", monospace; letter-spacing: .14em; }
-  .mat { font-size: 18px; margin-top: 6px; }
   .row { display: flex; gap: 20px; align-items: center; }
   .qr { width: 52mm; flex: none; } .qr svg { width: 100%; height: auto; }
   ol { padding-left: 20px; } li { margin-bottom: 6px; }
@@ -6264,12 +6263,12 @@ async function openActivationModal(uid, name) {
 <header><b>Ville d'Ivry-sur-Seine</b><span>Suivi des congés — document confidentiel</span></header>
 <h1>Activation de votre compte</h1>
 <div class="who">${esc(r.nom)}</div>
-<div class="box"><div>Votre code d'activation</div><div class="code">${esc(r.code)}</div><div class="mat">Matricule : <b>${esc(r.matricule)}</b></div></div>
+<div class="box"><div>Votre code d'activation</div><div class="code">${esc(r.code)}</div></div>
 <div class="row">${qr ? `<div class="qr">${qr}</div>` : ""}
 <div><p><b>Comment activer votre compte (depuis votre smartphone)</b></p>
 <ol>
   <li>${qr ? "Scannez le QR code avec l'appareil photo de votre smartphone, ou" : "Ouvrez"} ${r.url ? `l'adresse <b>${esc(String(r.url).split("#")[0])}</b>` : "la page « Mes congés » indiquée par la DRH"}.</li>
-  <li>Choisissez <b>« Première connexion »</b> et saisissez votre matricule et le code ci-dessus${qr ? " (le QR code les remplit pour vous)" : ""}.</li>
+  <li>Choisissez <b>« Première connexion »</b> et saisissez votre <b>matricule</b> (que vous connaissez) et le code ci-dessus${qr ? " (le QR code remplit le code pour vous)" : ""}.</li>
   <li>Saisissez votre <b>numéro de smartphone</b> : vous recevez un <b>code par SMS</b> à recopier.</li>
   <li>Choisissez votre <b>mot de passe</b> (10 caractères au moins, avec des lettres et des chiffres).</li>
   <li>Ensuite, connectez-vous avec votre <b>matricule</b> et ce mot de passe.</li>

@@ -1378,16 +1378,21 @@ def agents_absences_rh(aid):
     if not agent or not _can_view_agent(db, request.user, agent):
         db.close()
         return jsonify({"error": "Fiche introuvable"}), 404
-    row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone() if agent["agent_user_id"] else None
     year = int(agent["year"])
-    db.close()
-    matricule = ((row["matricule"] if row else "") or "").strip()
-    if not matricule:
-        return jsonify({"items": [], "year": year, "warning": "Matricule inconnu : les absences de Sedit RH ne peuvent pas être lues"})
     try:
-        return jsonify({"items": sedit_rh.absences(matricule, year), "year": year})
-    except sedit_rh.SeditError as exc:
-        return jsonify({"items": [], "year": year, "warning": str(exc)})
+        if not _agent_matricule(db, agent):
+            return jsonify({"items": [], "cells": {}, "year": year, "warning": "Matricule inconnu : les absences de Sedit RH ne peuvent pas être lues"})
+        import absences_rh
+
+        # relues dans Sedit RH à chaque affichage du planning et conservées en base ; en cas de panne, la dernière lecture est servie avec un avertissement
+        items, warning = absences_rh.items_for(db, _agent_matricule(db, agent), year, True)
+        cells, _w = _sedit_absence_cells(db, agent)           # demi-journées travaillées seulement (ni week-end ni férié) ; elles priment sur les saisies locales
+        out = {"items": items, "cells": cells, "year": year}
+        if warning:
+            out["warning"] = warning
+        return jsonify(out)
+    finally:
+        db.close()
 
 
 @app.route("/api/agents/<int:aid>/cet", methods=["GET"])
@@ -1574,7 +1579,7 @@ def agents_update(aid):
     if not nom or not prenom:
         db.close()
         return jsonify({"error": "Nom et prénom obligatoires"}), 400
-    if not _valid_email(email):
+    if email and not _valid_email(email):                # une personne sans e-mail reste modifiable (périodes, paramètres…) ; seule une adresse mal formée est refusée
         db.close()
         return jsonify({"error": "Adresse e-mail invalide"}), 400
     validator_id = data.get("validator_id", agent["validator_id"])
@@ -1648,8 +1653,15 @@ def agents_update(aid):
                 (("%s %s" % (nom, prenom)).strip(), email, matricule, owner_id, linked_id),
             )
     if "cells" in data:
-        db.execute("DELETE FROM cells WHERE agent_id=?", (aid,))
         cells = data.get("cells") or {}
+        import sedit_rh
+
+        before = _agent_cells(db, aid)
+        forbidden = sorted({code for jour, code in cells.items() if code in sedit_rh.ABSENCE_LABELS and before.get(str(jour)) != code})
+        if forbidden:                                  # les absences de Sedit RH viennent de Sedit RH : celles déjà présentes sont conservées, aucune n'est ajoutée
+            db.close()
+            return jsonify({"error": "%s : absence(s) gérée(s) dans Sedit RH, non saisissable(s) dans l'outil" % ", ".join(forbidden)}), 400
+        db.execute("DELETE FROM cells WHERE agent_id=?", (aid,))
         db.executemany(
             "INSERT INTO cells (agent_id, jour, code) VALUES (?,?,?)",
             [(aid, int(jour), code) for jour, code in cells.items() if code],
@@ -1912,6 +1924,38 @@ def _agent_cells(db, agent_id):
         str(r["jour"]): r["code"]
         for r in db.execute("SELECT jour, code FROM cells WHERE agent_id=?", (agent_id,)).fetchall()
     }
+
+
+def _agent_matricule(db, agent):
+    row = db.execute("SELECT matricule FROM users WHERE id=?", (agent["agent_user_id"],)).fetchone() if agent["agent_user_id"] else None
+    return ((row["matricule"] if row else "") or "").strip()
+
+
+def _sedit_absence_cells(db, agent, fetch=False, busy=()):
+    """(demi-journées d'absence de Sedit RH sur les jours TRAVAILLÉS de la fiche, avertissement) : jamais sur un week-end, un jour férié non
+    travaillé ou hors période. `busy` : demi-journées à ignorer (aucune par défaut : Sedit RH écrase les saisies locales). `fetch` : relire Sedit RH (affichage d'un planning ou d'un compteur)."""
+    import absences_rh
+
+    matricule = _agent_matricule(db, agent)
+    year = int(agent["year"])
+    items, warning = absences_rh.items_for(db, matricule, year, fetch)
+    if not items:
+        return {}, warning
+    coverage = _agent_coverage(agent)
+    holidays = {str(x[0])[:10] for x in (load_settings().get("jours_feries") or [])}
+    busy = {str(k) for k in busy}
+    return absences_rh.half_cells(items, year, lambda key: str(key) not in busy and _cell_covered(coverage, year, key, holidays)), warning
+
+
+def _with_sedit_absences(db, agent, cells, fetch=False):
+    """Cellules de la fiche + absences de Sedit RH (calcul des soldes : les CM, CP et CT déduisent des RTT et des sujétions).
+    Sedit RH fait foi : ses absences écrasent et annulent les absences saisies dans l'outil sur les mêmes demi-journées travaillées."""
+    extra, _warning = _sedit_absence_cells(db, agent, fetch)
+    if not extra:
+        return cells
+    merged = dict(cells)
+    merged.update(extra)
+    return merged
 
 
 def _agent_cassages(db, agent_id, include_pending=False, exclude_id=None):
@@ -2239,6 +2283,7 @@ def _request_balance(db, agent, cells, code, exclude_id=None):
     periods = json_loads(agent["periods"]) if agent["periods"] else []
     merged = _agent_cells(db, agent["id"])
     merged.update(_pending_cells(db, agent["id"], exclude_id))
+    merged = _with_sedit_absences(db, agent, merged, fetch=True)                # absences de Sedit RH : déductions de RTT et de sujétions à jour
     for key in cells:
         merged[str(key)] = code
     settings = _settings_for_year(load_settings(), int(agent["year"]))
@@ -2266,6 +2311,7 @@ def _estimated_balance(db, agent_id):
         merged = _agent_cells(db, agent["id"])
         pending = _pending_cells(db, agent["id"])
         merged.update(pending)
+        merged = _with_sedit_absences(db, agent, merged)          # dernière lecture de Sedit RH conservée en base
         agent_for_rules = dict(params)
         agent_for_rules["periods"] = periods
         result = rule_compute(agent_for_rules, cells_to_list(merged), _settings_for_year(load_settings(), int(agent["year"])),
@@ -2290,6 +2336,7 @@ def _request_cassage_balance(db, agent, code, days=1, exclude_id=None):
     hourly = _agent_hourly(db, agent["id"], include_pending=True, exclude_id=exclude_id)
     merged = _agent_cells(db, agent["id"])
     merged.update(_pending_cells(db, agent["id"], exclude_id))
+    merged = _with_sedit_absences(db, agent, merged, fetch=True)
     result = rule_compute(agent_for_rules, cells_to_list(merged),
                           settings, cassages=cassages, hourly=hourly)
     dispo = result.get("ca_current_dispo" if code == "CA" else "rtt_current_dispo")
@@ -2311,7 +2358,7 @@ def _request_hourly_balance(db, agent, code, absence_date, start_time, end_time,
     hourly = _agent_hourly(db, agent["id"], include_pending=True, exclude_id=exclude_id,
                            exclude_hourly_id=exclude_hourly_id)
     recoveries = _agent_recoveries(db, agent["id"])
-    result = rule_compute(agent_for_rules, cells_to_list(_agent_cells(db, agent["id"])),
+    result = rule_compute(agent_for_rules, cells_to_list(_with_sedit_absences(db, agent, _agent_cells(db, agent["id"]))),
                           settings, cassages=cassages, hourly=hourly,
                           hours_as_of=absence_date, recoveries=recoveries)
     key = {"CAH": "cah", "RTTH": "rth", "RCH": "rch"}.get(code, "cah")
@@ -2479,7 +2526,7 @@ def _request_allocated_hours(db, agent, request_id):
     cassages = _agent_cassages(db, agent["id"])
     hourly = _agent_hourly(db, agent["id"])
     recoveries = _agent_recoveries(db, agent["id"])
-    result = rule_compute(agent_for_rules, cells_to_list(_agent_cells(db, agent["id"])),
+    result = rule_compute(agent_for_rules, cells_to_list(_with_sedit_absences(db, agent, _agent_cells(db, agent["id"]))),
                           settings, cassages=cassages, hourly=hourly,
                           recoveries=recoveries)
     row = db.execute(
@@ -3411,12 +3458,14 @@ def api_compute():
     if errors:
         return jsonify({"errors": errors}), 400
     settings = _settings_for_year(load_settings(), year)
-    cells = cells_to_list(data.get("cells") or {})
     periods = data.get("periods") or []
     if periods:
         normalized = _normalize_periods(periods, params, year)
         periods = normalized if normalized is not None else []
     params = _sedit_cet_default_for_agent(request.user, data.get("agent_id"), params)    # solde initial de CET vide : celui de Sedit RH
+    # absences de Sedit RH (relues à chaque affichage des compteurs) : elles déduisent des RTT et des sujétions comme les CM, CP et CT saisis
+    cells_dict = _sedit_absences_for_ui(request.user, data.get("agent_id"), data.get("cells") or {}, periods, params, year)
+    cells = cells_to_list(cells_dict)
     agent_for_rules = dict(params)
     agent_for_rules["periods"] = periods
     cassages = data.get("cassages") or []
@@ -3425,10 +3474,34 @@ def api_compute():
     result = rule_compute(agent_for_rules, cells, settings,
                           cassages=cassages, hourly=hourly,
                           recoveries=recoveries)
-    prevision = _forecast_balances(request.user, data.get("agent_id"), data.get("cells") or {}, agent_for_rules, settings, cassages, hourly, recoveries)
+    prevision = _forecast_balances(request.user, data.get("agent_id"), cells_dict, agent_for_rules, settings, cassages, hourly, recoveries)
     if prevision is not None:
         result["prevision"] = prevision
     return jsonify(result)
+
+
+def _sedit_absences_for_ui(user, agent_id, cells, periods, params, year):
+    """Cellules envoyées par l'interface + absences de Sedit RH de la fiche `agent_id` (si l'utilisateur peut la lire), sur les jours travaillés
+    selon les périodes et paramètres envoyés (ils peuvent être en cours de modification). Sedit RH fait foi : il écrase les saisies locales. Sedit RH est relu ici."""
+    cells = dict(cells)
+    try:
+        agent_id = int(agent_id)
+    except (TypeError, ValueError):
+        return cells
+    db = get_db()
+    try:
+        agent = _agent_by_id(db, agent_id)
+        if not agent or not _can_view_agent(db, user, agent):
+            return cells
+        shadow = dict(agent)
+        shadow["year"] = year
+        shadow["periods"] = json_dumps(periods) if periods else None
+        shadow["params"] = json_dumps(params)
+        extra, _warning = _sedit_absence_cells(db, shadow, True)
+        cells.update(extra)
+        return cells
+    finally:
+        db.close()
 
 
 def _forecast_balances(user, agent_id, cells, agent_for_rules, settings, cassages, hourly, recoveries):
@@ -3527,18 +3600,24 @@ def _warm_sedit_cet(agent_rows):
         app.logger.warning("Solde CET Sedit RH indisponible : %s", exc)
 
 
-def _agent_summary_for_row(agent_row, settings):
-    """Synthèse des soldes d'une fiche (ligne `agents` + `proprietaire`) ; {"error": …} si le calcul échoue."""
+def _agent_summary_for_row(agent_row, settings, fetch=False):
+    """Synthèse des soldes d'une fiche (ligne `agents` + `proprietaire`) ; {"error": …} si le calcul échoue.
+    Les absences de Sedit RH y sont intégrées : dernière lecture conservée en base, ou relue dans Sedit RH si `fetch` (compteurs d'une personne)."""
     params = json_loads(agent_row["params"])
     db = get_db()
     cells_rows = db.execute("SELECT jour, code FROM cells WHERE agent_id=?", (agent_row["id"],)).fetchall()
+    try:
+        sedit_cells = _with_sedit_absences(db, agent_row, {str(c["jour"]): c["code"] for c in cells_rows}, fetch=fetch)
+    except Exception as exc:  # noqa: BLE001 — l'intégration de Sedit RH ne doit jamais empêcher d'afficher les compteurs
+        app.logger.warning("Absences Sedit RH non intégrées aux compteurs (fiche %s) : %s", agent_row["id"], exc)
+        sedit_cells = None
     cassages = _agent_cassages(db, agent_row["id"])
     hourly = _agent_hourly(db, agent_row["id"])
     recoveries = _agent_recoveries(db, agent_row["id"])
     mat_row = db.execute("SELECT matricule FROM users WHERE id=?", (agent_row["agent_user_id"],)).fetchone() if agent_row["agent_user_id"] else None
     db.close()
     params = _sedit_cet_default(params, (mat_row["matricule"] if mat_row else "") or "")     # solde initial de CET vide : celui de Sedit RH
-    cells = {str(c["jour"]): c["code"] for c in cells_rows}
+    cells = sedit_cells if sedit_cells is not None else {str(c["jour"]): c["code"] for c in cells_rows}
     agent_for_rules = dict(params)
     agent_for_rules["periods"] = json_loads(agent_row["periods"]) if agent_row["periods"] else []
     agent_for_rules["id"] = agent_row["id"]

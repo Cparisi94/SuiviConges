@@ -236,11 +236,11 @@ def contract_end(matricule):
 
 
 ABSENCE_LABELS = {"CM": "Congé maladie", "GEM": "Garde d'enfant malade", "CT": "Maternité, paternité, adoption",
-                  "CP": "Présence parentale", "SF": "Soins à un membre de la famille"}
+                  "CP": "Présence parentale", "SF": "Soins à un membre de la famille", "ASA": "Autorisation spéciale d'absence"}
 _abs_cache = {}               # (matricule, année) -> (instant, liste)
 
 
-def absences(matricule, year):
+def absences(matricule, year, max_age=None):
     """Absences saisies dans Sedit RH pour une personne et une année civile : [{"code", "libelle", "debut", "fin"}].
 
     Seuls le code du calendrier (CM, GEM, CT, CP, SF), son libellé court et les dates sont repris : jamais la nature détaillée de l'arrêt
@@ -249,7 +249,7 @@ def absences(matricule, year):
     key = (matricule, int(year))
     with _lock:
         hit = _abs_cache.get(key)
-    if hit and time.monotonic() - hit[0] < _CET_TTL:
+    if hit and time.monotonic() - hit[0] < (_CET_TTL if max_age is None else max_age):      # max_age : durée de validité de la mémoire (secondes)
         return hit[1]
     data = _get("/api/v1/absences", {"matricule": matricule, "du": "%d-01-01" % int(year), "au": "%d-12-31" % int(year), "limit": 500}, timeout=120)
     out = []

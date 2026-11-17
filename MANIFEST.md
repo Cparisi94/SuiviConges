@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.21.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.22.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -783,6 +783,7 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.22.0** | 2026-11-17 | Absences de Sedit RH (CM, CP, CT, GEM, SF, ASA) intégrées : table `absences_rh` (migration 0016, module `absences_rh.py`) relue à chaque affichage d'un planning ou d'un compteur, jours travaillés seulement, déductions de RTT et de sujétions dynamiques, Sedit RH prime sur les saisies locales et ces codes ne sont plus saisissables ; QR code d'activation limité au code ; menu Utilisateurs réservé aux administrateurs. |
 | **0.21.2** | 2026-11-17 | Durcissement de l'accès sans AD : journal des SMS complet (`activation._sms`, canal « sms » de `mail_logs`), `remember.revoke_all` aussi lors du changement de mot de passe par un administrateur, limite nginx `zone=act` (12 requêtes/minute) sur toutes les entrées ; contrôle de santé du backend mobile sur la page. |
 | **0.21.1** | 2026-11-17 | Version mobile : absences Sedit RH dans l'agenda (`GET /api/mobile/absences-rh`), fenêtres centrées, zoom de secours en « version pour ordinateur », messages d'erreur de l'empreinte, avertissement d'adresse interne. |
 | **0.21.0** | 2026-11-17 | Agents sans compte AD : activation par code (valideur) + SMS + e-mail facultatif + mot de passe, mot de passe oublié par SMS, confirmations par SMS sans e-mail, « se souvenir de moi », verrou biométrique local ; documentation `docs/ACCES_AGENTS_SANS_AD.md` et diagrammes BPMN `docs/bpmn/`. |

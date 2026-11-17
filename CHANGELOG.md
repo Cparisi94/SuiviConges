@@ -13,6 +13,17 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.22.0 — 2026-11-17 — Absences de Sedit RH intégrées aux plannings et aux compteurs
+
+- Les absences saisies dans Sedit RH (maladie, maternité-paternité-adoption, présence parentale, soins à un membre de la famille, garde d'enfant malade, autorisation spéciale d'absence) sont maintenant lues dans Sedit RH à chaque affichage d'un planning ou d'un compteur (application complète et version mobile) et conservées en base ; si Sedit RH ne répond pas, la dernière lecture sert.
+- Elles entrent dans le calcul des soldes : les déductions de RTT et de jours de sujétion (règle existante : maladie, présence parentale, maternité-paternité) se recalculent seules à partir de Sedit RH.
+- Elles ne s'affichent plus sur les week-ends ni sur les jours fériés non travaillés, ni hors des périodes de la fiche.
+- Sedit RH fait foi : ses absences écrasent et annulent, sur les mêmes jours travaillés, les absences saisies dans l'outil (planning et compteurs).
+- Ces absences ne sont plus saisissables par un valideur : les codes CM, CP, CT, GEM, SF et ASA ont disparu de la palette de saisie, et le serveur refuse d'en ajouter.
+- Fiche d'activation d'un agent sans compte AD : le matricule n'y figure plus et le QR code ne contient que le code ; l'agent saisit son matricule lui-même.
+- Le menu « Utilisateurs » est réservé aux administrateurs (Paramétrage > Accès).
+- Fiche d'une personne sans adresse e-mail : les modifications (périodes, paramètres) s'enregistrent à nouveau ; seule une adresse mal formée est refusée.
+
 ## 0.21.2 — 2026-11-17 — Durcissement : journal des SMS, limites d'activation sur toutes les entrées, connexions mémorisées coupées
 
 - Journal des SMS complet : les SMS d'activation, de contrôle du smartphone, de réinitialisation du mot de passe et de prévenance sont maintenant inscrits dans le journal des e-mails (canal « sms », numéro masqué, envoyé ou échec) ; le code à usage unique n'y figure jamais.

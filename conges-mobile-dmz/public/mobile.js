@@ -631,10 +631,12 @@
 
   /* ----------------------------- démarrage ----------------------------- */
   (async () => {
-    const m = /^#activation=([^.]+)\.(.+)$/.exec(location.hash || "");
-    if (m) {                                                // lien du QR code : matricule et code préremplis, puis retiré de l'adresse
+    const m = /^#activation=(.+)$/.exec(location.hash || "");
+    if (m) {                                                // lien du QR code : seul le code est prérempli (le matricule est saisi par l'agent), puis retiré de l'adresse
       history.replaceState(null, "", location.pathname);
-      showActivation({ matricule: decodeURIComponent(m[1]), code: decodeURIComponent(m[2]) });
+      let code = ""; try { code = decodeURIComponent(m[1]); } catch (_) { code = m[1]; }
+      const old = /^([^.]+)\.(.+)$/.exec(code);             // anciens QR codes « matricule.code » : le matricule est ignoré
+      showActivation({ code: old ? old[2] : code });
       return;
     }
     try {
