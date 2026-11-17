@@ -157,6 +157,37 @@ def ad_match(nom, prenom):
     return {"status": status, "candidates": found[:8]}
 
 
+def name_words(value):
+    """Mots d'un nom, sans accents ni majuscules : « Éloïse DUPONT-MARTIN » -> [eloise, dupont, martin]."""
+    text = unicodedata.normalize("NFKD", (value or "").lower()).encode("ascii", "ignore").decode()
+    return [w for w in re.split(r"[^a-z0-9]+", text) if w]
+
+
+def find_users(db, q, with_inactive=False):
+    """Recherche d'une personne : (comptes trouvés, tous les comptes par identifiant).
+
+    `q` = matricule ou e-mail exact, ou un ou plusieurs mots du **nom RH** (Sedit RH : nom, nom de famille, prénom ; accents et casse ignorés,
+    début de mot suffisant). Le nom AD n'est pas cherché. Comptes actifs seulement, sauf `with_inactive` ; les comptes administrateurs purs sont écartés.
+    Résultat trié : correspondances exactes (matricule, e-mail) d'abord, puis par nom."""
+    q = (q or "").strip()
+    words = name_words(q)
+    users = {r["id"]: r for r in db.execute(
+        "SELECT id, login, ad_login, nom, nom_ad, nom_famille, prenom, email, matricule, role, admin, actif, parent_id, unit_code FROM users").fetchall()}
+    hits = []
+    for u in users.values():
+        if u["role"] == "administrateur" or (not u["actif"] and not with_inactive):
+            continue
+        mat, mail = (u["matricule"] or "").strip().lower(), (u["email"] or "").strip().lower()
+        if (mat and mat == q.lower()) or (mail and mail == q.lower()):
+            hits.append((0, u))
+        elif words:
+            rh_words = name_words(" ".join([u["nom"] or "", u["nom_famille"] or "", u["prenom"] or ""]))
+            if all(any(rw.startswith(w) for rw in rh_words) for w in words):
+                hits.append((1, u))
+    hits.sort(key=lambda h: (h[0], (h[1]["nom"] or "").lower(), h[1]["id"]))
+    return [u for _rank, u in hits], users
+
+
 def fetch_ad_name(ad_login):
     """Nom affiché (displayName) du compte AD `ad_login` ; « » si l'AD ne le connaît pas, None si l'AD est indisponible (jamais d'exception)."""
     ad_login = (ad_login or "").strip().lower()
@@ -255,6 +286,57 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
             return error("Accès réservé aux administrateurs", 403)
         _ad_unknown.clear()
         return jsonify({"renseignes": fill_ad_names(limit=500)})
+
+    @bp.route("/admin/agent-search", methods=["GET"])
+    @login_required
+    def agent_search():
+        """Recherche rapide d'une personne (administrateur) : nom RH, matricule ou e-mail ; renvoie pour chacune son valideur, son délégataire du
+        moment et ses comptes (application, Active Directory, fiches congés) — de quoi répondre sans ouvrir plusieurs écrans."""
+        if not request.user.get("admin"):
+            return error("Accès réservé aux administrateurs", 403)
+        q = (request.args.get("q") or "").strip()
+        if len(q) < 2:
+            return jsonify({"items": [], "total": 0})
+        import delegation
+        db = get_db()
+        try:
+            found, users = find_users(db, q, with_inactive=True)
+            units = {r["code"]: r["libelle"] for r in db.execute("SELECT code, libelle FROM org_units").fetchall()}
+            shown = found[:12]
+            ids = [u["id"] for u in shown] or [0]
+            marks = ",".join("?" for _ in ids)
+            fiches = {}
+            for r in db.execute("SELECT id, year, agent_user_id FROM agents WHERE agent_user_id IN (%s) ORDER BY year DESC" % marks, ids).fetchall():
+                fiches.setdefault(r["agent_user_id"], []).append({"id": r["id"], "year": r["year"]})
+            logins = {r["user_id"]: r["dernier"] for r in db.execute(
+                "SELECT user_id, MAX(at) AS dernier FROM login_logs WHERE success=1 AND event='connexion' AND user_id IN (%s) GROUP BY user_id" % marks, ids).fetchall()}
+            team = {}
+            for u in users.values():
+                if u["actif"] and u["parent_id"]:
+                    team[u["parent_id"]] = team.get(u["parent_id"], 0) + 1
+
+            def who(row):
+                return None if not row else {"id": row["id"], "nom_rh": row["nom"], "nom_ad": row["nom_ad"] or None, "login": row["login"],
+                                             "email": row["email"] or None, "matricule": row["matricule"] or None, "actif": bool(row["actif"])}
+
+            items = []
+            for u in shown:
+                boss = users.get(u["parent_id"])
+                delegate = delegation.active_delegate(db, boss["id"]) if boss else None
+                items.append({
+                    "id": u["id"], "nom_rh": u["nom"], "nom_ad": u["nom_ad"] or None, "matricule": u["matricule"] or None,
+                    "email": u["email"] or None, "actif": bool(u["actif"]), "role": u["role"], "admin": bool(u["admin"]),
+                    "profil": "agent" if u["role"] == "agent" else "valideur",
+                    "unite": units.get(u["unit_code"]) if u["unit_code"] else None,
+                    "valideur": who(boss), "delegue_actuel": who(users.get(delegate["id"])) if delegate else None,
+                    "equipe": team.get(u["id"], 0),
+                    "compte_application": {"login": u["login"], "actif": bool(u["actif"]), "derniere_connexion": str(logins[u["id"]])[:16] if logins.get(u["id"]) else None},
+                    "compte_ad": {"identifiant": u["ad_login"] or None, "nom": u["nom_ad"] or None, "email": u["email"] or None},
+                    "fiches": fiches.get(u["id"], []),
+                })
+            return jsonify({"items": items, "total": len(found)})
+        finally:
+            db.close()
 
     @bp.route("/org-units", methods=["GET"])
     @login_required

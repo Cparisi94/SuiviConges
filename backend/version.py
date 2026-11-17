@@ -13,9 +13,29 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.18.0"
+VERSION = "0.18.2"
 
 VERSIONS = [
+    {
+        "version": "0.18.2",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Tableau de bord par entité, recherche rapide d'une personne (administrateur)",
+        "items": [
+            "Tableau de bord : les personnes sans période (fiche non créée, ou fiche à la période incomplète) sont aussi listées, avec la mention « Pas de période » à la place des soldes.",
+            "Tableau de bord : les fiches sont regroupées par entité (le titre de chaque groupe est le nom de l'entité, jamais celui d'une personne) ; le valideur de l'entité vient en premier, en gras avec une étoile.",
+            "Administrateur : bouton 🔍 en haut à droite (ou Ctrl+K) pour retrouver une personne par nom RH, matricule ou e-mail ; une fenêtre affiche aussitôt son valideur (et son délégataire du moment) et ses comptes : application, Active Directory, e-mail, fiches congés.",
+        ],
+    },
+    {
+        "version": "0.18.1",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Mon équipe : alerte des personnes sans lien Active Directory complet",
+        "items": [
+            "Mon équipe : une alerte en tête de page liste les personnes actives dont le lien Active Directory est incomplet (identifiant AD ou adresse e-mail manquant) ; leur carte porte les repères « ⚠ AD » ou « ⚠ e-mail » et le bouton « Recherche AD » pour les lier (le nom AD est alors enregistré).",
+        ],
+    },
     {
         "version": "0.18.0",
         "date": "2026-11-17",

@@ -313,6 +313,58 @@ class PrototypeRegressionTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_dashboard_rows_carry_their_entity_and_flag_the_entity_valideur(self):
+        conn = db.get_db()
+        conn.execute("INSERT INTO org_units (code, libelle, level, parent_code, position, local, head_user_id) "
+                     "VALUES ('ZT1', 'ENTITE DE TEST', 'service', '', 900, 0, 4) ON CONFLICT (code) DO NOTHING")
+        conn.execute("UPDATE users SET unit_code='ZT1' WHERE id=4")
+        conn.commit()
+        conn.close()
+        try:
+            rows = self._call("GET", "/api/dashboard?year=2026&all=1", uid=1).get_json()
+            mine = [r for r in rows if r.get("id") == 1]
+            self.assertEqual(len(mine), 1)
+            self.assertEqual((mine[0]["unit_label"], mine[0]["unit_head"]), ("ENTITE DE TEST", True))   # responsable de l'unité = valideur de l'entité
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE users SET unit_code='' WHERE id=4")
+            conn.execute("DELETE FROM org_units WHERE code='ZT1'")
+            conn.commit()
+            conn.close()
+
+    def test_admin_agent_search_returns_the_valideur_and_the_accounts(self):
+        conn = db.get_db()
+        conn.execute("UPDATE users SET nom='MARTIN LUCIE', nom_famille='MARTIN', prenom='LUCIE', matricule='0077001', ad_login='lmartin', "
+                     "nom_ad='MARTIN Lucie', email='lucie@example.fr' WHERE id=5")
+        conn.commit()
+        conn.close()
+        r = self._call("GET", "/api/admin/agent-search?q=martin%20luc", uid=1)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        item = r.get_json()["items"][0]
+        self.assertEqual((item["matricule"], item["compte_ad"]["identifiant"]), ("0077001", "lmartin"))
+        self.assertTrue(item["compte_application"]["login"].startswith("AGENT2"))
+        self.assertEqual(item["valideur"]["login"], "SECT1")                       # son valideur (compte parent)
+        self.assertEqual(self._call("GET", "/api/admin/agent-search?q=0077001", uid=1).get_json()["total"], 1)
+        self.assertEqual(self._call("GET", "/api/admin/agent-search?q=martin", uid=2).status_code, 403)   # réservé aux administrateurs
+        self.assertEqual(self._call("GET", "/api/admin/agent-search?q=m", uid=1).get_json()["items"], [])
+        conn = db.get_db()
+        conn.execute("UPDATE users SET ad_login='', nom_ad='', matricule='', email='' WHERE id=5")
+        conn.commit()
+        conn.close()
+
+    def test_dashboard_lists_people_without_a_period(self):
+        self._make_user("SANSFICHE")
+        conn = db.get_db()
+        new_uid = conn.execute("SELECT id FROM users WHERE login='SANSFICHE'").fetchone()["id"]
+        conn.close()
+        rows = self._call("GET", "/api/dashboard?year=2026&all=1", uid=1).get_json()
+        no_fiche = [r for r in rows if r.get("agent_user_id") == new_uid]
+        self.assertEqual(len(no_fiche), 1)                                                   # compte sans fiche : affiché et précisé
+        self.assertEqual((no_fiche[0]["sans_periode"], no_fiche[0]["motif"]), (True, "Fiche non créée"))
+        incomplete = [r for r in rows if r.get("id") == 1]                                   # fiche sans paramètres : « Période incomplète »
+        self.assertEqual((incomplete[0].get("sans_periode"), incomplete[0].get("motif")), (True, "Période incomplète"))
+        self.assertFalse([r for r in rows if r.get("agent_user_id") == 1])                  # ni l'administrateur ni soi-même
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)

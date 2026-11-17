@@ -13,6 +13,16 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.18.2 — 2026-11-17 — Tableau de bord par entité, recherche rapide d'une personne (administrateur)
+
+- Tableau de bord : les personnes sans période (fiche non créée, ou fiche à la période incomplète) sont aussi listées, avec la mention « Pas de période » à la place des soldes.
+- Tableau de bord : les fiches sont regroupées par entité (le titre de chaque groupe est le nom de l'entité, jamais celui d'une personne) ; le valideur de l'entité vient en premier, en gras avec une étoile.
+- Administrateur : bouton 🔍 en haut à droite (ou Ctrl+K) pour retrouver une personne par nom RH, matricule ou e-mail ; une fenêtre affiche aussitôt son valideur (et son délégataire du moment) et ses comptes : application, Active Directory, e-mail, fiches congés.
+
+## 0.18.1 — 2026-11-17 — Mon équipe : alerte des personnes sans lien Active Directory complet
+
+- Mon équipe : une alerte en tête de page liste les personnes actives dont le lien Active Directory est incomplet (identifiant AD ou adresse e-mail manquant) ; leur carte porte les repères « ⚠ AD » ou « ⚠ e-mail » et le bouton « Recherche AD » pour les lier (le nom AD est alors enregistré).
+
 ## 0.18.0 — 2026-11-17 — Nom AD affiché par défaut, API « manager d'un agent », Mon équipe et en-tête refaits
 
 - Nom affiché : le nom de l'Active Directory est affiché par défaut (Mon équipe, en-tête, valideur de chaque carte) ; quand le nom RH (Sedit RH) est différent, il apparaît en dessous, en petit et en italique. Les noms AD sont renseignés automatiquement en arrière-plan.

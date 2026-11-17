@@ -893,3 +893,11 @@ Calculer correctement les jours posés pour un agent qui ne travaille pas tous l
 **E-mails** : les boutons de validation s'affichent correctement dans l'ancien Outlook.
 
 **Vérifications** : 119 tests automatiques (dont l'API manager et l'affichage du nom AD) ; lecture des noms AD réellement faite sur la base de démonstration. L'affichage n'a pas été contrôlé dans un navigateur, ni le rendu des e-mails dans l'ancien Outlook après le dernier envoi de test.
+
+## Version 0.18.1 — Mon équipe : alerte des personnes sans lien Active Directory complet
+
+**Ce qui a changé** : en tête de Mon équipe, une alerte orange indique le nombre de personnes actives dont le lien Active Directory est incomplet (identifiant AD ou adresse e-mail manquant, par exemple un compte AD sans messagerie) et donne leurs noms (huit au plus). Leur carte porte « ⚠ AD » ou « ⚠ e-mail » et le bouton « Recherche AD », qui relie le compte et enregistre aussi le nom AD. **Pourquoi** : sans lien AD, une personne n'a ni nom AD ni connexion par l'annuaire. **Impact** : les comptes administrateurs techniques (sans fiche) ne sont pas comptés. **Vérifié** : 119 tests automatiques ; affichage non contrôlé dans un navigateur.
+
+## Version 0.18.2 — Tableau de bord par entité, recherche rapide d'une personne (administrateur)
+
+**Tableau de bord** : les fiches étaient regroupées sous le nom de leur valideur. Elles le sont maintenant sous le nom de leur **entité** ; le valideur de l'entité est la première ligne du groupe, en gras avec une étoile. **Personnes sans période** : le tableau de bord ne montrait que les personnes qui ont une fiche ; celles qui n'en ont pas encore (la fiche naît avec la première période) ou dont la fiche est incomplète y figurent maintenant, avec la mention « Pas de période » à la place des soldes. **Recherche administrateur** : le bouton 🔍 (ou Ctrl+K) ouvre une fenêtre où l'on tape un nom RH, un matricule ou un e-mail ; elle montre tout de suite le valideur de la personne (et son délégataire s'il y en a un), ses comptes (application avec dernière connexion, Active Directory, e-mail) et des liens vers ses fiches. **Impact** : réservé aux administrateurs ; aucune donnée n'est modifiée. **Vérifié** : 122 tests automatiques et la recherche essayée sur les données de démonstration ; affichage non contrôlé dans un navigateur.

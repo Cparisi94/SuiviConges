@@ -3528,6 +3528,70 @@ def _agent_summary_for_row(agent_row, settings):
         return {"id": agent_row["id"], "nom": agent_row["nom"], "error": str(exc)}
 
 
+def _decorate_with_units(summaries, agents):
+    """Ajoute à chaque synthèse l'entité (unité Sedit RH) de la personne et `unit_head` : la personne est le valideur de son entité
+    (responsable de l'unité s'il est désigné, sinon le valideur de plus haut niveau rattaché à l'unité). Sert au regroupement du tableau de bord."""
+    import people
+    db = get_db()
+    try:
+        index = people.unit_index(people.load_units(db))
+        users = {r["id"]: r for r in db.execute("SELECT id, unit_code, role, actif FROM users").fetchall()}
+        heads = {}
+
+        def head_of(code):
+            if code not in heads:
+                head_id = (index.get(code) or {}).get("head_user_id")
+                if not (head_id and (users.get(head_id) or {}).get("actif")):
+                    direct = [u for u in users.values()
+                              if u["actif"] and u["unit_code"] == code and u["role"] not in ("agent", "administrateur")]
+                    head_id = max(direct, key=lambda u: ROLE_LEVELS.get(u["role"], 0))["id"] if direct else None
+                heads[code] = head_id
+            return heads[code]
+
+        user_of_fiche = {a["id"]: a["agent_user_id"] for a in agents}
+        for s in summaries:
+            uid = s.get("agent_user_id") or user_of_fiche.get(s.get("id"))
+            code = ((users.get(uid) or {}).get("unit_code") or "") if uid else ""
+            unit = index.get(code)
+            s["unit_code"] = code if unit else ""
+            s["unit_label"] = unit["libelle"] if unit else ""
+            s["unit_level"] = unit["level"] if unit else ""
+            s["unit_path"] = people.unit_path(index, code) if unit else ""
+            s["unit_head"] = bool(unit and uid and head_of(code) == uid)
+    finally:
+        db.close()
+    return summaries
+
+
+def _fiche_has_period(agent_row):
+    """Une fiche est exploitable quand elle a au moins une période de paramètres (ou des paramètres complets)."""
+    params = json_loads(agent_row["params"])
+    periods = json_loads(agent_row["periods"]) if agent_row["periods"] else []
+    return bool(periods) or bool(params.get("penibilite") and params.get("quotite") and params.get("jours_hebdo"))
+
+
+def _dashboard_without_period(db, user, agents, year, whole_scope):
+    """Lignes « sans période » du tableau de bord : les personnes actives du périmètre qui n'ont pas de fiche pour l'année
+    (la fiche naît avec la première période de paramètres) ; les fiches sans période exploitable sont signalées à part (`sans_periode`)."""
+    with_fiche = {r["agent_user_id"] for r in db.execute("SELECT agent_user_id FROM agents WHERE year=? AND agent_user_id IS NOT NULL", (year,)).fetchall()}
+    if whole_scope:
+        scope = set(_scope_ids(db, user))
+    else:
+        scope = {r["id"] for r in db.execute("SELECT id FROM users WHERE parent_id=?", (user["id"],)).fetchall()}
+    users = {r["id"]: r for r in db.execute("SELECT id, nom, nom_ad, role, actif, parent_id FROM users").fetchall()}
+    out = []
+    for uid in sorted(scope):
+        u = users.get(uid)
+        if not u or not u["actif"] or u["role"] == "administrateur" or uid == user["id"] or uid in with_fiche:
+            continue
+        boss = users.get(u["parent_id"]) or {}
+        out.append({"id": None, "agent_user_id": uid, "nom": u["nom_ad"] or u["nom"], "nom_rh": u["nom"], "owner_id": u["parent_id"],
+                    "owner_name": (boss.get("nom_ad") or boss.get("nom") or "") if boss else "", "is_manager": 0,
+                    "sans_periode": True, "motif": "Fiche non créée"})
+    out.sort(key=lambda r: (r["nom"] or "").lower())
+    return out
+
+
 @app.route("/api/dashboard", methods=["GET"])
 @login_required
 def dashboard():
@@ -3547,11 +3611,17 @@ def dashboard():
             "WHERE a.user_id=? AND a.year=? ORDER BY a.nom",
             (request.user["id"], year),
         ).fetchall()
+    extra = [] if _user_role(request.user) == "agent" else _dashboard_without_period(db, request.user, agents, year, request.args.get("all") == "1")
+    incomplete = {a["id"] for a in agents if not _fiche_has_period(a)}
     db.close()
 
     settings = _settings_for_year(load_settings(), year)
     _warm_sedit_cet(agents)
-    return jsonify([_agent_summary_for_row(agent_row, settings) for agent_row in agents])
+    summaries = [_agent_summary_for_row(agent_row, settings) for agent_row in agents]
+    for s_ in summaries:
+        if s_.get("id") in incomplete:
+            s_["sans_periode"], s_["motif"] = True, "Période incomplète"
+    return jsonify(_decorate_with_units(summaries + extra, agents))
 
 
 @app.route("/api/hr-dashboard", methods=["GET"])

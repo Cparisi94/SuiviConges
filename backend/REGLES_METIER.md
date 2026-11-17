@@ -2,7 +2,7 @@
 
 > Ce document consigne **l'ensemble des règles métier** de l'application. Il est lisible dans l'application (Paramétrage > Documentation > Règles métier).
 > **Toute règle ajoutée ou modifiée doit y être inscrite dans la même version** (procédure dans `CLAUDE.md`). Le détail technique et fonctionnel complet est dans `MANIFEST.md`.
-> Dernière mise à jour : version 0.18.0.
+> Dernière mise à jour : version 0.18.2.
 
 ## 1. Rôles, hiérarchie et périmètre
 
@@ -116,6 +116,8 @@
 
 ## 8. Tableaux de bord et planning
 
+- Le **tableau de bord** regroupe les fiches **par entité** (unité Sedit RH de la personne) ; le titre de chaque groupe est le nom de l'entité. Le **valideur de l'entité** (son responsable désigné, sinon le valideur de plus haut niveau rattaché à l'unité) est affiché en premier, en gras avec une étoile ; les fiches sans entité sont regroupées à part. Les **personnes sans période** (fiche non créée, ou fiche sans période de paramètres exploitable) sont aussi listées, avec la mention « Pas de période » et sans soldes.
+- Un **administrateur** dispose d'une recherche rapide (🔍, Ctrl+K) : par nom RH, matricule ou e-mail, elle affiche le valideur de la personne, son délégataire du moment et ses comptes (application, Active Directory, fiches).
 - **Agent** : sa synthèse et l'accès à sa fiche. **Tous les profils** (valideur, administrateur comme agent) disposent de « **Ma synthèse** » : leurs propres soldes, demandes et heures (la synthèse de l'équipe reste le « Tableau de bord »). **Valideur** : une ligne par fiche du périmètre, regroupée par responsable. **RH** (tableau de bord **réservé aux comptes administrateurs** : ni les valideurs ni les agents ne le voient, et l'API le refuse) : taux d'absence (jours d'absence ÷ capacité de travail) global, par direction / service et en arbre ; demandes en retard (plus de 3 jours) ; RCH proches de l'expiration.
 - Dans l'arbre du tableau de bord RH, chaque groupe porte le **nom de l'entité** (et non celui du valideur) ; le **responsable** de l'entité est en premier, les entités de même nom sont regroupées.
 - **Planning mensuel** : absences jour par jour (les jours **non validés**, d'une demande en attente, en couleur éclaircie et **pointillé**, comme dans la fiche), week-ends, jours fériés, vacances scolaires, totaux par agent ; limité au périmètre ; les agents voient leur équipe avec les **motifs masqués** (présence / absence seulement) ; un encadrant voit la **raison** pour son équipe et sa propre fiche, et la **disponibilité** (présence / absence) de ses encadrants, regroupés en tête.
@@ -141,6 +143,7 @@
 - Le **rapprochement des matricules** se fait par nom et prénom : seules les correspondances certaines sont proposées ; les homonymes ne sont jamais rapprochés automatiquement.
 - La **date d'arrivée** issue de Sedit RH n'est reprise que si elle tombe dans l'année de la fiche.
 - **Nom affiché** : le nom de l'Active Directory est affiché par défaut ; le nom RH (Sedit RH) apparaît en dessous, en petit et en italique, quand il est différent. Le nom RH reste la référence pour la recherche d'un agent et pour l'API « manager d'un agent » (`/api/v1/managers`), qui ne renvoie jamais le nom AD.
+- Mon équipe signale par une alerte les personnes actives dont le **lien Active Directory est incomplet** (pas d'identifiant AD, ou pas d'adresse e-mail dans l'AD) ; « Recherche AD » les relie et enregistre leur nom AD.
 - Le **manager** d'un agent est son valideur ; s'il délègue ce jour-là (absence ou période de délégation), le délégataire est indiqué en plus.
 
 ## 12. Agenda Outlook (module exchange)

@@ -389,6 +389,8 @@ function showApp() {
   if (hrNav) hrNav.classList.toggle("hidden", !isAdmin);                 // tableau de bord RH : comptes administrateurs uniquement
   if (isAgent) state.planningFilter = "all";
   $("#nav-settings").classList.toggle("hidden", !isAdmin);
+  const searchBtn2 = $("#btn-search");
+  if (searchBtn2) searchBtn2.classList.toggle("hidden", !isAdmin);
   const scopeBox = $("#scope-toggle");
   if (scopeBox) {
     scopeBox.classList.toggle("hidden", !isAdmin);
@@ -973,49 +975,23 @@ async function viewDashboard() {
       ? `<label class="inline"><input type="checkbox" id="dash-all" ${all ? "checked" : ""}> ${allLabel}</label>`
       : "";
 
-    let scopeUsers = [];
-    try { scopeUsers = await api("/api/scope-users"); } catch (_) { scopeUsers = []; }
-
-    const usersById = {};
-    (scopeUsers || []).forEach((u) => { usersById[u.id] = u; });
-    if (state.user && !usersById[state.user.id]) usersById[state.user.id] = state.user;
-    const children = {};
-    Object.values(usersById).forEach((u) => {
-      if (u.parent_id != null) (children[u.parent_id] = children[u.parent_id] || []).push(u);
-    });
-    const rowsByOwner = {};
+    /* Regroupement par entité (unité Sedit RH) : l'en-tête porte le nom de l'entité, jamais celui d'une personne ;
+       le valideur de l'entité vient en premier (en gras, avec une étoile). */
+    const groupsMap = {};
     rows.forEach((r) => {
-      const key = r.owner_id != null ? r.owner_id : null;
-      (rowsByOwner[key] = rowsByOwner[key] || []).push(r);
+      const key = r.unit_label ? r.unit_label.trim().toLowerCase() : "~";            // entités de même nom regroupées
+      const g = groupsMap[key] = groupsMap[key] || { label: r.unit_label || "Sans entité", path: r.unit_path || "~", level: r.unit_level || "", rows: [] };
+      if (r.unit_path && r.unit_path.length < g.path.length) g.path = r.unit_path;
+      g.rows.push(r);
     });
-    Object.values(rowsByOwner).forEach((list) => list.sort((a, b) => {
-      const ma = a.is_manager ? 1 : 0;
-      const mb = b.is_manager ? 1 : 0;
-      if (ma !== mb) return mb - ma;
-      return String(a.nom || "").localeCompare(String(b.nom || ""), "fr");
-    }));
-    const scopeIds = new Set(Object.keys(usersById).map(Number));
-    let roots = [];
-    if (state.user.admin) {
-      roots = Object.values(usersById).filter((u) => u.parent_id == null || !scopeIds.has(Number(u.parent_id)));
-    } else if (userRole(state.user) === "agent" && state.user.parent_id) {
-      roots = [usersById[state.user.parent_id]].filter(Boolean);
-      if (!roots.length) roots = [usersById[state.user.id]].filter(Boolean);
-    } else {
-      roots = [usersById[state.user.id]].filter(Boolean);
-      if (!roots.length) roots = Object.values(usersById).filter((u) => rowsByOwner[u.id]);
-    }
-    roots = roots.filter(Boolean).sort(byRoleName);
-
-    const subtreeHasRows = (u) => {
-      if ((rowsByOwner[u.id] || []).length) return true;
-      return (children[u.id] || []).some((c) => subtreeHasRows(c));
-    };
-    const renderedUsers = new Set();
-    const renderedRows = new Set();
-    const dashRow = (r) => `
-      <tr class="dash-row${r.is_manager ? " dash-manager" : ""}">
-        <td class="dash-fiche"><a class="dash-fiche-link" href="#/agent/${r.id}"><span>${esc(r.nom || "")}</span>${r.is_manager ? `<span class="manager-tag">(Responsable)</span>` : ""}<span class="dash-arrow">→</span></a></td>
+    const groups = Object.values(groupsMap).sort((a, b) => a.path.localeCompare(b.path, "fr"));
+    groups.forEach((g) => g.rows.sort((a, b) =>
+      (b.unit_head ? 1 : 0) - (a.unit_head ? 1 : 0)
+      || (b.is_manager ? 1 : 0) - (a.is_manager ? 1 : 0)
+      || String(a.nom || "").localeCompare(String(b.nom || ""), "fr")));
+    const dashRowFull = (r) => `
+      <tr class="dash-row${r.is_manager ? " dash-manager" : ""}${r.unit_head ? " dash-head" : ""}">
+        <td class="dash-fiche"><a class="dash-fiche-link" href="#/agent/${r.id}">${r.unit_head ? `<span class="dash-star" title="Valideur de l'entité">★</span>` : ""}<span>${esc(r.nom || "")}</span>${r.is_manager ? `<span class="manager-tag">(Responsable)</span>` : ""}<span class="dash-arrow">→</span></a></td>
         <td class="dash-owner" title="${esc(r.owner_name || "")}">${esc(r.owner_name || "—")}</td>
         <td class="dash-cycle" title="${esc(r.cycle || "")}">${esc(r.cycle || "—")}</td>
         <td class="num">${fmt(r.ca && r.ca.pris)}</td>
@@ -1027,27 +1003,27 @@ async function viewDashboard() {
         <td class="num dash-total">${fmt(r.total && r.total.pris)}</td>
         <td class="num dash-total ${r.total && r.total.restant < 0 ? "neg" : ""}">${fmt(r.total && r.total.restant)}</td>
       </tr>`;
+    /* Personne sans période : pas de fiche (elle naît avec la première période) ou fiche incomplète. Ligne signalée, sans soldes. */
+    const dashRowEmpty = (r) => `
+      <tr class="dash-row dash-noperiod${r.unit_head ? " dash-head" : ""}">
+        <td class="dash-fiche"><a class="dash-fiche-link" href="${r.id ? "#/agent/" + r.id : "#/my-agents"}" title="${r.id ? "Ouvrir la fiche" : "Définir la période dans Mon équipe"}">${r.unit_head ? `<span class="dash-star" title="Valideur de l'entité">★</span>` : ""}<span>${esc(r.nom || "")}</span><span class="dash-arrow">→</span></a></td>
+        <td class="dash-owner" title="${esc(r.owner_name || "")}">${esc(r.owner_name || "—")}</td>
+        <td colspan="9" class="dash-noperiod-cell">⚠ <em>Pas de période</em> — ${esc(r.motif || "")}</td>
+      </tr>`;
+    const dashRow = (r) => (r.sans_periode ? dashRowEmpty(r) : dashRowFull(r));
     let bodyRows = "";
-    const renderNode = (u, level) => {
-      if (!u || renderedUsers.has(u.id)) return;
-      renderedUsers.add(u.id);
-      const own = rowsByOwner[u.id] || [];
-      const kids = sortHierarchyChildren(u, (children[u.id] || []).filter(Boolean));
-      if (!own.length && !kids.some((c) => subtreeHasRows(c))) return;
-      const name = u.nom || u.login || "—";
-      bodyRows += `<tr class="dash-group level-${Math.min(level, 3)} role-${userRole(u)}"><td colspan="11"><div class="dash-group-inner"><span>${esc(name)}</span><span class="dash-group-count">${own.length} fiche${own.length > 1 ? "s" : ""}</span></div></td></tr>`;
-      own.forEach((r) => { bodyRows += dashRow(r); renderedRows.add(r.id); });
-      kids.forEach((c) => renderNode(c, level + 1));
-    };
-    roots.forEach((u) => renderNode(u, 0));
-    rows.filter((r) => !renderedRows.has(r.id)).forEach((r) => { bodyRows += dashRow(r); });
+    groups.forEach((g) => {
+      const depth = g.path === "~" ? 0 : Math.min(3, g.path.split(" › ").length - 1);
+      bodyRows += `<tr class="dash-group level-${depth}${g.level ? " role-" + esc(g.level) : ""}"><td colspan="11"><div class="dash-group-inner"><span>${esc(g.label)}</span><span class="dash-group-count">${g.rows.length} fiche${g.rows.length > 1 ? "s" : ""}</span></div></td></tr>`;
+      g.rows.forEach((r) => { bodyRows += dashRow(r); });
+    });
     if (!bodyRows) bodyRows = `<tr><td colspan="11" class="dash-empty">Aucune fiche à afficher.</td></tr>`;
 
     c.innerHTML = `
       <h1>Tableau de bord ${state.year || ""}</h1>
       <div class="dash-filters">
         ${adminToggle}
-        <span class="dash-hint">Regroupement par responsable</span>
+        <span class="dash-hint">Regroupement par entité ; le valideur de l'entité est en premier (★)</span>
       </div>
       <div class="dash-table-wrap">
         <table class="data dashboard">
@@ -5518,6 +5494,9 @@ async function viewMyAgents() {
     if (k !== "_" && unitInfo[k].head_user_id && !g.headId) g.headId = unitInfo[k].head_user_id;
     g.members.push(n);
   });
+  /* Personnes actives dont le lien Active Directory est incomplet (pas d'identifiant AD, ou pas d'adresse e-mail dans l'AD) : une alerte les liste en tête de page */
+  const noAdList = Object.values(people).filter((n) => !n.all && n.role !== "administrateur" && n.actif && (n.no_ad || n.no_email))
+    .sort((a, b) => String(a.nom_ad || a.nom || a.login).localeCompare(String(b.nom_ad || b.nom || b.login), "fr"));
   const groupList = Object.values(groupMap).sort((a, b) => a.path.localeCompare(b.path, "fr"));
   groupList.forEach((g) => g.members.sort((a, b) => {
     const rank = (n) => (n.unit_head ? 0 : ((n.children || []).length || n.count ? 1 : 2));
@@ -5570,9 +5549,10 @@ async function viewMyAgents() {
         ${n.by_deleg ? `<span class="ma-deleg" title="Vous gérez cette personne par délégation : son valideur vous délègue ses validations en ce moment">par délégation</span>` : ""}
         ${n.count ? `<span class="ma-count" title="${n.more ? "Personnes sous sa responsabilité (affichez toute la ligne hiérarchique pour les voir)" : "Personnes sous sa responsabilité"}">${n.count}${n.more ? "+" : ""}</span>` : ""}
         ${n.no_email && n.actif ? `<span class="ma-noemail" title="Sans adresse e-mail : aucune notification ne lui sera envoyée">⚠ e-mail</span>` : ""}
+        ${n.no_ad && n.actif && !n.all ? `<span class="ma-noemail" title="Aucun compte Active Directory lié : nom AD, e-mail et connexion par l'AD indisponibles">⚠ AD</span>` : ""}
       </div>
       ${periodHtml(n)}
-      ${n.no_email && n.actif && !n.all ? `<div class="ma-card-actions"><button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button></div>` : ""}
+      ${(n.no_email || n.no_ad) && n.actif && !n.all ? `<div class="ma-card-actions"><button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant) et le lier">Recherche AD</button></div>` : ""}
       ${ficheHtml(n)}
     </div>`;
   };
@@ -5601,6 +5581,7 @@ async function viewMyAgents() {
     <p class="muted">À gauche, mon équipe classée par entité, avec la période de chaque personne (quotité, jours travaillés). À droite, les agents de Sedit RH de mon niveau ou en dessous :
       <strong>cochez-en un ou plusieurs puis glissez-les sur une personne</strong> pour les créer dans l'application sous elle (elle devient alors valideur). Vous pouvez aussi glisser une personne de l'arbre sur une autre pour changer son valideur.</p>
     <div id="ma-msg"></div>
+    ${noAdList.length ? `<div class="ma-ad-alert" role="alert">⚠ <strong>${noAdList.length} personne${noAdList.length > 1 ? "s" : ""} sans lien Active Directory complet</strong> (identifiant AD ou adresse e-mail manquant) : ${noAdList.slice(0, 8).map((n) => esc(n.nom_ad || n.nom || n.login)).join(", ")}${noAdList.length > 8 ? ` … (+${noAdList.length - 8})` : ""}. Utilisez « Recherche AD » sur leur carte pour les lier.</div>` : ""}
     <div class="ma-layout">
       <div class="card ma-left"><div class="ma-left-head"><h3>Mon équipe (${state.maAll ? tree.count : tree.children.length}${!state.maAll && tree.count > tree.children.length ? ` sur ${tree.count} au total` : ""})</h3>
         <button type="button" class="btn btn-small" id="ma-depth">${state.maAll ? "Voir seulement mes agents directs" : "Voir toute ma ligne hiérarchique"}</button></div>
@@ -6173,3 +6154,76 @@ async function viewDelegation() {
     catch (err) { msg(err.message); }
   }));
 }
+
+/* ============================ Recherche rapide d'une personne (administrateur) ============================ */
+const asNameKey = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z]+/).filter(Boolean).sort().join(" ");
+
+function closeAgentSearch() {
+  const m = $("#agent-search-modal");
+  if (m) m.remove();
+}
+
+function openAgentSearch() {
+  if (!state.user || !state.user.admin || $("#agent-search-modal")) return;
+  const m = document.createElement("div");
+  m.id = "agent-search-modal";
+  m.className = "modal";
+  m.innerHTML = `<div class="modal-card as-card">
+    <div class="as-top"><h3>Rechercher une personne</h3><button type="button" class="btn btn-ghost btn-small" id="as-close" title="Fermer (Échap)">✕</button></div>
+    <input type="search" id="as-q" placeholder="Nom RH, matricule ou e-mail" autocomplete="off">
+    <div id="as-res" class="as-res"><p class="muted">Tapez au moins 2 caractères : le valideur et les comptes de la personne s'affichent ici.</p></div>
+  </div>`;
+  document.body.appendChild(m);
+  const input = $("#as-q"), res = $("#as-res");
+  input.focus();
+  const who = (p) => (p ? esc(p.nom_ad || p.nom_rh || p.login) : "—");
+  const render = (items, total) => {
+    if (!items.length) { res.innerHTML = `<p class="muted">Aucune personne trouvée.</p>`; return; }
+    res.innerHTML = items.map((p) => {
+      const rhDiff = p.nom_ad && p.nom_rh && asNameKey(p.nom_ad) !== asNameKey(p.nom_rh);
+      const v = p.valideur;
+      const fiches = (p.fiches || []).map((f) => `<a class="btn btn-small" href="#/agent/${f.id}" data-close="1">Fiche ${esc(f.year)}</a>`).join(" ") || `<span class="muted">aucune fiche</span>`;
+      const ad = p.compte_ad || {}, app = p.compte_application || {};
+      return `<div class="as-item${p.actif ? "" : " as-off"}">
+        <div class="as-head"><strong>${esc(p.nom_ad || p.nom_rh)}</strong>
+          <span class="badge-role role-${esc(p.role)}">${esc(PROFIL_LABELS[p.profil] || p.profil)}${p.admin ? " · Admin" : ""}</span>${p.actif ? "" : ` <span class="ma-noemail">inactif</span>`}</div>
+        ${rhDiff ? `<div class="ma-rhname">${esc(p.nom_rh)}</div>` : ""}
+        <div class="muted">${p.matricule ? "Matricule " + esc(p.matricule) : "Sans matricule"}${p.unite ? " · " + esc(p.unite) : ""}${p.equipe ? ` · ${p.equipe} personne${p.equipe > 1 ? "s" : ""} sous sa responsabilité` : ""}</div>
+        <div class="as-grid">
+          <div class="as-block"><h4>Valideur</h4>
+            ${v ? `<div><strong>${who(v)}</strong>${v.actif ? "" : ` <span class="ma-noemail">inactif</span>`}</div><div class="muted">${esc(v.login)}${v.email ? " · " + esc(v.email) : " · ⚠ sans e-mail"}</div>` : `<div class="muted">Aucun valideur</div>`}
+            ${p.delegue_actuel ? `<div class="as-deleg">Délégation en cours → <strong>${who(p.delegue_actuel)}</strong></div>` : ""}
+          </div>
+          <div class="as-block"><h4>Comptes</h4>
+            <div><span class="muted">Application :</span> <strong>${esc(app.login || "—")}</strong>${app.derniere_connexion ? ` <span class="muted">· connecté le ${esc(app.derniere_connexion.replace("T", " "))}</span>` : ` <span class="muted">· jamais connecté</span>`}</div>
+            <div><span class="muted">Active Directory :</span> ${ad.identifiant ? `<strong>${esc(ad.identifiant)}</strong>` : `<span class="ma-noemail">⚠ non lié</span>`}</div>
+            <div><span class="muted">E-mail :</span> ${p.email ? esc(p.email) : `<span class="ma-noemail">⚠ manquant</span>`}</div>
+            <div class="as-fiches">${fiches}</div>
+          </div>
+        </div></div>`;
+    }).join("") + (total > items.length ? `<p class="muted">${total - items.length} autre(s) résultat(s) : précisez la recherche.</p>` : "");
+    res.querySelectorAll("[data-close]").forEach((a) => a.addEventListener("click", closeAgentSearch));
+  };
+  let timer = null, seq = 0;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { res.innerHTML = `<p class="muted">Tapez au moins 2 caractères.</p>`; return; }
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      try {
+        const r = await api("/api/admin/agent-search?q=" + encodeURIComponent(q));
+        if (mine === seq) render(r.items || [], r.total || 0);
+      } catch (e) { if (mine === seq) res.innerHTML = `<div class="form-error">${esc(e.message)}</div>`; }
+    }, 180);
+  });
+  $("#as-close").addEventListener("click", closeAgentSearch);
+  m.addEventListener("mousedown", (e) => { if (e.target === m) closeAgentSearch(); });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAgentSearch();
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && state.user && state.user.admin) { e.preventDefault(); openAgentSearch(); }
+});
+const searchBtn = $("#btn-search");
+if (searchBtn) searchBtn.addEventListener("click", openAgentSearch);

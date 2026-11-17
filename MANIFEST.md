@@ -1,6 +1,6 @@
 # MANIFEST — Suivi des congés : gestion des congés, RTT et heures des agents
 
-> **Statut : v0.18.0 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
+> **Statut : v0.18.2 — manifeste « tel que construit » (as-built), établi le 2026-11-10 et mis à jour à chaque version.**
 > Ce document décrit ce que l'application fait aujourd'hui, pourquoi, et selon quelles règles. Il est la référence
 > fonctionnelle commune de la DRH, de la DSI et des développeurs. Il est **tenu à jour à chaque nouvelle version**
 > (voir la section 29 et `CHANGELOG.md`).
@@ -775,6 +775,8 @@ amélioration sans nouveau module ; **1.0.0** : mise en production. Chaque versi
 
 | Version | Date | Contenu |
 |---|---|---|
+| **0.18.2** | 2026-11-17 | Tableau de bord regroupé par entité (`unit_label`, `unit_head` dans `GET /api/dashboard`) ; personnes sans période listées (`sans_periode`, `motif` : « Fiche non créée » ou « Période incomplète ») ; recherche rapide d'une personne en modale pour les administrateurs (`GET /api/admin/agent-search`, bouton 🔍 / Ctrl+K : valideur, délégataire, comptes application et AD, fiches). |
+| **0.18.1** | 2026-11-17 | Mon équipe : alerte des personnes dont le lien Active Directory est incomplet (`no_ad` : pas d'identifiant AD, ou `no_email` : pas d'adresse e-mail ; repères « ⚠ AD » / « ⚠ e-mail » ; « Recherche AD » enregistre aussi le nom AD). |
 | **0.18.0** | 2026-11-17 | Nom AD affiché par défaut (nom RH en italique dessous), API `GET /api/v1/managers`, Mon équipe (fin de contrat, solde estimé, délégation en pointillé) et en-tête refaits, boutons d'e-mail compatibles ancien Outlook. |
 | **0.17.8** | 2026-11-17 | Bloc « Autres » (absences Sedit RH) dans la synthèse. |
 | **0.17.7** | 2026-11-17 | Panneau de synthèse compact. |
