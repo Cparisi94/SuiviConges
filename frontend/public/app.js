@@ -365,7 +365,12 @@ function showLogin() {
 function showApp() {
   $("#view-login").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#user-badge").textContent = state.user.nom || state.user.login;
+  // Nom raccourci (« Marc C. ») pour gagner de la place ; le nom complet est dans l'infobulle.
+  const fullName = state.user.nom || state.user.login;
+  const given = String(state.user.prenom || "").trim(), family = String(state.user.nom_famille || "").trim();
+  const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  $("#user-badge").textContent = given && family ? `${cap(given.split(/\s+/)[0])} ${family.charAt(0).toUpperCase()}.` : fullName;
+  $("#user-badge").title = fullName + (state.user.admin ? " (administrateur)" : "");
   const isAdmin = !!state.user.admin;
   const isAgent = userRole(state.user) === "agent";
   const dashboardLabel = $("#nav-dashboard-label");
@@ -397,7 +402,8 @@ function showApp() {
   $("#nav-my-agents").classList.toggle("hidden", !canManageUsers());
   $("#nav-delegation").classList.toggle("hidden", !canManageUsers());
   $("#nav-users").classList.toggle("hidden", !canManageUsers() || isAdmin);
-  $("#btn-password").classList.toggle("hidden", !!state.user.password_by_ad);
+  // Mode AD : le mot de passe est celui du compte Ville, il ne se change pas ici (même pour un administrateur).
+  $("#btn-password").classList.toggle("hidden", !!state.user.password_by_ad || state.user.auth_mode === "ad");
   setupActAs();
   route();
   refreshRequestBadge();
@@ -662,7 +668,7 @@ window.addEventListener("hashchange", route);
 async function route() {
   if (!state.user) return;
   const hash = location.hash || "#/dashboard";
-  $$("#main-nav a").forEach((a) => {
+  $$("#main-nav a, #nav-settings").forEach((a) => {
     let active = hash.startsWith(a.getAttribute("href"));
     if (a.dataset.nav === "my-agents" && hash.startsWith("#/agent/") && !hash.endsWith("/conges")) active = true;
     if (a.dataset.nav === "my-leave") active = hash.startsWith("#/my-leave") || hash.endsWith("/conges");

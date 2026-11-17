@@ -28,27 +28,27 @@
 <!-- ============================ Application ============================ -->
 <div id="app" class="hidden">
   <header class="topbar">
-    <div class="brand">📅 Suivi des congés</div>
+    <a class="brand" href="#/dashboard" title="Retour à l'accueil">📅<span class="brand-text"> Suivi des congés</span></a>
     <nav id="main-nav">
       <a href="#/dashboard" data-nav="dashboard"><span id="nav-dashboard-label">Tableau de bord</span></a>
       <a href="#/synthese" data-nav="synthese" id="nav-synthese" class="hidden">Ma synthèse</a>
-      <a href="#/hr" data-nav="hr" id="nav-hr">Tableau de bord RH</a>
+      <a href="#/hr" data-nav="hr" id="nav-hr" title="Tableau de bord RH">Tableau RH</a>
       <a href="#/my-leave" data-nav="my-leave" id="nav-my-leave">Mes congés</a>
       <a href="#/my-agents" data-nav="my-agents" id="nav-my-agents" class="hidden">Mon équipe</a>
       <a href="#/delegation" data-nav="delegation" id="nav-delegation" class="hidden">Délégation</a>
       <a href="#/requests" data-nav="requests"><span id="nav-requests-label">Demandes</span> <span id="req-badge" class="req-badge hidden"></span></a>
       <a href="#/planning" data-nav="planning">Planning</a>
-      <a href="#/settings" data-nav="settings" id="nav-settings">Paramétrage</a>
       <a href="#/users" data-nav="users" id="nav-users">Utilisateurs</a>
     </nav>
     <div class="topbar-right">
       <label id="scope-toggle" class="scope-toggle hidden" title="Administrateur : voir toutes les fiches, demandes et plannings, pas seulement mon équipe"><input type="checkbox" id="scope-all"> Voir tout</label>
+      <a href="#/settings" data-nav="settings" id="nav-settings" class="gear-link hidden" title="Paramétrage" aria-label="Paramétrage">⚙</a>
       <select id="year-select" class="year-select" title="Année de travail"></select>
       <a href="#/versions" id="app-version" class="version-link" title="Journal des versions"></a>
-      <span id="user-badge"></span>
+      <span id="user-badge" class="user-badge"></span>
       <button id="btn-act-as" class="btn btn-ghost hidden" title="Se connecter en tant que… : agir avec les droits d'un agent">En tant que…</button>
-      <button id="btn-password" class="btn btn-ghost" title="Changer mon mot de passe">Mot de passe</button>
-      <button id="btn-logout" class="btn btn-ghost">Déconnexion</button>
+      <button id="btn-password" class="btn btn-ghost hidden" title="Changer mon mot de passe">Mot de passe</button>
+      <button id="btn-logout" class="btn btn-ghost" title="Déconnexion" aria-label="Déconnexion">⏻</button>
     </div>
   </header>
 

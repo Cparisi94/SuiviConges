@@ -118,7 +118,8 @@ label.inline { flex-direction: row; align-items: center; gap: 6px; }
   position: sticky; top: 0; z-index: 50;
   box-shadow: 0 4px 18px rgba(127,58,42,.28);
 }
-.brand { font-weight: 700; color: #fff; font-size: 16px; letter-spacing: .2px; }
+.brand { font-weight: 700; color: #fff; font-size: 16px; letter-spacing: .2px; text-decoration: none; }
+.brand:hover { opacity: .85; }
 #main-nav { display: flex; gap: 4px; flex: 1; }
 #main-nav a {
   text-decoration: none; color: rgba(255,255,255,.78);
@@ -1686,20 +1687,21 @@ tr.row-off td { color: #888; }
 .fiche-year-sel { font-size: 12px; font-weight: 700; color: var(--primary-dark); background: transparent; border: 0; padding: 0 2px; width: auto; min-width: 0; cursor: pointer; }
 .fiche-year { padding: 0 4px; }
 
-/* Barre du haut : jamais de texte coupé sur plusieurs lignes ; si la fenêtre est étroite, le menu passe sur sa propre ligne */
-.topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 6px 20px; row-gap: 4px; }
+/* Barre du haut : une seule ligne (y compris en mode administrateur) ; le menu se resserre, puis le nom de l'application se réduit à son icône */
+.topbar { flex-wrap: nowrap; height: 52px; padding: 0 14px; gap: 12px; }
 .brand, #main-nav a, .topbar-right > *, #user-badge, .year-select { white-space: nowrap; }
-#main-nav { flex-wrap: wrap; flex: 1 1 auto; min-width: 0; }
-.topbar-right { flex-wrap: nowrap; margin-left: auto; }
-@media (max-width: 1500px) {
-  .topbar { gap: 14px; padding: 6px 12px; }
-  #main-nav { gap: 2px; }
-  #main-nav a { padding: 6px 9px; font-size: 12.5px; }
-  .topbar-right { gap: 6px; }
-  .topbar .btn-ghost { padding: 4px 8px; font-size: 12px; }
-}
-@media (max-width: 1250px) {
-  #main-nav { order: 3; flex: 1 1 100%; }
+#main-nav { flex-wrap: nowrap; flex: 1 1 auto; min-width: 0; gap: 2px; }
+#main-nav a { padding: 8px 10px; font-size: 13.5px; line-height: 1.2; display: inline-flex; align-items: center; }
+.topbar-right { flex-wrap: nowrap; margin-left: auto; gap: 8px; flex-shrink: 0; }
+.topbar .btn-ghost { padding: 4px 8px; font-size: 12px; }
+.scope-toggle { margin-right: 0; }
+.version-link { font-size: 11px; }
+#user-badge { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1250px) { .brand-text { display: none; } }
+@media (max-width: 1350px) { #main-nav a { padding: 6px 6px; font-size: 12px; } .topbar { gap: 8px; padding: 0 8px; } #user-badge { max-width: 90px; } }
+@media (max-width: 1100px) {      /* fenêtre très étroite : le menu passe sur sa propre ligne */
+  .topbar { flex-wrap: wrap; height: auto; min-height: 52px; padding: 6px 12px; row-gap: 4px; }
+  #main-nav { order: 3; flex: 1 1 100%; flex-wrap: wrap; }
   .topbar-right { order: 2; }
   .brand { order: 1; }
 }
@@ -1730,3 +1732,10 @@ tr.row-off td { color: #888; }
 .agent-rh-days-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .agent-rh-days .rh-total { font-weight: 700; margin-left: 6px; }
 .rh-chip { padding: 1px 8px; border-radius: 999px; background: #fff; border: 1px solid var(--border); font-size: 11.5px; }
+
+#btn-logout { padding: 4px 7px; font-size: 14px; line-height: 1; }
+/* Roue dentée du Paramétrage (en haut à droite, administrateurs) ; menu centré verticalement */
+#main-nav { align-items: center; align-self: stretch; }
+.gear-link { color: rgba(255,255,255,.9); text-decoration: none; font-size: 19px; line-height: 1; padding: 5px 7px; border-radius: 9px; }
+.gear-link:hover { background: rgba(255,255,255,.16); color: #fff; }
+.gear-link.active { background: #fff; color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
