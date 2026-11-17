@@ -3,7 +3,7 @@
 #   cp .env.example .env     # puis renseigner CONGES_SECRET_KEY, POSTGRES_*, APM_API_KEY…
 #   docker-compose up -d --build
 #
-# Ports : backend 8110, frontend (réseau interne) 8111, frontend DMZ 8112 (docker-compose.dmz.yml).
+# Ports : backend 8110, frontend (réseau interne) 8111, frontend DMZ 8112 (docker-compose.dmz.yml), backend mobile 8115 (accessible sous /mobile/ du frontend).
 # Le backend est publié sur 8110 pour que le futur frontend de la DMZ puisse le joindre : à limiter par
 # pare-feu à l'adresse du frontend DMZ (BACK_BIND=127.0.0.1 tant qu'il n'y a pas de frontend distant).
 # Le HTTPS est assuré par le reverse-proxy de la Ville devant les frontends.
@@ -23,16 +23,51 @@ services:
     ports:
       - "${BACK_BIND:-127.0.0.1}:${BACK_PORT:-8110}:8110"
 
+  # Backend MOBILE : même image, mode « mobile » (CONGES_MODE) : ne répond qu'aux routes de la version mobile (liste blanche, voir
+  # backend/mobile_mode.py) et sert la page mobile. Pas de migrations ni de tâches de fond (relances, Outlook) : elles restent celles de « backend ».
+  # Accessible sous /mobile/ du frontend ; publié sur 8115 (local par défaut) pour un reverse-proxy qui voudrait le joindre directement.
+  backend-mobile:
+    build:
+      context: ./backend
+    restart: always
+    env_file: .env
+    command: ["gunicorn", "-b", "0.0.0.0:8115", "--workers", "1", "--threads", "8", "--timeout", "60",
+              "--access-logfile", "-", "--error-logfile", "-", "wsgi_mobile:application"]
+    environment:
+      - CONGES_SECRET_KEY=${CONGES_SECRET_KEY:?Définir CONGES_SECRET_KEY dans .env}
+      - CONGES_PROXY_HOPS=${CONGES_PROXY_HOPS:-1}
+      - CONGES_COOKIE_SECURE=${CONGES_COOKIE_SECURE:-1}
+      - CONGES_MODE=mobile
+      - CONGES_PORT=8115
+      - CONGES_COOKIE_PATH=${CONGES_MOBILE_COOKIE_PATH:-/}             # cookie de session « conges_mobile » (nom distinct de l'application complète) ; /mobile pour le limiter à cette adresse
+      - CONGES_MOBILE_PUBLIC=/app/mobile_public
+    volumes:
+      - ./conges-mobile-dmz/public:/app/mobile_public:ro               # la page mobile (lecture seule)
+    ports:
+      - "${MOBILE_BIND:-127.0.0.1}:${MOBILE_PORT:-8115}:8115"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8115/api/status', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend
     restart: always
     environment:
       - BACKEND_URL=${BACKEND_URL:-http://backend:8110}
+      - MOBILE_BACKEND_URL=${MOBILE_BACKEND_URL:-http://backend-mobile:8115}
     ports:
       - "${FRONT_PORT:-8111}:80"
     depends_on:
       backend:
+        condition: service_healthy
+      backend-mobile:
         condition: service_healthy
 
 volumes:

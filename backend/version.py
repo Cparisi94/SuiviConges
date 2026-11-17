@@ -13,9 +13,18 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 
 VERSIONS = [
+    {
+        "version": "0.20.0",
+        "date": "2026-11-17",
+        "type": "minor",
+        "titre": "Backend mobile séparé, accessible sous /mobile/",
+        "items": [
+            "Backend mobile : un second conteneur (backend-mobile, port 8115), même code que le backend mais en mode « mobile » : il ne répond qu'aux routes de la version mobile, sert la page mobile, n'ouvre qu'un cookie de session distinct et ne relance ni e-mails ni synchronisation Outlook. Il est accessible sous /mobile/ du serveur (une adresse à ajouter au nginx du frontend, fournie).",
+        ],
+    },
     {
         "version": "0.19.0",
         "date": "2026-11-17",

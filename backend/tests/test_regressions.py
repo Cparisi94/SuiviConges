@@ -483,6 +483,34 @@ class PrototypeRegressionTests(unittest.TestCase):
             conn.commit()
             conn.close()
 
+    def test_mobile_backend_mode_only_answers_to_the_mobile_routes(self):
+        from flask import Flask
+        import mobile_mode
+        ok = [("POST", "/api/auth/login"), ("GET", "/api/me"), ("GET", "/api/mobile/summary"), ("GET", "/api/mobile/days"), ("GET", "/api/mobile/calendar"),
+              ("POST", "/api/mobile/calendar/link"), ("POST", "/api/mobile/requests/12/cancel"), ("POST", "/api/mobile/requests/12/cancel-request"),
+              ("POST", "/api/requests"), ("GET", "/cal/" + "a" * 43 + ".ics"), ("GET", "/api/ical/" + "a" * 43 + ".ics"), ("GET", "/api/status")]
+        for method, path in ok:
+            self.assertTrue(mobile_mode.is_allowed(method, path), (method, path))
+        # tout le reste de l'application complète est fermé (méthode comprise)
+        for method, path in [("GET", "/api/settings"), ("GET", "/api/users"), ("POST", "/api/me/password"), ("GET", "/api/requests"), ("POST", "/api/mobile/summary"),
+                             ("GET", "/api/v1/agents"), ("POST", "/api/admin/act-as"), ("GET", "/api/dashboard"), ("GET", "/api/agents/1"), ("DELETE", "/api/requests"),
+                             ("POST", "/api/requests/1/approve"), ("GET", "/cal/court.ics"), ("GET", "/api/my-agents")]:
+            self.assertFalse(mobile_mode.is_allowed(method, path), (method, path))
+        small = Flask("mobile-test")
+        small.add_url_rule("/api/me", "me", lambda: "ok")
+        small.add_url_rule("/api/settings", "settings", lambda: "secret")
+        self.assertTrue(mobile_mode.apply(small, force=True))
+        self.assertTrue(mobile_mode.apply(small, force=True))                                  # sans effet la seconde fois
+        self.assertEqual(small.config["SESSION_COOKIE_NAME"], "conges_mobile")               # cookie distinct de celui de l'application complète
+        client = small.test_client()
+        page = client.get("/")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Mes congés", page.get_data(as_text=True))                               # la page mobile est servie par ce backend
+        self.assertEqual(client.get("/mobile.js").status_code, 200)
+        self.assertEqual(client.get("/api/me").status_code, 200)
+        self.assertEqual(client.get("/api/settings").status_code, 404)                        # route de l'application complète : fermée
+        self.assertIn("frame-ancestors 'none'", client.get("/api/me").headers["Content-Security-Policy"])
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)

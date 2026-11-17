@@ -30,6 +30,8 @@ Il relaie vers le backend interne uniquement les routes utiles aux agents ; l'AP
 documentation Swagger, l'état détaillé et « se connecter en tant que » restent réservés au réseau
 interne (`frontend/nginx.dmz.conf.template`).
 
+**Backend mobile** (`backend-mobile`, port **8115**, `docker-compose.yml`) : même image que le backend, lancée en mode « mobile » (`CONGES_MODE=mobile`, `wsgi_mobile.py`) ; il ne répond qu'aux routes de la version mobile (liste blanche, `backend/mobile_mode.py`), sert la page mobile et ne lance ni migrations ni tâches de fond. Il est accessible sous **`/mobile/`** du frontend (`frontend/nginx.conf.template`, préfixe retiré) ; sur un poste sans Docker : `cd backend && ../.venv/Scripts/python run_mobile.py` (http://127.0.0.1:8115).
+
 **Version mobile** (frontend dédié, DMZ uniquement, port **8113**) : dossier `conges-mobile-dmz/`, projet séparé qui ne relaie que douze routes d'API (compteurs, demandes en cours, demande « du … au … », agenda). Voir `conges-mobile-dmz/README.md` ; sur un poste sans Docker : `cd conges-mobile-dmz && ../.venv/Scripts/python dev_server.py` (http://127.0.0.1:8113, backend sur 8110).
 
 **Poste de développement** (Python 3.12+) :

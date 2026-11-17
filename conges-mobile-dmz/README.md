@@ -45,6 +45,8 @@ Copier `.env.example` en `.env` (non versionné) sur l'hôte Docker de la DMZ :
 | `MOBILE_BACKEND_PORT` | port du backend : la seule ouverture du pare-feu DMZ → LAN | 8110 |
 | `MOBILE_DMZ_PORT` | port publié du conteneur | 8113 |
 
+**Recommandé** : faire pointer `MOBILE_BACKEND_HOST` / `MOBILE_BACKEND_PORT` vers le **backend mobile** (`backend-mobile`, port 8115 du `docker-compose.yml` principal) plutôt que vers le backend complet : même si le nginx était mal réglé, ce backend ne répond de toute façon qu'aux routes de la version mobile (`backend/mobile_mode.py`). La même page est aussi servie par ce backend sous `/mobile/` du frontend interne : elle fonctionne à la racine d'un nginx comme sous un préfixe (adresses relatives).
+
 Côté backend : `CONGES_PROXY_HOPS` doit compter ce nginx (et le reverse-proxy de la Ville devant lui) pour que l'adresse du client soit celle vue par le journal des connexions.
 
 ## Construire et lancer

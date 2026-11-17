@@ -4106,6 +4106,9 @@ mobile.init_mobile(app, login_required)
 import ical  # noqa: E402
 
 ical.init_ical(app, login_required)
+import mobile_mode  # noqa: E402
+
+mobile_mode.apply(app)                  # CONGES_MODE=mobile : backend mobile, liste blanche de routes (sans effet sinon)
 my_agents.init_my_agents(app, login_required, _can_manage_users, _scope_ids, _create_agent_account, _insert_fiche,
                          _audit_user, _normalize_params, _request_year, ROLE_LEVELS, load_settings,
                          estimated_balance=_estimated_balance)

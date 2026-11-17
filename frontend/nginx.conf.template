@@ -42,6 +42,29 @@ server {
         proxy_read_timeout 60s;
     }
 
+    # Version mobile : le backend MOBILE (conteneur backend-mobile, liste blanche de routes) sert la page et son API sous /mobile/.
+    # Le préfixe est retiré (/mobile/api/me -> /api/me). Le cookie de session mobile est distinct de celui de l'application.
+    # Adresse résolue à l'usage (resolver Docker) : nginx démarre même si le conteneur mobile est arrêté (502 jusqu'à son retour).
+    location = /mobile { return 301 /mobile/; }
+    location = /mobile/api/auth/login {
+        limit_req zone=login burst=5 nodelay;
+        limit_req_status 429;
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $mobile_up ${MOBILE_BACKEND_URL};
+        rewrite ^/mobile/(.*)$ /$1 break;
+        proxy_pass $mobile_up;
+        include /etc/nginx/proxy_params_conges;
+    }
+    location ^~ /mobile/ {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $mobile_up ${MOBILE_BACKEND_URL};
+        rewrite ^/mobile/(.*)$ /$1 break;
+        proxy_pass $mobile_up;
+        include /etc/nginx/proxy_params_conges;
+        proxy_set_header X-Scope "";
+        proxy_read_timeout 60s;
+    }
+
     # Documentation Swagger (page et ressources)
     location /api-docs {
         proxy_pass ${BACKEND_URL};

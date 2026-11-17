@@ -8,6 +8,7 @@ ARG NGINX_TEMPLATE=nginx.conf.template
 
 # Adresse du backend (zone interne), remplacée dans la configuration au démarrage.
 ENV BACKEND_URL=http://backend:8110
+ENV MOBILE_BACKEND_URL=http://backend-mobile:8115
 
 COPY ${NGINX_TEMPLATE} /etc/nginx/templates/default.conf.template
 COPY proxy_params_conges /etc/nginx/proxy_params_conges

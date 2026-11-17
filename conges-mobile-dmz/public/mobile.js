@@ -22,8 +22,11 @@
     el._t = setTimeout(() => el.classList.add("hidden"), 3200);
   }
 
+  // Préfixe de la page : « » quand elle est servie à la racine (DMZ), « /mobile » quand elle l'est sous /mobile/ (backend mobile derrière le nginx du serveur).
+  const BASE = location.pathname.replace(/\/[^/]*$/, "");
+
   async function api(path, opts = {}) {
-    const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) }, credentials: "same-origin" });
+    const res = await fetch(BASE + path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) }, credentials: "same-origin" });
     let data = null;
     try { data = await res.json(); } catch (_) { /* corps vide */ }
     if (res.status === 401 && path !== "/api/auth/login") { showLogin(); throw new Error("Session expirée"); }
@@ -325,7 +328,7 @@
 
   /* ----------------------------- agenda du téléphone (abonnement ICS) ----------------------------- */
   // Le lien est personnel et secret : il n'est montré qu'à sa création (le serveur n'en garde que l'empreinte).
-  const feedUrl = (token) => `${location.origin}/cal/${token}.ics`;
+  const feedUrl = (token) => `${location.origin}${BASE}/cal/${token}.ics`;
 
   async function loadSyncCard() {
     const box = $("#m-sync");

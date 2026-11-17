@@ -201,6 +201,7 @@ def init_ical(app, login_required):
         return jsonify({"active": False})
 
     @bp.route("/api/ical/<token>.ics", methods=["GET"])
+    @bp.route("/cal/<token>.ics", methods=["GET"])               # même flux sous l'adresse que publie le frontend mobile
     def feed(token):
         """Flux ICS : pas de session, le jeton (256 bits, comparé par son haché) fait foi. Réponse identique pour un jeton inconnu ou révoqué."""
         if len(token) < 20 or len(token) > 80:

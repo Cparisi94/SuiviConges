@@ -13,6 +13,10 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.20.0 — 2026-11-17 — Backend mobile séparé, accessible sous /mobile/
+
+- Backend mobile : un second conteneur (backend-mobile, port 8115), même code que le backend mais en mode « mobile » : il ne répond qu'aux routes de la version mobile, sert la page mobile, n'ouvre qu'un cookie de session distinct et ne relance ni e-mails ni synchronisation Outlook. Il est accessible sous /mobile/ du serveur (une adresse à ajouter au nginx du frontend, fournie).
+
 ## 0.19.0 — 2026-11-17 — Version mobile en DMZ (frontend dédié) et nom du valideur unifié
 
 - Version mobile : un frontend dédié, séparé de l'application complète (dossier conges-mobile-dmz, déployé en DMZ uniquement), limité aux fonctions de base : compteurs, demandes en cours (en attente ou validées), demande simple « du … au … » (premier et dernier jour à la demi-journée) et agenda du mois. Il ne relaie que douze routes d'API ; tout le reste y est refusé.
