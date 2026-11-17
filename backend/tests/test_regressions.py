@@ -650,7 +650,7 @@ class PrototypeRegressionTests(unittest.TestCase):
             ok = self._call("POST", "/api/users", uid=1, payload={"login": "SANSMDP", "role": "agent", "parent_id": 3})
             self.assertEqual(ok.status_code, 200, ok.get_json())
             admin = self._call("POST", "/api/users", uid=1, payload={"login": "ADMSANS", "role": "administrateur"})
-            self.assertEqual(admin.status_code, 400)   # un administrateur garde un mot de passe de secours
+            self.assertEqual(admin.status_code, 200, admin.get_json())   # mot de passe de secours facultatif
         with mock.patch.object(config, "AUTH_MODE", "local"):
             self.assertEqual(self._call("POST", "/api/users", uid=1, payload={"login": "SANSMDP2", "role": "agent", "parent_id": 3}).status_code, 400)
 
@@ -1015,10 +1015,11 @@ class PrototypeRegressionTests(unittest.TestCase):
         with self._units_patch():
             self._call("GET", "/api/org-units?refresh=1", uid=1)
         with mock.patch.object(config, "AUTH_MODE", "ad"):
-            # Sans mot de passe local, pas d'administrateur ; seul un administrateur peut accorder le droit.
+            # Le mot de passe local de secours est facultatif en mode AD ; seul un administrateur peut accorder le droit.
             no_pw = self._call("POST", "/api/users/person", uid=1, payload={
-                "profil": "valideur", "admin": True, "nom": "Zzadm", "prenom": "Ann", "unit_code": "S1"})
-            self.assertEqual(no_pw.status_code, 400)
+                "profil": "administrateur", "nom": "Zzsans", "prenom": "Bob"})
+            self.assertEqual(no_pw.status_code, 200, no_pw.get_json())
+            self.assertEqual(no_pw.get_json()["admin"], 1)
             self.assertEqual(self._call("POST", "/api/users/person", uid=2, payload={
                 "profil": "valideur", "admin": True, "nom": "Zzadm", "prenom": "Ann", "unit_code": "S1",
                 "password": "Secours-123"}).status_code, 403)

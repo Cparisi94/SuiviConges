@@ -806,8 +806,8 @@ def users_create():
         return jsonify({"error": "Identifiant obligatoire"}), 400
     if not password:
         # Mode AD : le mot de passe est celui du compte Ville ; un mot de passe local aléatoire (jamais communiqué)
-        # remplit la colonne. Les administrateurs gardent un mot de passe local (compte de secours).
-        if config.AUTH_MODE != "ad" or role == "administrateur":
+        # remplit la colonne. Pour un administrateur, le mot de passe local de secours est facultatif (à définir plus tard).
+        if config.AUTH_MODE != "ad":
             return jsonify({"error": "Identifiant et mot de passe obligatoires"}), 400
         password = uuid.uuid4().hex + "Aa1!"
     matricule, merr = _clean_matricule(data.get("matricule"))
@@ -2218,6 +2218,31 @@ def _request_balance(db, agent, cells, code, exclude_id=None):
     if restant is not None and restant < -1e-9:
         return False, result
     return True, result
+
+
+def _estimated_balance(db, agent_id):
+    """Solde estimé de congés d'une fiche : absences validées + demandes en attente (comme si tout était accordé).
+    {"ca", "rtt", "pending"} en jours, ou None si la fiche est introuvable ou incalculable (aucun appel réseau)."""
+    agent = _agent_by_id(db, agent_id)
+    if not agent:
+        return None
+    try:
+        params = _agent_params_with_sedit_cet(db, agent, json_loads(agent["params"]))
+        periods = json_loads(agent["periods"]) if agent["periods"] else []
+        merged = _agent_cells(db, agent["id"])
+        pending = _pending_cells(db, agent["id"])
+        merged.update(pending)
+        agent_for_rules = dict(params)
+        agent_for_rules["periods"] = periods
+        result = rule_compute(agent_for_rules, cells_to_list(merged), _settings_for_year(load_settings(), int(agent["year"])),
+                              cassages=_agent_cassages(db, agent["id"], include_pending=True),
+                              hourly=_agent_hourly(db, agent["id"], include_pending=True),
+                              recoveries=_agent_recoveries(db, agent["id"]))
+    except Exception:  # noqa: BLE001 - fiche incomplète ou paramètres invalides : pas de solde, sans bloquer l'écran
+        return None
+    solde = result.get("solde") or {}
+    return {"ca": (solde.get("ca") or {}).get("restant"), "rtt": (solde.get("rtt") or {}).get("restant"),
+            "pending": len(pending) / 2.0}
 
 
 def _request_cassage_balance(db, agent, code, days=1, exclude_id=None):
@@ -3822,6 +3847,9 @@ def planning():
                 missing + [year]).fetchall()
             agents = list(agents) + [r for r in extra if r["id"] not in have]
     scope_now = set(_scope_ids(db, me))
+    # Entité de chaque fiche : unité du titulaire (à défaut celle de son valideur) et responsable d'unité, pour grouper par entité.
+    uinfo = {r["id"]: (r["role"], r["unit_code"]) for r in db.execute("SELECT id, role, unit_code FROM users").fetchall()}
+    unit_heads = {r["code"]: r["head_user_id"] for r in db.execute("SELECT code, head_user_id FROM org_units").fetchall()}
 
     out = []
     for a in agents:
@@ -3871,6 +3899,9 @@ def planning():
             "proprietaire": a["proprietaire"],
             "is_manager": int(a["is_manager"] or 0),
             "supervisor": a["agent_user_id"] in supervisors,
+            "unit_code": (uinfo.get(a["agent_user_id"]) or ("", ""))[1] or (uinfo.get(a["user_id"]) or ("", ""))[1] or "",
+            "unit_head": bool(a["agent_user_id"] and unit_heads.get((uinfo.get(a["agent_user_id"]) or ("", ""))[1]) == a["agent_user_id"]),
+            "role": (uinfo.get(a["agent_user_id"]) or ("agent", ""))[0],
             "masked": mask,
             "penibilite": params.get("penibilite", ""),
             "cells": cells_out,
@@ -4003,7 +4034,8 @@ import my_agents  # noqa: E402
 delegation.init_delegation(app, login_required, _can_manage_users)
 mail_actions.init_mail_actions(app, requests_approve.__wrapped__, requests_refuse.__wrapped__, load_settings)
 my_agents.init_my_agents(app, login_required, _can_manage_users, _scope_ids, _create_agent_account, _insert_fiche,
-                         _audit_user, _normalize_params, _request_year, ROLE_LEVELS, load_settings)
+                         _audit_user, _normalize_params, _request_year, ROLE_LEVELS, load_settings,
+                         estimated_balance=_estimated_balance)
 
 
 @app.route("/api/docs/regles-metier", methods=["GET"])

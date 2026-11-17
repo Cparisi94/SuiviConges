@@ -25,7 +25,7 @@ LEVEL_ROLE = {"direction": "direction", "service": "service", "secteur": "secteu
 
 
 def init_my_agents(app, login_required, can_manage, scope_ids, create_account, insert_fiche, audit_user,
-                   normalize_params, request_year, role_levels, load_settings):
+                   normalize_params, request_year, role_levels, load_settings, estimated_balance=None):
     rank_name = {v: k for k, v in role_levels.items()}
 
     def my_unit_codes(db, units, index):
@@ -244,6 +244,70 @@ def init_my_agents(app, login_required, can_manage, scope_ids, create_account, i
         except sedit_rh.SeditError as exc:
             return jsonify({"items": {}, "warning": str(exc)})
         return jsonify({"items": {str(i): found[m] for i, m in mats.items() if m in found}, "asked": len(mats)})
+
+    def visible_uids(db, raw):
+        """{uid: ligne utilisateur} des personnes demandées (`uids`, 300 au plus) qui sont dans mon périmètre."""
+        uids = [int(x) for x in (raw or "").split(",") if x.strip()][:300]
+        allowed = set(scope_ids(db, request.user)) | {request.user["id"]}
+        by_id, _kids = children_map(db)
+        return {i: by_id[i] for i in uids if i in by_id and (request.user.get("admin") or i in allowed)}
+
+    # ------------------------------------------------------------------ solde estimé de congés de l'équipe
+    @bp.route("/soldes", methods=["GET"])
+    @login_required
+    def team_balances():
+        """Solde estimé de congés (CA et RTT restants, demandes en attente comprises) des personnes demandées pour l'année affichée."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        try:
+            year = int(request.args.get("year") or request_year())
+            people_ = None
+            db = get_db()
+            try:
+                people_ = visible_uids(db, request.args.get("uids"))
+                items = {}
+                for uid_ in people_:
+                    row = db.execute("SELECT id FROM agents WHERE agent_user_id=? AND year=?", (uid_, year)).fetchone()
+                    bal = estimated_balance(db, row["id"]) if row and estimated_balance else None
+                    if bal and bal.get("ca") is not None:
+                        items[str(uid_)] = bal
+            finally:
+                db.close()
+        except ValueError:
+            return error("Paramètres invalides", 400)
+        return jsonify({"items": items})
+
+    # ------------------------------------------------------------------ fin de contrat (Sedit RH)
+    @bp.route("/contrats", methods=["GET"])
+    @login_required
+    def team_contract_ends():
+        """Date de fin de contrat (champ « date de départ » de Sedit RH) des personnes demandées, quand elle existe ;
+        chargé à part par la page Mon équipe car Sedit RH est lent."""
+        if not can_manage(request.user):
+            return error("Accès réservé aux administrateurs et valideurs", 403)
+        try:
+            db = get_db()
+            try:
+                mats = {i: (u.get("matricule") or "").strip() for i, u in visible_uids(db, request.args.get("uids")).items()}
+            finally:
+                db.close()
+        except ValueError:
+            return error("Liste de personnes invalide", 400)
+        mats = {i: m for i, m in mats.items() if m}
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(item):
+            try:
+                return item[0], sedit_rh.contract_end(item[1]), None
+            except sedit_rh.SeditError as exc:
+                return item[0], None, str(exc)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            res = list(pool.map(one, mats.items()))
+        errors = [e for _i, _f, e in res if e]
+        if errors and len(errors) == len(res):
+            return jsonify({"items": {}, "warning": errors[0]})
+        return jsonify({"items": {str(i): fin for i, fin, e in res if fin}, "asked": len(mats)})
 
     # ------------------------------------------------------------------ agents Sedit RH
     @bp.route("/sirh", methods=["GET"])

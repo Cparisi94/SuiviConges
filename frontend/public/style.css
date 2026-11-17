@@ -1566,8 +1566,11 @@ tr.row-off td { color: #888; }
 
 .ma-all { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0; }
 .ma-all input { width: auto; }
-.ma-fiche-link { font-size: 12px; color: #1b7a3d; text-decoration: underline; }
-.ma-period { margin-left: 4px; }
+.ma-fiche-btn { display: block; width: 100%; box-sizing: border-box; text-align: center; text-decoration: none; white-space: nowrap; margin: auto 0 0; }
+.ma-counters { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.ma-solde strong { color: #1b7a3d; }
+.ma-contrat strong { color: #9a3412; }
+.ma-period { margin-left: 0; }
 .ma-right label.ma-all { display: flex; flex-direction: row; align-items: center; gap: 6px; }
 .ma-right label.ma-all input[type="checkbox"] { width: auto; height: auto; margin: 0; }
 
@@ -1650,7 +1653,8 @@ tr.row-off td { color: #888; }
 .ma-card.ma-over { outline: 2px dashed #c4573a; background: rgba(196, 87, 58, .12); }
 .ma-card.ma-picked { outline: 2px solid #c4573a; background: rgba(196, 87, 58, .10); }
 .ma-pick-hint { font-size: 11.5px; margin: 2px 0 6px; }
-.ma-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ma-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; }
+.ma-top-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; }
 .ma-star { color: #c4573a; }
 .ma-card-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .ma-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: auto; }

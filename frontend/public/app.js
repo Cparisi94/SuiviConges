@@ -1896,12 +1896,14 @@ async function viewPlanning() {
     <div id="plan-body"><p>Chargement…</p></div>`;
 
   $("#plan-prev").addEventListener("click", () => {
+    if (state.planningMonth <= 1) { state.planningMonth = 12; setYear((state.year || year) - 1, "#/planning"); return; }   // janvier → décembre de l'année précédente
     state.planningMonth = state.planningMonth > 1 ? state.planningMonth - 1 : 12;
     const sel = $("#plan-month");
     if (sel) sel.value = String(state.planningMonth);
     loadPlanning();
   });
   $("#plan-next").addEventListener("click", () => {
+    if (state.planningMonth >= 12) { state.planningMonth = 1; setYear((state.year || year) + 1, "#/planning"); return; }   // décembre → janvier de l'année suivante
     state.planningMonth = state.planningMonth < 12 ? state.planningMonth + 1 : 1;
     const sel = $("#plan-month");
     if (sel) sel.value = String(state.planningMonth);
@@ -1926,7 +1928,11 @@ async function viewPlanning() {
 let planningReq = 0;
 async function loadPlanning() {
   if (!state.unitNames) {   // noms des entités (unités Sedit RH) pour les titres de groupe
-    try { state.unitNames = Object.fromEntries((await api("/api/org-units?scope=all")).map((x) => [x.code, x.libelle])); } catch (_) { state.unitNames = {}; }
+    try {
+      const list = await api("/api/org-units?scope=all");
+      state.unitNames = Object.fromEntries(list.map((x) => [x.code, x.libelle]));
+      state.unitPaths = Object.fromEntries(list.map((x) => [x.code, x.path]));
+    } catch (_) { state.unitNames = {}; state.unitPaths = {}; }
   }
   const req = ++planningReq;
   const body = $("#plan-body");
@@ -2060,6 +2066,25 @@ function renderPlanning(data) {
     const scopeUsers = state.planningUsers || [];
     const scopeIds = new Set(scopeUsers.map((u) => u.id));
     const planUnitNames = state.unitNames || {};
+    const planPaths = state.unitPaths || {};
+    if (agents.some((a) => a.unit_code)) {
+      // Présentation par entité : DIRECTION…, puis le responsable, puis les membres ; les entités suivent la hiérarchie des unités.
+      const nrm = (x) => String(x || "").trim().toLowerCase();
+      const groups = {};
+      agents.forEach((a) => {
+        const label = planUnitNames[a.unit_code] || "Sans unité";
+        const g = groups[nrm(label)] = groups[nrm(label)] || { label, path: planPaths[a.unit_code] || "~", members: [] };
+        if ((planPaths[a.unit_code] || "~").length < g.path.length) g.path = planPaths[a.unit_code];
+        g.members.push(a);
+      });
+      Object.values(groups).sort((x, y) => x.path.localeCompare(y.path, "fr")).forEach((g) => {
+        const rank = (a) => (a.unit_head ? 0 : (a.role && a.role !== "agent" ? 1 : 2));
+        g.members.sort((x, y) => rank(x) - rank(y) || String(agentName(x)).localeCompare(String(agentName(y)), "fr"));
+        const depth = g.path === "~" ? 0 : Math.min(3, g.path.split(" › ").length - 1);
+        rows += `<tr class="plan-group level-${depth}"><td colspan="${nd + 2}">${esc(g.label)}</td></tr>`;
+        g.members.forEach((a) => { rows += agentRow(a); });
+      });
+    } else {
     const agentsByUser = {};
     // Les encadrants (ma chaîne de valideurs et moi) forment un groupe à part : on y voit leur disponibilité.
     const supers = agents.filter((a) => a.supervisor).sort((a, b) => String(agentName(a)).localeCompare(String(agentName(b)), "fr"));
@@ -2111,6 +2136,7 @@ function renderPlanning(data) {
     roots.forEach((u) => renderNode(u, 0));
     // Utilisateurs du périmètre non atteints (orphelins) : affichés à la racine.
     scopeUsers.filter((u) => !rendered.has(u.id)).sort(byRoleName).forEach((u) => renderNode(u, 0));
+    }
   } else {
     agents.forEach((a) => { rows += agentRow(a); });
   }
@@ -5001,7 +5027,7 @@ async function viewUsers() {
         <label class="np-wide hidden" id="np-sup-block">Valideur supérieur (DGA, DGS…)
           <select id="np-sup"></select>
         </label>
-        <label class="np-wide hidden" id="np-pass-block">Mot de passe local (obligatoire pour un administrateur : compte de secours) <input id="np-pass" type="password"></label>
+        <label class="np-wide hidden" id="np-pass-block">Mot de passe local de secours (facultatif pour un administrateur en mode AD) <input id="np-pass" type="password"></label>
         <button class="btn btn-primary new-user-submit" id="np-create">Créer</button>
       </div>
     </div>` : ""}
@@ -5474,7 +5500,7 @@ async function viewMyAgents() {
     return par && par.unit_code && unitInfo[par.unit_code] ? par.unit_code : "_";
   };
   const groupMap = {};
-  Object.values(people).filter((n) => !(tree.all && n.id === tree.id)).forEach((n) => {
+  Object.values(people).filter((n) => !n.all && n.role !== "administrateur").forEach((n) => {
     const k = unitKey(n);
     const label = k === "_" ? "Sans unité" : unitInfo[k].libelle;
     const g = groupMap[norm(label)] = groupMap[norm(label)] || { code: k, label, path: k === "_" ? "~" : unitInfo[k].path, headId: null, members: [] };   // unités de même nom regroupées
@@ -5506,16 +5532,23 @@ async function viewMyAgents() {
   };
   // Une fiche congés n'existe que lorsque la personne a au moins une période de paramètres.
   const ficheHtml = (n) => (n.fiche && n.fiche.complete
-    ? `<a class="ma-fiche-link" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir la fiche congés ${esc(n.year)}">Fiche congés</a>
-      ${n.fiche.next_exists ? `<span class="muted" title="La fiche ${esc(n.year + 1)} existe déjà">✓ ${esc(n.year + 1)}</span>` : ""}`
-    : `<button type="button" class="btn btn-small ma-period" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
+    ? `<a class="btn btn-primary btn-small ma-fiche-btn" href="#/agent/${n.fiche.id}" draggable="false" title="Ouvrir le calendrier et les soldes de congés de cette personne">📅 Voir les congés</a>`
+    : `<button type="button" class="btn btn-small ma-period ma-fiche-btn" data-uid="${n.id}" title="La fiche congés se crée avec la première période de paramètres">${n.fiche ? "Compléter la période" : "Définir la période"}</button>`);
   const cardHtml = (n, resp, groupName) => {
     const me = n.id === state.user.id;
     return `<div class="ma-card ma-drop${resp ? " ma-resp" : ""}${n.actif ? "" : " ma-off"}" data-id="${n.id}" ${me ? "" : 'draggable="true"'} title="${me ? "Déposer ici pour rattacher directement à moi" : "Glisser pour déplacer ; déposer un agent dessus pour le placer sous cette personne"}">
-      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}</span>${resp || n.unit_head ? `<span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</div>
+      <div class="ma-card-top"><span class="ma-name">${esc(n.nom || n.login)}${resp || n.unit_head ? ` <span class="ma-star" title="${n.unit_head ? "Responsable de son unité" : "Responsable de l'entité"}">★</span>` : ""}</span>
+        <span class="ma-top-btns">
+          <button type="button" class="btn btn-small ma-unit-edit" data-uid="${n.id}" title="Définir l'unité de cette personne (liste), et si elle en est la responsable">✎ Unité</button>
+          ${n.profil === "agent" && n.actif && !me ? `<button type="button" class="btn btn-small ma-promote" data-uid="${n.id}" title="Passer cette personne en valideur : elle pourra valider les demandes de ses agents (niveau déduit de son unité)">↑ Valideur</button>` : ""}
+          ${n.profil === "valideur" && n.role !== "administrateur" && !n.admin && n.actif && !me && !n.all ? `<button type="button" class="btn btn-small ma-demote" data-uid="${n.id}" title="Repasser cette personne en agent : les personnes qu'elle valide remontent sous son propre valideur">↓ Agent</button>` : ""}
+        </span></div>
       ${n.unit_label && norm(n.unit_label) !== norm(groupName) ? `<div class="muted ma-cunit" title="Unité de la personne">${esc(n.unit_label)}</div>` : ""}
       ${n.valideur && !n.all ? `<div class="ma-cvalid" title="Valideur de cette personne">Valideur : <strong>${esc(n.valideur)}</strong></div>` : ""}
-      ${n.matricule && !n.all ? `<div class="ma-cvalid ma-cet" data-cet="${n.id}" title="Solde du compte épargne temps, en jours">CET : …</div>` : ""}
+      ${!n.all && (n.matricule || (n.fiche && n.fiche.complete)) ? `<div class="ma-counters">
+        ${n.fiche && n.fiche.complete ? `<span class="ma-cvalid ma-solde" data-solde="${n.id}" title="Solde estimé de congés : absences validées et demandes en attente">Congés : …</span>` : ""}
+        ${n.matricule ? `<span class="ma-cvalid ma-cet" data-cet="${n.id}" title="Solde du compte épargne temps, en jours">CET : …</span>
+        <span class="ma-cvalid ma-contrat hidden" data-contrat="${n.id}" title="Date de fin de contrat (Sedit RH)"></span>` : ""}</div>` : ""}
       <div class="ma-card-badges">
         <span class="badge-role role-${esc(n.role)}">${esc(PROFIL_LABELS[n.profil] || n.profil)}${n.admin ? " · Admin" : ""}</span>
         ${n.delegated ? `<span class="ma-deleg" title="Délégation en cours : cette personne vous délègue ses validations">délégation</span>` : ""}
@@ -5523,11 +5556,8 @@ async function viewMyAgents() {
         ${n.no_email && n.actif ? `<span class="ma-noemail" title="Sans adresse e-mail : aucune notification ne lui sera envoyée">⚠ e-mail</span>` : ""}
       </div>
       ${periodHtml(n)}
-      <div class="ma-card-actions">${ficheHtml(n)}
-        <button type="button" class="btn btn-small ma-unit-edit" data-uid="${n.id}" title="Définir l'unité de cette personne (liste), et si elle en est la responsable">✎ Unité</button>
-        ${n.profil === "agent" && n.actif && !me ? `<button type="button" class="btn btn-small ma-promote" data-uid="${n.id}" title="Passer cette personne en valideur : elle pourra valider les demandes de ses agents (niveau déduit de son unité)">↑ Valideur</button>` : ""}
-        ${n.profil === "valideur" && n.role !== "administrateur" && !n.admin && n.actif && !me && !n.all ? `<button type="button" class="btn btn-small ma-demote" data-uid="${n.id}" title="Repasser cette personne en agent : les personnes qu'elle valide remontent sous son propre valideur">↓ Agent</button>` : ""}
-        ${n.no_email && n.actif && !n.all ? `<button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button>` : ""}</div>
+      ${n.no_email && n.actif && !n.all ? `<div class="ma-card-actions"><button type="button" class="btn btn-small ma-ad" data-uid="${n.id}" title="Chercher son compte dans l'Active Directory (e-mail et identifiant)">Recherche AD</button></div>` : ""}
+      ${ficheHtml(n)}
     </div>`;
   };
   const groupHtml = (g) => {
@@ -5705,6 +5735,36 @@ async function viewMyAgents() {
         else { el.textContent = "CET : —"; el.title = "Pas de compte épargne temps ouvert"; }
       });
     } catch (e) { cells.forEach((el) => { el.textContent = "CET : indisponible — " + cetReason(e.message); el.title = e.message; }); }
+  })();
+
+  /* Solde estimé de congés (calcul local, rapide) et fin de contrat (Sedit RH, plus lent) : chargés à part */
+  (async () => {
+    const fmt = (v) => Number(v).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+    const fd = (iso) => iso.split("-").reverse().join("/");
+    const soldeEls = [...c.querySelectorAll("[data-solde]")];
+    if (soldeEls.length) {
+      try {
+        const r = await api(`/api/my-agents/soldes?year=${encodeURIComponent(state.year)}&uids=` + soldeEls.map((el) => el.dataset.solde).join(","));
+        soldeEls.forEach((el) => {
+          const it = (r.items || {})[el.dataset.solde];
+          if (!it) { el.textContent = "Congés : —"; return; }
+          el.innerHTML = `Congés : <strong>${esc(fmt(it.ca))} j</strong>${it.rtt != null ? ` · RTT <strong>${esc(fmt(it.rtt))} j</strong>` : ""}`;
+          el.title = "Solde estimé : congés annuels et RTT restants" + (it.pending ? `, en comptant ${fmt(it.pending)} j de demande(s) en attente` : "");
+        });
+      } catch (e) { soldeEls.forEach((el) => { el.textContent = "Congés : indisponible"; el.title = e.message; }); }
+    }
+    const ctEls = [...c.querySelectorAll("[data-contrat]")];
+    if (ctEls.length) {
+      try {
+        const r = await api("/api/my-agents/contrats?uids=" + ctEls.map((el) => el.dataset.contrat).join(","));
+        ctEls.forEach((el) => {
+          const fin = (r.items || {})[el.dataset.contrat];
+          if (!fin) return;                                   // pas de date dans Sedit RH : rien à afficher
+          el.innerHTML = `Fin de contrat : <strong>${esc(fd(fin))}</strong>`;
+          el.classList.remove("hidden");
+        });
+      } catch (e) { /* Sedit RH indisponible : la ligne reste masquée */ }
+    }
   })();
 
   /* Dépôts sur l'arbre */
@@ -5918,7 +5978,7 @@ async function viewMyAgents() {
     ov.className = "ma-dialog-overlay";
     ov.innerHTML = `<div class="ma-dialog card">
       <h3>Période de paramètres de ${esc(name)}</h3>
-      <p class="muted">Année ${esc(state.year)}. La fiche congés est créée avec cette première période ; d'autres changements se déclarent ensuite dans la fiche.</p>
+      <p class="muted">La fiche congés est créée avec cette première période ; d'autres changements se déclarent ensuite dans la fiche.</p>
       <div class="params-grid">
         <label>Pénibilité <select id="mp-pen">${optionList(pens, pick(pens, "Modérée"))}</select></label>
         <label>Durée <select id="mp-duree"></select></label>

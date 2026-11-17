@@ -305,10 +305,13 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
                 login, n = base, 2
                 while db.execute("SELECT 1 FROM users WHERE lower(login)=lower(?)", (login,)).fetchone():
                     login, n = "%s%d" % (base, n), n + 1
-                password = secrets.token_urlsafe(18) + "Aa1!" if config.AUTH_MODE == "ad" and profil != "administrateur" \
-                    else (d.get("password") or "")
+                # Mode AD : le mot de passe est celui du compte Ville ; le mot de passe local de secours d'un administrateur
+                # est facultatif (à défaut, un mot de passe aléatoire jamais communiqué remplit la colonne).
+                password = d.get("password") or ""
+                if config.AUTH_MODE == "ad" and (profil != "administrateur" or not password):
+                    password = secrets.token_urlsafe(18) + "Aa1!"
                 if not password:
-                    return error("Mot de passe local obligatoire pour un administrateur (compte de secours)", 400)
+                    return error("Mot de passe local obligatoire (mode d'authentification local)", 400)
                 cur = db.execute(
                     "INSERT INTO users (login, ad_login, matricule, nom, nom_famille, prenom, email, mot_de_passe, admin, role, parent_id, actif) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,1)",
@@ -317,12 +320,15 @@ def init_people(app, login_required, can_manage, scope_ids, create_account, audi
                      "administrateur" if profil == "administrateur" else role, parent_id))
                 user_id = cur.lastrowid
             if make_admin and profil != "administrateur":
-                # Agent ou valideur qui est aussi administrateur : mot de passe local de secours obligatoire.
-                if not d.get("password"):
+                # Agent ou valideur qui est aussi administrateur : mot de passe local de secours facultatif en mode AD.
+                if d.get("password"):
+                    db.execute("UPDATE users SET admin=1, mot_de_passe=? WHERE id=?",
+                               (generate_password_hash(d["password"]), user_id))
+                elif config.AUTH_MODE != "ad":
                     db.rollback()
-                    return error("Mot de passe local obligatoire pour un compte administrateur (compte de secours)", 400)
-                db.execute("UPDATE users SET admin=1, mot_de_passe=? WHERE id=?",
-                           (generate_password_hash(d["password"]), user_id))
+                    return error("Mot de passe local obligatoire pour un compte administrateur", 400)
+                else:
+                    db.execute("UPDATE users SET admin=1 WHERE id=?", (user_id,))
             db.execute("UPDATE users SET unit_code=?, validator_unit_code=? WHERE id=?",
                        (unit_code if profil != "administrateur" else "",
                         validator_unit if profil == "valideur" else "", user_id))
