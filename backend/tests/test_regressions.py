@@ -686,6 +686,34 @@ class PrototypeRegressionTests(unittest.TestCase):
             self.assertEqual(self._login("OUB0001", "NouveauMdp2026").status_code, 200)
             self.assertEqual(self._login("OUB0001", "AncienMdp123").status_code, 401)
 
+    def test_mobile_agenda_shows_the_sedit_rh_absences_on_worked_days(self):
+        import sedit_rh
+        conn = db.get_db()
+        conn.execute("UPDATE users SET matricule='0088001' WHERE id=4")
+        conn.commit()
+        conn.close()
+        try:
+            fake = [{"code": "CM", "libelle": "Congé maladie", "debut": "2026-09-07", "fin": "2026-09-13"}]      # lundi 7 -> dimanche 13 septembre 2026
+            with mock.patch.object(sedit_rh, "absences", return_value=fake):
+                r = self._call("GET", "/api/mobile/absences-rh?year=2026", uid=4)
+            self.assertEqual(r.status_code, 200, r.get_json())
+            items = r.get_json()["items"]
+            self.assertEqual(len(items), 10)                                       # 5 jours ouvrés x 2 demi-journées : le week-end n'est pas compté
+            self.assertEqual({(i["code"], i["s"]) for i in items}, {("CM", "rh")})
+            self.assertEqual(min(i["d"] for i in items), "2026-09-07")
+            # Sedit RH indisponible : réponse vide avec avertissement, jamais d'erreur
+            with mock.patch.object(sedit_rh, "absences", side_effect=sedit_rh.SeditError("hors service")):
+                down = self._call("GET", "/api/mobile/absences-rh?year=2026", uid=4)
+            self.assertEqual((down.status_code, down.get_json()["items"]), (200, []))
+            self.assertIn("hors service", down.get_json()["warning"])
+            import mobile_mode
+            self.assertTrue(mobile_mode.is_allowed("GET", "/api/mobile/absences-rh"))
+        finally:
+            conn = db.get_db()
+            conn.execute("UPDATE users SET matricule='' WHERE id=4")
+            conn.commit()
+            conn.close()
+
     def test_status_is_public_and_minimal(self):
         resp = self.client.get("/api/status")
         self.assertEqual(resp.status_code, 200)

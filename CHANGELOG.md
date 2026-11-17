@@ -13,6 +13,13 @@
 > Mettre à jour `backend/version.py`, ce fichier, `MANIFEST.md` (statut, sections concernées, journal), `modifications.md` et, si besoin, `README.md`.
 > La procédure complète est dans `CLAUDE.md`.
 
+## 0.21.1 — 2026-11-17 — Version mobile : corrections après essai sur téléphone
+
+- Version mobile : l'agenda affiche aussi les absences saisies dans Sedit RH (maladie, garde d'enfant malade, congés parentaux…) en lecture seule, en couleur claire, avec une légende.
+- Version mobile : les fenêtres (nouvelle demande, annulation, agenda du téléphone) s'ouvrent au centre de l'écran ; les textes de la fenêtre « Agenda de mon téléphone » et les légendes sont plus grands.
+- Version mobile : sur un téléphone réglé sur « version pour ordinateur », la page est ramenée à la largeur réelle de l'écran au lieu d'apparaître minuscule ; le bouton d'arrêt est une icône (le symbole ⏻ s'affichait comme un carré vide).
+- Version mobile : quand le téléphone refuse d'activer l'empreinte, un message reste affiché avec la raison (par exemple certificat HTTPS non approuvé) ; quand l'adresse est interne (ivry.local), la fenêtre de synchronisation prévient que Google Agenda et Outlook ne peuvent pas la lire.
+
 ## 0.21.0 — 2026-11-17 — Agents sans compte AD : activation par code et SMS, mot de passe oublié, connexion mémorisée
 
 - Agents sans compte Active Directory : le valideur (ou un administrateur) génère dans Mon équipe un code d'activation (bouton « 🔑 Activation », avec QR code à remettre à l'agent, valable 7 jours, à usage unique). L'agent ouvre la version mobile, choisit « Première connexion », saisit son matricule et le code, puis son smartphone (un code de contrôle lui est envoyé par SMS et le numéro n'est enregistré qu'une fois ce code saisi), et enfin son mot de passe ; il se connecte ensuite avec son matricule. Parcours durci : même réponse si le matricule existe ou non, verrouillage après 5 essais, SMS limité (3 envois, 1 par minute, 10 minutes de validité), limites par adresse et par matricule, journalisation de chaque étape et e-mail de prévenance.

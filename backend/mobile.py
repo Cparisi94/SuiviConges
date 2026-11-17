@@ -123,6 +123,47 @@ def init_mobile(app, login_required):
         finally:
             db.close()
 
+    @bp.route("/absences-rh", methods=["GET"])
+    @login_required
+    def absences_rh():
+        """Absences saisies dans Sedit RH (CM, GEM, CT, CP, SF) sur MA fiche, en demi-journées travaillées, pour l'agenda (lecture seule, couleur claire).
+        Chargées à part : Sedit RH est lent ou peut être indisponible (l'agenda s'affiche alors sans ces jours, sans erreur)."""
+        core = _core()
+        year = core._request_year()
+        db = get_db()
+        try:
+            row = _own_fiche(core, db, year)
+            if not row:
+                return jsonify({"items": []})
+            agent = core._agent_by_id(db, row["id"])
+            coverage = core._agent_coverage(agent)
+            holidays = {str(x[0])[:10] for x in (core.load_settings().get("jours_feries") or [])}
+            busy = set(core._agent_cells(db, agent["id"])) | set(core._pending_cells(db, agent["id"]))
+        finally:
+            db.close()
+        matricule = (request.user.get("matricule") or "").strip()
+        if not matricule:
+            return jsonify({"items": [], "warning": "Matricule inconnu"})
+        import sedit_rh
+        try:
+            absences = sedit_rh.absences(matricule, year)
+        except sedit_rh.SeditError as exc:
+            return jsonify({"items": [], "warning": str(exc)})
+        items = []
+        for a in absences:
+            try:
+                day, last = dt.date.fromisoformat(a["debut"]), dt.date.fromisoformat(a["fin"])
+            except (KeyError, ValueError):
+                continue
+            while day <= last:
+                if day.year == year:
+                    for half in (0, 1):
+                        key = day.month * 1000 + day.day * 10 + half
+                        if core._cell_covered(coverage, year, key, holidays) and str(key) not in busy:
+                            items.append({"d": day.isoformat(), "h": half, "code": a["code"], "s": "rh"})
+                day += dt.timedelta(days=1)
+        return jsonify({"items": items})
+
     @bp.route("/days", methods=["GET"])
     @login_required
     def days():

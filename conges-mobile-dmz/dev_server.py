@@ -22,7 +22,7 @@ ALLOWED = [
     ({"POST"}, re.compile(r"^/api/auth/login$")),
     ({"POST"}, re.compile(r"^/api/auth/logout$")),
     ({"GET"}, re.compile(r"^/api/me$")),
-    ({"GET"}, re.compile(r"^/api/mobile/(summary|days|calendar)$")),
+    ({"GET"}, re.compile(r"^/api/mobile/(summary|days|calendar|absences-rh)$")),
     ({"POST"}, re.compile(r"^/api/mobile/calendar/(link|revoke)$")),
     ({"POST"}, re.compile(r"^/api/requests$")),
     ({"POST"}, re.compile(r"^/api/mobile/requests/[0-9]+/(cancel|cancel-request)$")),

@@ -26,7 +26,7 @@ Rien d'autre : pas de validation, pas de planning, pas d'administration. Les dem
 | `/api/auth/login` | POST | connexion (compte de la Ville ; 5 essais par minute et par adresse) |
 | `/api/auth/logout` | POST | déconnexion |
 | `/api/me` | GET | session en cours |
-| `/api/mobile/summary`, `/api/mobile/days` | GET | compteurs, demandes, agenda ; jours posables entre deux dates |
+| `/api/mobile/summary`, `/api/mobile/days`, `/api/mobile/absences-rh` | GET | compteurs, demandes, agenda ; jours posables entre deux dates ; absences saisies dans Sedit RH (lecture seule) |
 | `/api/requests` | POST | création d'une demande d'absence |
 | `/api/mobile/calendar` | GET | état de mon abonnement à l'agenda du téléphone |
 | `/api/mobile/calendar/link`, `/api/mobile/calendar/revoke` | POST | créer (ou remplacer) mon lien d'abonnement ; l'arrêter |

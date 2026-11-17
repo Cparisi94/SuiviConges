@@ -12,6 +12,29 @@
   const MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
   const iso = (y, m, d) => `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   const today = () => { const t = new Date(); return iso(t.getFullYear(), t.getMonth(), t.getDate()); };
+  // Téléphone en « version pour ordinateur » : le navigateur ignore alors la largeur de l'écran, met la page en page à ~1000 px puis la réduit (texte minuscule).
+  // On la ramène à la largeur réelle de l'écran par un zoom (rien ne change sur un téléphone en affichage normal, ni en paysage).
+  (() => {
+    const ratio = window.innerWidth / (screen.width || window.innerWidth);
+    if (matchMedia("(pointer: coarse)").matches && screen.width <= 700 && ratio > 1.4) document.documentElement.style.zoom = String(Math.min(3, ratio).toFixed(2));
+  })();
+
+  // Icône « marche / arrêt » en SVG (le symbole ⏻ n'existe pas dans toutes les polices : carré vide sur certains téléphones).
+  const pwIcon = (size) => `<svg class="m-fp" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>`;
+
+  // Message qui reste affiché (contrairement à la bulle de quelques secondes) : utile quand le téléphone refuse une action et qu'il faut savoir pourquoi.
+  function showNote(message, isErr) {
+    const wrap = document.querySelector("#app .m-wrap");
+    if (!wrap) { toast(message, !!isErr); return; }
+    const old = document.querySelector("#m-note");
+    if (old) old.remove();
+    const n = document.createElement("div");
+    n.id = "m-note";
+    n.className = "m-note" + (isErr ? " m-note-err" : "");
+    n.innerHTML = `<span>${esc(message)}</span><button type="button" aria-label="Fermer le message">✕</button>`;
+    n.querySelector("button").addEventListener("click", () => n.remove());
+    wrap.insertBefore(n, wrap.children[1] || null);
+  }
   const state = { user: null, year: new Date().getFullYear(), month: null };
 
   function toast(msg, isErr) {
@@ -126,6 +149,15 @@
   async function bioAvailable() {
     try { return !!(window.isSecureContext && window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (_) { return false; }
   }
+  // Explique pourquoi la biométrie ne s'active pas (message affiché jusqu'à ce qu'on le ferme).
+  function bioProblem(e) {
+    const name = (e && e.name) || "Erreur";
+    let msg = "Le verrouillage par empreinte n'a pas pu être activé (" + name + ").";
+    if (name === "SecurityError") msg = "Le navigateur refuse la biométrie sur ce site : son certificat HTTPS n'est pas approuvé par le téléphone (certificat auto-signé ou adresse interne). Elle fonctionnera avec un certificat valide.";
+    else if (name === "NotAllowedError") msg = "Vérification annulée ou refusée. Vérifiez qu'une empreinte est enregistrée dans les réglages du téléphone, puis réessayez.";
+    else if (name === "NotSupportedError" || name === "InvalidStateError") msg = "Cet appareil ne permet pas ce verrouillage.";
+    showNote(msg, true);
+  }
   async function bioEnable() {
     const cred = await navigator.credentials.create({ publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)), rp: { name: "Mes congés" },
@@ -235,7 +267,7 @@
 
     const head = `<header class="m-head">
         <div><b>📅 Mes congés</b><div class="m-who">${esc(d.user.label)}</div></div>
-        <span class="m-head-btns"><button type="button" id="m-bio" class="hidden" aria-label="Verrouillage par empreinte"></button><button type="button" id="m-logout" title="Déconnexion" aria-label="Déconnexion">⏻</button></span></header>
+        <span class="m-head-btns"><button type="button" id="m-bio" class="hidden" aria-label="Verrouillage par empreinte"></button><button type="button" id="m-logout" title="Déconnexion" aria-label="Déconnexion">${pwIcon(20)}</button></span></header>
       <div class="m-year"><button type="button" id="m-prev-year" aria-label="Année précédente">‹</button><strong>${year}</strong><button type="button" id="m-next-year" aria-label="Année suivante">›</button></div>`;
     const bind = () => {
       $("#m-logout").addEventListener("click", logout);
@@ -248,8 +280,8 @@
         b.addEventListener("click", async () => {
           try {
             if (on()) { localStorage.removeItem("m_bio"); toast("Verrouillage retiré"); }
-            else { await bioEnable(); toast("Verrouillage activé : l'empreinte sera demandée à l'ouverture"); }
-          } catch (_) { toast("Activation annulée ou impossible sur cet appareil", true); }
+            else { await bioEnable(); showNote("Verrouillage activé : l'empreinte sera demandée à l'ouverture de l'application."); }
+          } catch (e) { bioProblem(e); }
           paint();
         });
       });
@@ -286,6 +318,17 @@
     $("#m-new").addEventListener("click", () => openSheet(d, firstDay));
     drawCalendar(d);
     loadSyncCard();
+    loadRh(d);
+  }
+
+  // Absences saisies dans Sedit RH (maladie, garde d'enfant malade…) : chargées à part (Sedit RH est lent) et affichées en lecture seule, en couleur claire.
+  async function loadRh(d) {
+    try {
+      const r = await api("/api/mobile/absences-rh?year=" + encodeURIComponent(d.year));
+      if (!(r.items || []).length || state.shownYear !== d.year || !$("#m-cal")) return;
+      d.agenda = (d.agenda || []).concat(r.items);
+      drawCalendar(d);
+    } catch (_) { /* Sedit RH indisponible : l'agenda reste affiché sans ces jours */ }
   }
 
   function worked(d, day) {
@@ -301,22 +344,23 @@
     const lead = (new Date(year, m, 1).getDay() || 7) - 1, last = new Date(year, m + 1, 0).getDate(), now = today();
     let cells = "";
     const used = {};
+    let usedRh = false;
     const colorOf = (code) => { const raw = ((d.codes || {})[code] || {}).color || ""; return /^#[0-9a-fA-F]{3,8}$/.test(raw) ? raw : "#c4573a"; };
     for (let i = 0; i < lead; i++) cells += `<div class="m-day m-day-void"></div>`;
     for (let day = 1; day <= last; day++) {
       const key = iso(year, m, day), info = byDay[key] || {}, ok = worked(d, key);
-      const bar = (a, cls) => `<i class="${a.s === "attente" ? "m-att" : "m-val"}${cls || ""}" style="--c:${esc(colorOf(a.code))}" title="${esc(((d.codes || {})[a.code] || {}).label || a.code)}">${esc(a.code)}</i>`;
+      const bar = (a, cls) => `<i class="${a.s === "attente" ? "m-att" : (a.s === "rh" ? "m-rh" : "m-val")}${cls || ""}" style="--c:${esc(colorOf(a.code))}" title="${esc(((d.codes || {})[a.code] || {}).label || a.code)}${a.s === "rh" ? " (Sedit RH)" : ""}">${esc(a.code)}</i>`;
       const a0 = info[0], a1 = info[1];
       let halves;
       if (a0 && a1 && a0.code === a1.code && a0.s === a1.s) halves = bar(a0, " m-wide");      // journée entière : une seule barre
       else halves = (a0 ? bar(a0) : "<i></i>") + (a1 ? bar(a1) : "<i></i>");
-      (a0 ? [a0] : []).concat(a1 ? [a1] : []).forEach((a) => { used[a.code] = true; });
+      (a0 ? [a0] : []).concat(a1 ? [a1] : []).forEach((a) => { used[a.code] = true; if (a.s === "rh") usedRh = true; });
       cells += `<button type="button" class="m-day${ok ? "" : " m-day-off"}${key === now ? " m-day-today" : ""}" data-iso="${key}" ${ok ? "" : "disabled"}><span>${day}</span><div class="m-halves">${halves}</div></button>`;
     }
     $("#m-cal").innerHTML = `<div class="m-cal-nav"><button type="button" id="m-prev-m" ${m === 0 ? "disabled" : ""} aria-label="Mois précédent">‹</button><strong>${MONTHS[m]} ${year}</strong><button type="button" id="m-next-m" ${m === 11 ? "disabled" : ""} aria-label="Mois suivant">›</button></div>
       <div class="m-cal-head"><span>L</span><span>M</span><span>M</span><span>J</span><span>V</span><span>S</span><span>D</span></div><div class="m-cal-grid">${cells}</div>`;
     const kinds = Object.keys(used).map((code) => `<span class="m-key"><span class="m-chip" style="background:${esc(colorOf(code))}"></span>${esc(((((d.codes || {})[code] || {}).label || "").toUpperCase().startsWith(code)) ? ((d.codes || {})[code] || {}).label : code + " " + (((d.codes || {})[code] || {}).label || ""))}</span>`).join("");
-    $("#m-types").innerHTML = kinds || `<span class="muted">Aucun congé ce mois-ci.</span>`;
+    $("#m-types").innerHTML = (kinds || `<span class="muted">Aucun congé ce mois-ci.</span>`) + (usedRh ? `<span class="m-key"><span class="m-chip m-chip-rh"></span>couleur claire : saisi dans Sedit RH</span>` : "");
     $("#m-prev-m").addEventListener("click", () => { state.month--; drawCalendar(d); });
     $("#m-next-m").addEventListener("click", () => { state.month++; drawCalendar(d); });
     document.querySelectorAll("#m-cal .m-day[data-iso]").forEach((b) => b.addEventListener("click", () => openSheet(d, b.dataset.iso)));
@@ -560,12 +604,15 @@
       const webcal = url.replace(/^https?:/, "webcal:");
       const google = "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal);
       const outlook = "https://outlook.office.com/calendar/0/addfromweb?url=" + encodeURIComponent(url) + "&name=" + encodeURIComponent("Mes congés");
+      // Google Agenda et Outlook lisent le lien depuis leurs serveurs, sur Internet : une adresse interne (ivry.local, IP) leur est inaccessible.
+      const internal = /(^|\.)local$|^localhost$|^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname);
       body.innerHTML = `<p><strong>Votre lien est prêt.</strong> Il est personnel : ne le partagez pas. Il n'est affiché qu'une fois.</p>
+        ${internal ? `<div class="m-note m-note-err"><span>⚠ Cette adresse (${esc(location.hostname)}) est interne : Google Agenda et Outlook ne peuvent pas la lire (ils passent par Internet), même s'ils annoncent que l'agenda est ajouté. Pour tester sur ce réseau : iPhone, ou une application d'abonnement ICS sur Android (ICSx⁵) avec un certificat approuvé. L'abonnement fonctionnera avec l'adresse publique de la DMZ.</span></div>` : ""}
         <p class="m-help">Touchez votre agenda, puis confirmez l'abonnement :</p>
         <a class="m-new m-anchor" id="mz-apple" href="${esc(webcal)}">🍎 iPhone / Apple Calendrier</a>
-        <a class="m-ghost m-anchor m-ghost-full" id="mz-google" href="${esc(google)}" target="_blank" rel="noopener">Google Agenda (Gmail, Android)</a>
+        ${internal ? "" : `<a class="m-ghost m-anchor m-ghost-full" id="mz-google" href="${esc(google)}" target="_blank" rel="noopener">Google Agenda (Gmail, Android)</a>
         <a class="m-ghost m-anchor m-ghost-full" id="mz-outlook" href="${esc(outlook)}" target="_blank" rel="noopener">Outlook</a>
-        <p class="m-help">Google et Outlook lisent le lien depuis Internet ; l'agenda apparaît ensuite sur le téléphone, sur le compte concerné.</p>
+        <p class="m-help">Google et Outlook lisent le lien depuis Internet ; l'agenda apparaît ensuite sur le téléphone, sur le compte concerné.</p>`}
         <details class="m-split-more"><summary>Autre agenda : copier le lien</summary>
           <label>Lien d'abonnement<input id="mz-url" readonly value="${esc(url)}"></label>
           <button type="button" class="m-ghost m-ghost-full" id="mz-copy">Copier le lien</button>

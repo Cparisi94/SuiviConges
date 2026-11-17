@@ -13,9 +13,21 @@ Ce fichier est la SOURCE UNIQUE de la version : elle est affichée dans l'applic
 Les nouvelles versions s'ajoutent EN TÊTE de VERSIONS.
 """
 
-VERSION = "0.21.0"
+VERSION = "0.21.1"
 
 VERSIONS = [
+    {
+        "version": "0.21.1",
+        "date": "2026-11-17",
+        "type": "patch",
+        "titre": "Version mobile : corrections après essai sur téléphone",
+        "items": [
+            "Version mobile : l'agenda affiche aussi les absences saisies dans Sedit RH (maladie, garde d'enfant malade, congés parentaux…) en lecture seule, en couleur claire, avec une légende.",
+            "Version mobile : les fenêtres (nouvelle demande, annulation, agenda du téléphone) s'ouvrent au centre de l'écran ; les textes de la fenêtre « Agenda de mon téléphone » et les légendes sont plus grands.",
+            "Version mobile : sur un téléphone réglé sur « version pour ordinateur », la page est ramenée à la largeur réelle de l'écran au lieu d'apparaître minuscule ; le bouton d'arrêt est une icône (le symbole ⏻ s'affichait comme un carré vide).",
+            "Version mobile : quand le téléphone refuse d'activer l'empreinte, un message reste affiché avec la raison (par exemple certificat HTTPS non approuvé) ; quand l'adresse est interne (ivry.local), la fenêtre de synchronisation prévient que Google Agenda et Outlook ne peuvent pas la lire.",
+        ],
+    },
     {
         "version": "0.21.0",
         "date": "2026-11-17",
